@@ -1,0 +1,27 @@
+{
+  "name": "nova",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Nova - a voice-first, model-agnostic agentic OS layer",
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -n daemon,ui -c magenta,cyan \"npm:dev:daemon\" \"npm:dev:ui\"",
+    "dev:daemon": "npm run dev -w @nova/daemon",
+    "dev:ui": "npm run dev -w @nova/desktop",
+    "dev:tauri": "npm run tauri -w @nova/desktop -- dev",
+    "jev:ping": "npm run jev:ping -w @nova/daemon",
+    "test": "npm run test -w @nova/core",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "build": "npm run build -w @nova/desktop"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
