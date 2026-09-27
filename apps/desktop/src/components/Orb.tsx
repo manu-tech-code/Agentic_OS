@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from 'motion/react';
-import { useEffect, useRef, type RefObject } from 'react';
-import type { Phase } from '@nova/core/protocol';
+import { useEffect, useRef, useState, type RefObject } from 'react';
+import type { OrbPrefs, Phase } from '@nova/core/protocol';
+import { ParticleOrb } from './ParticleOrb';
 
 const PALETTE: Record<Phase, [string, string, string]> = {
   idle: ['#6d7cff', '#b28cff', '#2b2a6e'],
@@ -12,12 +13,30 @@ const PALETTE: Record<Phase, [string, string, string]> = {
 
 const SPIN: Record<Phase, string> = { idle: '18s', listening: '9s', thinking: '2.4s', acting: '4s', speaking: '6s' };
 
+interface OrbProps {
+  name: string;
+  phase: Phase;
+  levelRef: RefObject<number>;
+  prefs: OrbPrefs;
+  onClick?: () => void;
+}
+
+/** Nova's face: a sphere of moving dots, or the classic glass orb (also used where WebGL isn't available). */
+export function Orb({ prefs, ...props }: OrbProps) {
+  const [unsupported, setUnsupported] = useState(false);
+  if (prefs.style === 'glass' || unsupported) return <GlassOrb {...props} />;
+  return (
+    <button className={`orb orb--particles orb--${props.phase}`} onClick={props.onClick} aria-label={`${props.name} is ${props.phase}`}>
+      <ParticleOrb phase={props.phase} levelRef={props.levelRef} prefs={prefs} onUnsupported={() => setUnsupported(true)} />
+    </button>
+  );
+}
+
 /**
- * The glass Orb - Nova's face. Reacts to mic level (listening), swirls while
- * thinking and pulses while speaking. Level is written straight to a CSS var
- * every frame to avoid React re-renders.
+ * The glass Orb. Reacts to mic level (listening), swirls while thinking and pulses
+ * while speaking. Level is written straight to a CSS var every frame to avoid React re-renders.
  */
-export function Orb({ phase, levelRef, onClick }: { phase: Phase; levelRef: RefObject<number>; onClick?: () => void }) {
+function GlassOrb({ name, phase, levelRef, onClick }: Omit<OrbProps, 'prefs'>) {
   const el = useRef<HTMLButtonElement>(null);
   const [a, b, c] = PALETTE[phase];
 
@@ -40,7 +59,7 @@ export function Orb({ phase, levelRef, onClick }: { phase: Phase; levelRef: RefO
       ref={el}
       className={`orb orb--${phase}`}
       onClick={onClick}
-      aria-label={`Nova is ${phase}`}
+      aria-label={`${name} is ${phase}`}
       style={{ ['--a' as string]: a, ['--b' as string]: b, ['--c' as string]: c, ['--spin' as string]: SPIN[phase] }}
     >
       <span className="orb__glow" />

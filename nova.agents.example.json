@@ -1,0 +1,9 @@
+{
+  "aider": {
+    "label": "Aider",
+    "command": "aider",
+    "ask": ["--message", "{prompt}", "--dry-run", "--model={model}"],
+    "task": ["--message", "{prompt}", "--yes-always", "--model={model}"],
+    "output": "text"
+  }
+}

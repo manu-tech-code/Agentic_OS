@@ -12,8 +12,8 @@ const LABEL: Record<Phase, string> = {
 const pretty = (s?: string) => (s ? s.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase()) : undefined);
 
 /** Dynamic-Island-style capsule: what Nova is doing right now. */
-export function LivePill({ phase, label, connected }: { phase: Phase; label?: string; connected: boolean }) {
-  const text = !connected ? 'Daemon offline' : phase === 'idle' ? LABEL.idle : `${LABEL[phase]}${label ? ` · ${pretty(label)}` : ''}`;
+export function LivePill({ phase, label, connected, idleText = LABEL.idle }: { phase: Phase; label?: string; connected: boolean; idleText?: string }) {
+  const text = !connected ? 'Daemon offline' : phase === 'idle' ? idleText : `${LABEL[phase]}${label ? ` · ${pretty(label)}` : ''}`;
   const expanded = connected && phase !== 'idle';
   return (
     <motion.div

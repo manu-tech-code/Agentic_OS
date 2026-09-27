@@ -2,14 +2,17 @@
  * Phase 0 spike: how fast is Jev from where you are?
  *   npm run jev:ping            (10 calls)
  *   npm run jev:ping -- 25
- * Needs AI_GATEWAY_API_KEY in .env.
+ * Needs an AI Gateway key: AI_GATEWAY_API_KEY in .env.
  */
 import { experimental_evaluate as evaluate } from 'ai';
 import { buildQuestions, builtinSkills } from '@nova/core';
-import { config } from './config.ts';
+import { loadConfig, loadDotEnv, readSettings } from './config.ts';
+
+loadDotEnv();
+const config = loadConfig((await readSettings().catch(() => null)) ?? {}, process.env);
 
 if (!config.gatewayKey) {
-  console.error('Set AI_GATEWAY_API_KEY in .env first.');
+  console.error('Add an AI Gateway key first: AI_GATEWAY_API_KEY=... in .env.');
   process.exit(1);
 }
 

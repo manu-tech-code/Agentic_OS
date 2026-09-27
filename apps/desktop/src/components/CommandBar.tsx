@@ -2,7 +2,7 @@ import { motion } from 'motion/react';
 import { useEffect, useRef, useState } from 'react';
 
 /** Spotlight-style fallback for when you can't talk. Opens with ⌘K. */
-export function CommandBar({ onSubmit, onClose }: { onSubmit: (text: string) => void; onClose: () => void }) {
+export function CommandBar({ name, onSubmit, onClose }: { name: string; onSubmit: (text: string) => void; onClose: () => void }) {
   const [value, setValue] = useState('');
   const input = useRef<HTMLInputElement>(null);
   useEffect(() => input.current?.focus(), []);
@@ -28,7 +28,7 @@ export function CommandBar({ onSubmit, onClose }: { onSubmit: (text: string) => 
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => e.key === 'Escape' && onClose()}
-          placeholder="Ask Nova… (open Slack, set a timer for 5 minutes, what time is it)"
+          placeholder={`Ask ${name}… (open Slack, set a timer for 5 minutes, what time is it)`}
         />
         <kbd>↵</kbd>
       </motion.form>

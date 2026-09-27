@@ -1,0 +1,292 @@
+/**
+ * Patterns that multiply into thousands more phrasings, to train Reflex's classifier. They
+ * aren't matched directly: so many near-copies would crowd the closest-example search.
+ * `[a|b|]` picks one option (empty is allowed), `$name` is a shared list below, and
+ * {app}, {agent} and {project} stay placeholders. Never copy a phrasing from the evaluation sets.
+ */
+
+const LISTS: Record<string, string> = {
+  pre: '[|can you|could you|would you|please|nova|hey nova|okay|um|uh|so|hey|go ahead and|i want you to|quickly|right|alright|kindly|please can you]',
+  post: '[|please|for me|now|right now|real quick|quickly|thanks|for me please|if you can|when you can]',
+  lead: '[|can you|could you|please|nova|okay|um|go ahead and]',
+  ask: '[|hey|nova|hey nova|okay|um|so|excuse me|please|sorry|quick question]',
+  dur: '[5 minutes|five minutes|10 minutes|ten minutes|two minutes|2 minutes|one minute|a minute|30 seconds|thirty seconds|an hour|half an hour|an hour and a half|90 seconds|45 minutes|fifteen minutes|25 minutes|three minutes|two hours|twenty minutes|forty seconds|seven minutes|twelve minutes|1 hour]',
+  dur1: '[5 minute|five minute|10 minute|ten minute|two minute|15 minute|20 minute|30 second|one hour|half hour|45 minute|90 second|3 minute|twenty five minute|one minute|forty minute]',
+  task: '[fix the failing tests|fix the build|add a readme|write unit tests|refactor the auth module|update the dependencies|clean up the code|add dark mode|fix the login bug|write the documentation|add logging|set up ci|add a new endpoint|optimize the queries|rename the components|remove the dead code|add error handling|fix the type errors|upgrade react|add pagination|write a migration|fix the css|make the page responsive|add a search bar|review the code|commit the changes|open a pull request|bump the version|fix the linter warnings|add input validation|write an api client|build the settings page|add caching|fix the memory leak|set up docker|add tests for the parser|translate the strings|fix the flaky test|update the changelog|split up the big file]',
+  where: '[|in {project}|on {project}|for {project}]',
+  topic: '[machine learning|a black hole|inflation|photosynthesis|the stock market|a neural network|climate change|the roman empire|the french revolution|quantum physics|blockchain|democracy|gravity|a recession|the internet|dna|vaccines|electricity|the solar system|jazz|stoicism|a mortgage|cryptocurrency|the cold war|evolution|a volcano|an api|cloud computing|the big bang|meditation|a credit score|compound interest|algebra|the immune system|a hurricane|renewable energy|supply and demand|kente cloth|the ashanti empire|the pyramids]',
+  howto: '[learn to swim|cook jollof rice|save money|get better sleep|lose weight|learn to code|write a good cv|speak in public|grow tomatoes|fix a flat tyre|clean my laptop screen|back up my phone|make friends in a new city|study for an exam|become a better writer|start investing|negotiate my rent|train my dog|get a visa|improve my english|focus better|make pancakes|change my wifi password|take better photos|remove a virus from my laptop|learn the guitar|prepare for an interview|deal with anxiety|plan a wedding|make kelewele]',
+  country: '[france|ghana|nigeria|kenya|japan|brazil|canada|egypt|india|germany|south africa|australia|mexico|italy|china|togo|senegal|spain]',
+  person: '[mum|dad|mummy|daddy|honey|babe|guys|kids|bro|sis|auntie|uncle|dear|sweetie]',
+  when: '[at 5|at 6 pm|at 7 in the morning|at noon|at half past four|at 9:30|tomorrow|tomorrow morning|tomorrow at 9|tonight|this evening|on friday|on monday at 9|next tuesday|on the 12th|by 8|on sunday afternoon|at 3 tomorrow]',
+  every: '[every morning|every weekday at 9|every friday|every day at 8|every monday and thursday|on weekdays at 7|every sunday evening|on the 1st of every month|every night at 10]',
+  todo: '[call my mum|send the report|pay the rent|take my medicine|water the plants|call kofi|renew my passport|book the flight|pick up the kids|buy bread|charge my phone|check the post|file my hours|stand up and stretch|drink some water|prepare the slides|pay the electricity bill|email the landlord|go for a run|back up my laptop]',
+  fact: "[my standup is at ten|my birthday is in may|i prefer short answers|i work from home on fridays|my manager is kofi|my car is blue|the office is on the third floor|i'm vegetarian|i'm allergic to nuts|my flight is on tuesday|the deadline is friday|my gym days are monday and thursday|my wife's name is ama|my son's school starts at eight|the project is called nova|i use a mac for work|i like my coffee black|my dentist is on wednesday|the wifi is called home five|my sister lives in accra]",
+};
+
+/**
+ * The individual words used in $pre/$post/$lead/$ask - not phrasings to match, but words that
+ * open or close a request without saying anything about it. Used to recognise a held-out eval
+ * phrasing's near-copies (the same words plus only these) as leakage too, not just its exact,
+ * name-blanked self.
+ */
+export const FILLER_WORDS: ReadonlySet<string> = new Set(
+  (['pre', 'post', 'lead', 'ask'] as const).flatMap((key) =>
+    LISTS[key]!
+      .slice(1, -1) // the outer [ ]
+      .split('|')
+      .flatMap((option) => option.trim().split(/\s+/)),
+  ).filter(Boolean),
+);
+
+export const REFLEX_GRAMMAR: Record<string, string[]> = {
+  undo: [
+    '$lead [undo|revert|reverse|take back] [that|it|the last thing|what you just did|the last change|that change] $post',
+    "$lead [undo|revert] [what {agent} did|{agent}'s changes|what {agent} changed|the agent's changes]",
+    '$lead [put it back|put things back|go back] [the way it was|how it was|to how it was before]',
+  ],
+  activity_report: [
+    '$ask [what did you do|what have you done|what did you get done|tell me what you did] [|today|yesterday|this week|so far today]',
+    '$ask [what did {agent} change|what has {agent} done|what did {agent} do] [|today|yesterday|in the project]',
+    '$ask [show me|give me] [your activity|a log of what you did|the record of today]',
+  ],
+  stop_everything: [
+    '$lead [stop|halt|abort|freeze|kill] [everything|it all|all of it|everything you are doing] [|now|right now|immediately|please]',
+    '[emergency stop|panic stop|shut it all down|everything stop] [|now|please|right now]',
+  ],
+  permissions: [
+    '$ask [what have i allowed|which permissions have i given you|what permissions have i given you|what did i say always to|what have i let you do without asking] [|you|so far]',
+  ],
+  remind: [
+    '$pre [remind me to|remind me i need to|set a reminder to|make a reminder to|create a reminder to] $todo $when $post',
+    '$pre [remind me|set a reminder|put a reminder in] $when to $todo $post',
+    '$pre [remind me|set a reminder] $when [about the dentist|about the meeting|about the rent|about the team lunch] $post',
+    '$pre $when [remind me to|please remind me to|i need a reminder to] $todo',
+    '$pre [remind me to|remind me i should] $todo $every',
+    '$every [remind me to|please remind me to] $todo',
+    '$pre [add|put] $todo [to|in|on] [my reminders|the reminders app|my reminders list] $post',
+    "[don't let me forget to|remember to|don't forget to] $todo $when",
+  ],
+  reminders: [
+    '$ask [what are my reminders|what reminders do i have|do i have any reminders|what have you got to remind me about|read me my reminders|list my reminders] [|today|tomorrow|this week|for today|for tomorrow]',
+    "$ask [what's|what is] [coming up|on my list] [today|tomorrow|this week]",
+  ],
+  cancel_reminder: [
+    '$pre [cancel|delete|remove|scrap|get rid of|clear] [the|my] reminder to $todo',
+    '$pre [cancel|delete|remove|scrap|clear] [the|my] reminder [about the dentist|about the rent|for tomorrow|for friday|at 5]',
+    '[stop reminding me to|no need to remind me to|you can stop reminding me to] $todo',
+  ],
+  snooze_reminder: [
+    '$lead [snooze|snooze it|snooze that|snooze the reminder] [|for a bit|please|for now]',
+    '$lead [snooze|snooze it|snooze that|snooze the reminder] for $dur',
+    '$lead [remind me again|ask me again|tell me again] in $dur',
+    '$lead [remind me again|ask me again|tell me again] [later|in a bit|a bit later]',
+  ],
+  brief: [
+    "$ask [brief me|give me my briefing|give me the briefing|run me through my day|catch me up|what's my day like|what's on today|what does my day look like|how does today look|what have i got today] $post",
+    '[good morning|morning] [|nova|hey nova|how are things|what have we got today|brief me]',
+  ],
+  missed: [
+    "$ask [what did i miss|did i miss anything|anything while i was away|what happened while i was out|did anything come up|anything new since i left] [|while i was in the meeting|while i was on the call|this afternoon|today]",
+  ],
+  task_status: [
+    "$ask [what's|what is] [{agent}|the agent|the coding agent] [doing|working on|up to] [|now|right now]",
+    "$ask [is|has] [{agent}|the agent] [done|finished|still working] [|yet|with the task|with it]",
+    "$ask [how's|how is] [{agent}|the agent|the task|my task] [getting on|going|coming along]",
+    "$ask [what did|what has] [{agent}|the agent] [say|find|report|come back with]",
+  ],
+  set_project: [
+    "$pre [i'm working on|we're working on|switch to|let's work on|my current project is|set my project to|move over to] {project} [|today|now|for now|from now on]",
+  ],
+  create_routine: [
+    "[when i say|whenever i say|if i say] [start work|good night|focus time|lunch time|standup|let's go|wrap up] [open slack|brief me|mute yourself|quit slack|open zoom|tell me my reminders|open my email] [|and brief me|and open linear|then read my reminders|and quit spotify]",
+    '$every [open slack|brief me|open my email|open linear|quit slack] [|and brief me|and read my reminders|then open my calendar]',
+    '[make|create|set up|add] a routine [for the morning|for when i start work|called focus|for bedtime|that opens slack]',
+  ],
+  open_app: [
+    '$pre [open|open up|launch|start|start up|fire up|bring up|pull up|load|boot up|run|switch to|go to|show me|show|get me|take me to|put up|get me into|focus|switch over to|head to|pop open] {app} $post',
+    '$pre [open|launch|start|bring up|pull up|show] the {app} [app|application|program] $post',
+    "[i need|i want|i'd like|let me|i wanna|i gotta|i have] [to use|to open|to see|to check|to get into|to work in|to go to] {app} $post",
+    '[i need|i want|gimme|give me|get me|i would like] {app} [|open|up|please|now|on the screen]',
+    '[can i|could i|can we|could we|may i] [get|have|see|open|use] {app} $post',
+    '[put|bring|get] {app} [on the screen|up|to the front|in front|on|open]',
+    "[let's|time to|i should] [open|use|get into|go to|check] {app}",
+    '[open|launch|start|pull up|bring up] {app} [i need to reply to a message|i have a meeting soon|i want to listen to music|so i can take notes|i have to send an email|i need to finish something|for my call|to check something|i need it]',
+    '[um|uh|er|so|okay|like] [open|launch|start] [uh|um|like|] {app}',
+  ],
+  quit_app: [
+    "$pre [quit|close|exit|shut down|shut|kill|force quit|terminate|end|close out|close down|get rid of|dismiss|stop|force close|close out of|quit out of|exit out of|turn off|switch off] {app} [|please|for me|now|right now|it's frozen|it's not responding|i'm done with it|completely|it keeps crashing|it's slowing everything down]",
+    '$pre [quit|close|exit|shut down] the {app} [app|application|program] $post',
+    "[i'm done with|i'm finished with|no more|enough] {app} [|close it|quit it|shut it down|kill it]",
+    '[make|have|get] {app} [quit|close|shut down|go away]',
+    '{app} [can go|needs to close|has to go|off|close|quit]',
+    '[shut|close|kill] {app} [down|off]',
+    "[i want|i'd like|i need] {app} [closed|shut|gone|quit|shut down]",
+  ],
+  tell_time: [
+    '$ask what time is it [|now|right now|please|at the moment|currently]',
+    "$ask [what's|whats|what is] the [time|date|day|day today|date today|time now|time right now] [|please|now]",
+    '$ask [tell me|give me|say|read me] the [time|date|day|current time|date today] [|please|now]',
+    "$ask [do you know|can you tell me|could you tell me|would you tell me] [what time it is|the time|the date|what day it is|what the date is|today's date|what day today is]",
+    '[what|which] [day|date|month|year] is it [|today|now|please]',
+    '$ask what day of the [week|month] is it [|today]',
+    '[is it|is it already|is it still] [morning|afternoon|evening|night|late|early|lunchtime|noon|midnight] [|yet|already|now]',
+    '[time|date|day] [check|please|now]',
+    "[current|today's] [time|date|day] [|please]",
+    '[how late|how early] is it [|now|already]',
+    "[what's|what is] [today|today's date|the day today] [|please]",
+  ],
+  set_timer: [
+    '$pre set a $dur1 timer [|please|for me|now]',
+    '$pre set a timer for $dur [|please|for me]',
+    '$pre [start|begin|run|put on|do|make] a [timer|countdown] [for|of] $dur [|please]',
+    '[timer|countdown] [for|of|] $dur [|please]',
+    '$pre [remind me|alert me|ping me|notify me|nudge me|buzz me|let me know|give me a shout|wake me up|wake me|warn me|ring me] in $dur [|please|to check the food|to call my mum|to take my pills|to stretch|to join the meeting|to move the car|to drink water|to check the oven|to take a break]',
+    '$pre count down [|from] $dur',
+    '$pre [time|clock] $dur for me',
+    '$pre [set|start] [an alarm|a reminder] [for|in] $dur',
+    '$pre let me know when $dur [are up|have passed|is up|are over]',
+    '$dur1 timer [|please|now]',
+    'in $dur [remind me|tell me|let me know] [|to check the stove|to call back|to switch off the iron|to leave]',
+  ],
+  stop_listening: [
+    '$pre stop listening [|now|please|for now|for a while|for a bit|to me|for a minute|to us|until i call you]',
+    '$pre [turn off|switch off|disable|mute|shut off|kill|close|pause] [the|your] [mic|microphone|listening] [|please|now]',
+    '[mic|microphone|listening] off [|please|now|nova]',
+    '$pre [go to sleep|go back to sleep|take a nap] [|now|please|for a while|nova]',
+    '$pre [stop|quit] [hearing|recording|listening to] [me|us|everything|the room] [|please]',
+    "$pre [don't|do not] listen [for now|to me|anymore|for a while|until i call you]",
+    '$pre mute [yourself|your mic|the mic|your microphone] [|please|now]',
+    "[that's all for now|that's it for now|i'm done|we're done|okay that's all] [stop listening|go to sleep|mic off|turn off your mic]",
+  ],
+  open_settings: [
+    "$pre [open|show|bring up|pull up|go to|take me to|display|launch|show me] [your|the|nova's|nova] [settings|preferences|options|configuration|config|setup|settings page|settings window] $post",
+    "$pre [i want|i'd like|i need|let me] [to change|to adjust|to tweak|to configure|to edit|to update] [your settings|your voice|your wake word|your name|your preferences|how you work|your configuration|the settings|how you sound|your speaking speed|your appearance]",
+    '$pre [change|adjust|tweak|configure|update] [your voice|your wake word|your name|your settings|your speech speed|your preferences|your appearance] [|please]',
+    '[settings|preferences|config|options] [|please|window|page|screen|panel]',
+    "[where are|where's|where can i find] [your|the] [settings|preferences|options]",
+    '[can i|can we|could i] [see|change|open|get to] [your|the] [settings|preferences|options]',
+  ],
+  cancel_timer: [
+    '$pre [cancel|stop|end|clear|delete|remove|kill|abort|turn off|switch off|get rid of|forget|drop|dismiss|silence] [the|my|that|this|all the|all my|all] [timer|timers|countdown|countdowns|alarm|reminder|reminders] [|please|now]',
+    "$pre [no more|never mind the|forget the|i don't need the|i don't need my] [timer|countdown|alarm|reminder]",
+    '[timer|countdown|alarm] off [|please]',
+    '$pre [cancel|stop|end] the $dur1 [timer|countdown] [|please]',
+  ],
+  agent_task: [
+    '$lead [ask|tell|get] {agent} to $task $where [|please]',
+    '$lead [have|let|make] {agent} $task $where [|please]',
+    '{agent} [|please|can you|could you] $task $where [|please]',
+    '[can|could] {agent} $task $where',
+    "[i want|i need|i'd like] {agent} to $task $where",
+    '$lead [ask|get|tell] the [agent|coding agent] to $task $where',
+    '$lead [have|let] the [agent|coding agent] $task $where',
+  ],
+  cancel_task: [
+    "$pre [stop|cancel|abort|halt|kill|end|call off|pause] [the agent|{agent}|the agents|all agents|the coding agent|the task|the job|the agent task|the agent's work|what {agent} is doing|{agent}'s task|the coding task|the coding job|all the tasks|the running task] [|please|now]",
+    '$pre tell {agent} to [stop|cancel|quit|halt|stop working|drop it|give up|stand down]',
+    '$pre make {agent} stop [|working|now]',
+    '{agent} [stop|halt|cancel|stop working|drop it|enough]',
+    '[the agent|{agent}] [should stop|can stop|needs to stop|must stop] [|now|working]',
+  ],
+  stop: [
+    "[|nova|okay|alright|hey|please|ok] [stop|stop it|stop that|stop talking|stop speaking|be quiet|quiet|silence|shh|shush|hush|enough|that's enough|never mind|forget it|forget that|cancel|cancel that|nevermind|skip it|hold on|wait|stop stop|no need|drop it|that will do|shut up|zip it|pause] [|please|now|nova|thanks|thank you]",
+    "[you can stop|you can be quiet|no need to continue|don't finish that|don't say more|that's all i needed|i've heard enough|okay i got it|got it thanks|thanks that's enough]",
+    // A bare "forget it" drops what's going on; forgetting a memory names the memory.
+    '[|oh|actually|no|nah|wait|nova] [forget it|forget that|forget about it|forget about that|forget i said anything|forget i asked|just forget it] [|then|please|nova|thanks|for now]',
+  ],
+  confirm_yes: [
+    "[yes|yeah|yep|yup|yea|sure|ok|okay|alright|all right|fine|of course|absolutely|definitely|certainly|correct|right|affirmative|totally|for sure|yes please] [|please|go ahead|do it|go for it|that's right|thanks|please do|sure|do that|go on|proceed|that's fine|i'm sure]",
+    "[go ahead|do it|go for it|please do|proceed|carry on|continue|go on|make it so|let's do it|sounds good|that works|perfect|approved|allow it|you may|you can] [|please|then|now|thanks]",
+  ],
+  confirm_no: [
+    "[no|nope|nah|no no|no way|not now|not yet|never|negative|don't|no thanks|no thank you|not really|not at all|absolutely not|definitely not|of course not|hold off|wait no|actually no] [|don't do it|leave it|thanks|please|that's wrong|not that|keep it|i changed my mind|don't bother]",
+    "[don't|do not|please don't] [do it|do that|bother|touch it|close it|quit it|allow it|go ahead|proceed|do anything]",
+    '[leave it|keep it|leave it alone|keep it open|skip it|skip that|deny|decline|refuse|reject it] [|please|thanks|as it is|for now]',
+  ],
+  remember: [
+    "$pre [remember|remember that|don't forget that|keep in mind that|note that|make a note that|please remember that|can you remember that] $fact",
+    "[remember this|save this|note this down|make a note] [|for me] $fact",
+    "[don't forget|keep in mind|remember] $fact",
+  ],
+  recall: [
+    '$ask [what do you remember|what do you know|what did i tell you|what have i told you] about [me|my schedule|my family|my work|my car|my standup|the deadline|my flight|my preferences|my manager|the project|myself]',
+    "$ask [do you remember|do you know|can you remind me] [my birthday|when my standup is|my manager's name|what i told you about the deadline|my gym days|where the meeting room is|what car i drive|when my flight is]",
+    '[tell me|list|read me] [what you remember|everything you remember|what you know about me|my memories]',
+    "[do you remember|did i tell you|do you recall|can you recall] [when|where|what|who|how] [my dentist appointment is|my car is|i work|my sister lives|my flight leaves|the meeting is|my manager is|the office is]",
+  ],
+  forget: [
+    "$pre [forget|forget that|please forget that|you can forget that|delete the memory that|erase the note that] $fact",
+    '$pre [forget|delete|erase|remove] [what i told you about|the memory about|the note about|what you know about|what you remember about] [my car|the deadline|my flight|my manager|the wifi|my gym days|my old address|the office|my standup]',
+  ],
+  chat: [
+    '[what is|explain|tell me about|describe|define|what do you know about] $topic',
+    "[how do i|how can i|what's the best way to|how should i] $howto",
+    '[can you|could you|please|help me] [write|draft|compose] [a poem|an email|a message|a tweet|a short story|a summary|a cover letter|a toast|a speech|a thank you note|a joke|a limerick] [about my weekend|to my boss|for my sister|about the rain|for a job application|about friendship|for a birthday|about coffee|to a client|about football]',
+    '[who invented|who discovered|who wrote|who founded|who made] [the telephone|the light bulb|microsoft|the theory of relativity|harry potter|apple|facebook|penicillin|the printing press|things fall apart|the radio|the airplane|google|the world wide web|the television]',
+    "[what's|what is] the [capital|population|currency|main language|national dish|time zone] of $country",
+    '[how many|how much|how long|how far|how old|how big|how tall] [people live in london|does a flight to london take|is the great wall of china|is the eiffel tower|is the earth|water should i drink a day|does it take to learn french|calories are in an egg|is it from accra to lagos|legs does an octopus have|teeth do adults have|planets are there|is mount everest|does an iphone cost]',
+    '[is|are|can|does|should] [coffee good for you|dogs see colors|it healthy to skip breakfast|i learn rust first|ai going to take our jobs|cats like water|it safe to eat raw eggs|electric cars better than petrol cars|plants feel pain|bananas a berry|eggs bad for you|a hotdog a sandwich]',
+    '[recommend|suggest|give me] [a good book|a movie|a podcast|a recipe|some music|a name for my cat|a gift idea|a place to visit|a workout|a hobby] [|for tonight|for the weekend|for a beginner|for my mum|to try]',
+  ],
+  other: [
+    '[the|a] [minister|president|police|government|company|court|coach|mayor|spokesperson|chairman|senator|governor|union|hospital] [said|announced|confirmed|denied|reported|warned|revealed|claimed|insisted|admitted] [|that] [the talks would continue|prices will rise next month|the road will be closed|the match was postponed|the suspect was arrested|the results are due tomorrow|the budget was approved|the strike is over|the factory will close|profits fell sharply|the vote was delayed|nobody was injured|the bridge will reopen|schools will reopen on monday|the deal is done]',
+    '[and|oh|] [he|she|they] [scores|shoots|passes|misses|saves it|crosses it|heads it|clears it|takes the penalty] [what a goal|in the last minute|from distance|into the top corner|over the bar|wide of the post|and the crowd goes up|]',
+    "$person [where is|where are|have you seen|did you see|can you bring|please bring|don't forget] [my keys|the remote|my phone|the charger|my bag|the car keys|my glasses|my shoes|the umbrella|the baby's bottle]",
+    '[close|open|shut|lock|unlock] the [door|window|gate|fridge|curtains|garage|car|cupboard|tap] [please|behind you|when you leave|for me|quickly|]',
+    '[stop|quit|no more] [running|shouting|fighting|playing|crying|doing that|touching that|eating so fast|making noise|jumping|arguing|teasing her] [please|now|in the house|right now|]',
+    '[what time|when] [are we leaving|is the party|does the movie start|will you be back|is dinner|does your flight land|is the meeting tomorrow|do the kids finish school|does the shop open|are they coming|is the wedding|is your exam]',
+    '[the|my|our] [zoom call|zoom meeting|slack channel|spotify playlist|chrome tabs|teams meeting|whatsapp group|email|notion page|calendar|laptop|phone] [is|was|keeps|has been] [crashing|down|so slow|full of messages|broken|annoying|updated|lagging|freezing|getting hot]',
+    "[i'll|i will|we'll|she'll|he'll|they'll] [be there|call you|finish it|send it|come back|be ready|be home|join you|pick you up] in [five minutes|ten minutes|an hour|half an hour|twenty minutes|two minutes|a bit]",
+    "[you're|you are] [on mute|breaking up|frozen|lagging|not sharing your screen|too quiet|cutting out]",
+    "[yes|no|yeah|nope|okay] [i'm coming|i'm not hungry|i did|i know|mummy|daddy|she did|he called|we're ready|it's fine|i saw it|i'll do it later|i'm on my way|go and sleep]",
+    "[in today's video|on this channel|in this episode|on the show today|coming up next|after the break|later in the programme] [we're going to|we will|i'll|let's] [look at|talk about|review|test|cook|build|explore|discuss] [the new iphone|a simple recipe|the latest news|my morning routine|the best budget laptops|the election results|a new game|the history of ghana]",
+  ],
+};
+
+/** A small, fast, seeded random number generator, so the same patterns always give the same phrasings. */
+export function seeded(seed: number) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** Every phrasing a pattern stands for, or an even sample of them (the same one every time) when there are more than `cap`. */
+export function expand(pattern: string, cap = Infinity, seed = 1): string[] {
+  const full = pattern.replace(/\$(\w+)/g, (m, name: string) => LISTS[name] ?? m);
+  const parts = full.split(/(\[[^\]]*\])/).map((p) => (p.startsWith('[') ? p.slice(1, -1).split('|') : [p]));
+  const total = parts.reduce((n, options) => n * options.length, 1);
+  const random = seeded(seed);
+  const pick = (index: number) => {
+    let rest = index;
+    return parts
+      .map((options) => {
+        const option = options[rest % options.length]!;
+        rest = Math.floor(rest / options.length);
+        return option;
+      })
+      .join('')
+      .replace(/\s+/g, ' ')
+      .trim();
+  };
+  if (total <= cap) return [...new Set(Array.from({ length: total }, (_, i) => pick(i)))];
+  const chosen = new Set<string>();
+  for (let tries = 0; chosen.size < cap && tries < cap * 20; tries++) chosen.add(pick(Math.floor(random() * total)));
+  return [...chosen];
+}
+
+/** Grammar phrasings per intent: each pattern sampled up to `perPattern`, each intent up to `perIntent`. */
+export function grammarPhrases(grammar = REFLEX_GRAMMAR, perPattern = 150, perIntent = 600): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  for (const [intent, patterns] of Object.entries(grammar)) {
+    const all = [...new Set(patterns.flatMap((p, i) => expand(p, perPattern, i + 1)))];
+    const random = seeded(intent.length * 7919 + all.length);
+    out[intent] = all.length <= perIntent ? all : all.map((p) => ({ p, r: random() })).sort((a, b) => a.r - b.r).slice(0, perIntent).map((x) => x.p);
+  }
+  return out;
+}
