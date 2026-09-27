@@ -1,4 +1,5 @@
 import { experimental_evaluate as evaluate, type LanguageModel } from 'ai';
+import { JEV_DOUBT_FLOOR, readJev } from './handoff.ts';
 import { HeuristicEvaluationModel } from './heuristicModel.ts';
 import { JEV_DEFAULT_MODEL, JevEvaluationModel } from './jev.ts';
 import { LlmEvaluationModel } from './llmEvaluationModel.ts';
@@ -8,6 +9,8 @@ import type { Decision, DecisionEngine, DecisionExample, EvaluationModelV4, Ques
 export interface EngineSlot {
   name: string;
   model: EvaluationModelV4;
+  /** How Nova reads this model's answers (Jev's: a restated action is a yes, a doubtful skill goes to the brain); Reflex does its own. */
+  read?: <A extends Record<string, unknown>>(state: StateInput, answers: A) => A;
 }
 
 /** A language model Nova made itself (a local server's): an id string would go to the AI SDK's default provider. */
@@ -59,7 +62,7 @@ export class EvaluationDecisionEngine implements DecisionEngine {
     });
     const confidence = (result.providerMetadata as any)?.typesafe?.confidence as Record<string, number> | undefined;
     return {
-      answers: result.answers,
+      answers: slot.read ? slot.read(state, result.answers) : result.answers,
       engine: slot.name,
       latencyMs: Math.round(performance.now() - started),
       fellBack,
@@ -82,6 +85,8 @@ export interface EngineConfig {
   jevModel?: string;
   /** For tests: where Jev's requests go. */
   jevFetch?: typeof fetch;
+  /** Below this, a skill Jev picked goes to the brain when there is one (JEV_DOUBT_FLOOR; 0 acts on everything). */
+  jevDoubt?: number;
   /** A local model server's model ("lmstudio/...") when a language model makes the decisions. */
   llmModel?: string;
   /** Turns a local model id into a model; null for anything that isn't one of the user's servers. */
@@ -91,7 +96,7 @@ export interface EngineConfig {
 }
 
 export function createDecisionEngine(config: EngineConfig = {}): DecisionEngine {
-  const { engine = 'auto', fallback = 'auto', timeoutMs = 1500, jevApiKey = '', jevModel = JEV_DEFAULT_MODEL, jevFetch, llmModel = '', resolveModel, reflex } = config;
+  const { engine = 'auto', fallback = 'auto', timeoutMs = 1500, jevApiKey = '', jevModel = JEV_DEFAULT_MODEL, jevFetch, jevDoubt = JEV_DOUBT_FLOOR, llmModel = '', resolveModel, reflex } = config;
   const heuristic = (why = ''): EngineSlot => ({ name: `heuristic${why ? ` (${why})` : ''}`, model: new HeuristicEvaluationModel() });
   // What stands in when the chosen one can't run: Reflex if it's there, else the keyword matcher - and why.
   const instead = (why: string): EngineSlot => (reflex ? { name: `${reflex.modelId} (${why})`, model: reflex } : heuristic(why));
@@ -102,7 +107,9 @@ export function createDecisionEngine(config: EngineConfig = {}): DecisionEngine 
       case 'reflex':
         return reflex ? { name: reflex.modelId, model: reflex } : heuristic('Reflex not installed');
       case 'jev':
-        return jevApiKey ? { name: `jev (${jevModel})`, model: new JevEvaluationModel({ apiKey: jevApiKey, model: jevModel, fetch: jevFetch }) } : instead('no Jev key');
+        return jevApiKey
+          ? { name: `jev (${jevModel})`, model: new JevEvaluationModel({ apiKey: jevApiKey, model: jevModel, fetch: jevFetch }), read: readJev(jevDoubt) }
+          : instead('no Jev key');
       case 'llm':
         if (!local) return instead(llmModel ? `${llmModel} isn't a local model server` : 'no decision model');
         return { name: `llm (${llmModel})`, model: new LlmEvaluationModel(local, llmModel) };

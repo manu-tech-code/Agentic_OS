@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildQuestions, builtinSkills, createDecisionEngine, type EvaluationModelV4, type RawResult } from '../src/index.ts';
+import { buildQuestions, builtinSkills, createDecisionEngine, handDoubtToBrain, JEV_DOUBT_FLOOR, restatedYes, type EvaluationModelV4, type RawResult } from '../src/index.ts';
 import { JEV_URL, JevEvaluationModel } from '../src/decision/jev.ts';
 
 const KEY = 'jev-test-key-0000';
@@ -125,5 +125,49 @@ describe('Jev, called directly', () => {
       "reflex (fake) (anthropic/claude-haiku-4.5 isn't a local model server) → heuristic",
     );
     expect(createDecisionEngine({ engine: 'llm', reflex: fakeReflex }).name).toBe('reflex (fake) (no decision model) → heuristic');
+  });
+});
+
+describe("Jev's unsure answers go to the brain", () => {
+  const unsure = (choice: string) => ({ intent: { type: 'choice' as const, choice, probabilities: { [choice]: 0.5, chat: 0.25, other: 0.25 } } });
+
+  it('hands a doubtful skill to the brain when there is one - its probability moves to chat', () => {
+    expect(handDoubtToBrain({ canThink: true }, unsure('open_app'), 0.7).intent).toEqual({ type: 'choice', choice: 'chat', probabilities: { open_app: 0, chat: 0.75, other: 0.25 } });
+    expect(handDoubtToBrain({ canThink: true }, unsure('open_app'), 0.5).intent.choice).toBe('open_app'); // sure enough
+  });
+
+  it("keeps it with Nova without a brain, while Nova waits on its own question, and for replies and stopping", () => {
+    expect(handDoubtToBrain({ canThink: false }, unsure('open_app'), 0.7).intent.choice).toBe('open_app');
+    expect(handDoubtToBrain({ canThink: true, awaitingConfirmationFor: 'quit_app' }, unsure('open_app'), 0.7).intent.choice).toBe('open_app');
+    expect(handDoubtToBrain({ canThink: true, awaitingAppFor: 'open_app' }, unsure('open_app'), 0.7).intent.choice).toBe('open_app');
+    for (const choice of ['stop', 'confirm_yes', 'confirm_no', 'other']) expect(handDoubtToBrain({ canThink: true }, unsure(choice), 0.7).intent.choice).toBe(choice);
+    // No chat to hand it to: left as it is.
+    expect(handDoubtToBrain({ canThink: true }, { intent: { type: 'choice', choice: 'open_app', probabilities: { open_app: 0.5, other: 0.5 } } }, 0.7).intent.choice).toBe('open_app');
+  });
+
+  it('happens in the engine for Jev, on what Nova actually acts on', async () => {
+    const questions = buildQuestions(builtinSkills, apps, 'open slack');
+    const first = Object.keys((questions as any).intent.criteria)[0]!; // the fake picks it at 0.62
+    const decide = (opts: object, st: object) => createDecisionEngine({ engine: 'jev', fallback: 'none', jevApiKey: KEY, jevFetch: fakeJev().fetch, ...opts }).decide({ ...state, ...st }, questions);
+    expect(JEV_DOUBT_FLOOR).toBeGreaterThan(0.62);
+    expect(((await decide({}, { canThink: true })).answers as any).intent.choice).toBe('chat');
+    expect(((await decide({}, { canThink: false })).answers as any).intent.choice).toBe(first);
+    expect(((await decide({ jevDoubt: 0 }, { canThink: true })).answers as any).intent.choice).toBe(first); // 0: acts on everything
+  });
+});
+
+describe('a restated action is a yes', () => {
+  it('reads "yes quit it" to "Quit Spotify?" as confirm_yes, and nothing else', () => {
+    const restated = { intent: { type: 'choice' as const, choice: 'quit_app', probabilities: { quit_app: 0.5, confirm_yes: 0.25, confirm_no: 0.25 } } };
+    expect(restatedYes({ awaitingConfirmationFor: 'quit_app' }, restated).intent).toEqual({ type: 'choice', choice: 'confirm_yes', probabilities: { quit_app: 0, confirm_yes: 0.75, confirm_no: 0.25 } });
+    expect(restatedYes({ awaitingConfirmationFor: 'open_app' }, restated).intent.choice).toBe('quit_app'); // another action: a new request
+    expect(restatedYes({}, restated).intent.choice).toBe('quit_app');
+  });
+
+  it('happens in the engine for Jev, with a question waiting', async () => {
+    const questions = { intent: { type: 'choice' as const, instructions: 'What?', criteria: { quit_app: null, confirm_yes: null, confirm_no: null, chat: null } } };
+    const engine = createDecisionEngine({ engine: 'jev', fallback: 'none', jevApiKey: KEY, jevFetch: fakeJev().fetch });
+    const d = await engine.decide({ utterance: 'yes quit it', canThink: true, awaitingConfirmationFor: 'quit_app' }, questions);
+    expect((d.answers as any).intent.choice).toBe('confirm_yes');
   });
 });
