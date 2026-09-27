@@ -25,10 +25,19 @@ export function frame(type: 1 | 2, payload: Buffer): Buffer {
 export class HearingHelper {
   private readonly child: ChildProcess;
   private closed = false;
+  private gone = false;
 
   constructor(bin: string, onEvent: (event: HelperEvent) => void, onExit: (code: number | null, stderr: string) => void) {
     this.child = spawn(bin, [], { stdio: ['pipe', 'pipe', 'pipe'] });
     let stderr = '';
+    // Once, however it ends: it exited, or it never started (the binary is missing) - never an unhandled 'error'.
+    const ended = (code: number | null, why?: string) => {
+      this.closed = true;
+      if (this.gone) return;
+      this.gone = true;
+      onExit(code, why ?? stderr.trim());
+    };
+    this.child.on('error', (e) => ended(null, e.message));
     this.child.stderr!.on('data', (d: Buffer) => (stderr = (stderr + String(d)).slice(-2000)));
     createInterface({ input: this.child.stdout! }).on('line', (line) => {
       try {
@@ -38,10 +47,7 @@ export class HearingHelper {
       }
     });
     this.child.stdin!.on('error', () => {}); // it exited; 'exit' reports why
-    this.child.on('exit', (code) => {
-      this.closed = true;
-      onExit(code, stderr.trim());
-    });
+    this.child.on('exit', (code) => ended(code));
   }
 
   command(command: Record<string, unknown>) {
@@ -60,6 +66,6 @@ export class HearingHelper {
   }
 
   private write(data: Buffer) {
-    if (!this.closed) this.child.stdin!.write(data);
+    if (!this.closed && this.child.stdin!.writable) this.child.stdin!.write(data);
   }
 }

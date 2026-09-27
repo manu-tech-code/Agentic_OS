@@ -1,8 +1,8 @@
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { execFileSync, fork } from 'node:child_process';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { platform, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SpeechActivity } from '@nova/core';
 import { helperBinary, helperIsCurrent, withoutPrebuiltBinary } from '../src/hearing/build.ts';
 import { frame, HearingHelper, type HelperEvent } from '../src/hearing/helper.ts';
@@ -45,6 +45,104 @@ describe('the hearing helper, in pieces', () => {
     expect(out).not.toMatch(/binaryTarget|\.trait\(|NemoTextProcessing/);
     expect(out).toMatch(/"FastClusterWrapper"/);
     expect(() => withoutPrebuiltBinary(manifest.replace('.binaryTarget(', '.binaryTarget2('))).toThrow(/manifest changed/);
+  });
+
+  it("reports a helper that can't start as stopped - it never takes Nova down", async () => {
+    const [code, why] = await new Promise<[number | null, string]>((resolve) => {
+      const helper = new HearingHelper(join(tmpdir(), 'no-such-dir', 'nova-hearing'), () => {}, (c, w) => resolve([c, w]));
+      helper.command({ type: 'cancel' }); // nothing to write to: dropped
+    });
+    expect(code).toBeNull();
+    expect(why).toMatch(/ENOENT/);
+  });
+
+  it('never sends to a Smart Turn process that stopped', async () => {
+    const script = join(mkdtempSync(join(tmpdir(), 'nova-worker-')), 'dies.mjs');
+    writeFileSync(script, 'process.exit(0);\n');
+    const gone = new Promise<unknown>((resolve) => new (SmartTurn as any)(fork(script, [], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] }), resolve));
+    const turn = (await gone) as SmartTurn;
+    expect(turn.alive).toBe(false);
+    expect(await turn.judge(new Int16Array(16_000))).toBeNull();
+  });
+});
+
+describe('the hearing service, with a stand-in helper', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  function setup() {
+    const utterances: [string, boolean][] = [];
+    const hearing = new Hearing({ status: () => {}, transcript: () => {}, utterance: (text, explicit) => utterances.push([text, explicit]), bargeIn: () => {} });
+    (hearing as any).config = { engine: 'parakeet', language: 'en-US', patience: 'normal', smartTurn: false, bargeIn: true };
+    /** A helper starts - or starts again - and says it's ready: the service's own code takes it on. */
+    const start = () => {
+      const commands: Record<string, any>[] = [];
+      (hearing as any).use('parakeet', { command: (c: Record<string, any>) => commands.push(c), audio: () => {}, close: () => {} });
+      (hearing as any).onHelper('parakeet', { type: 'ready', engine: 'parakeet', ms: 1 });
+      return commands;
+    };
+    const feed = (samples: Int16Array) => {
+      for (let i = 0; i < samples.length; i += 320) {
+        const chunk = samples.subarray(i, i + 320);
+        hearing.audio(Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength));
+      }
+    };
+    const quiet = (ms: number) => feed(new Int16Array(ms * 16));
+    const talk = (ms: number) => feed(Int16Array.from({ length: ms * 16 }, (_, i) => Math.round(8000 * Math.sin(i / 5))));
+    /** The helper's text for the turn it was last asked to finish. */
+    const answer = (commands: Record<string, any>[], text: string) => {
+      const turn = commands.filter((c) => c.type === 'finalize').at(-1)!.turn;
+      (hearing as any).onHelper('parakeet', { type: 'final', turn, text, ms: 1 });
+    };
+    return { hearing, utterances, start, quiet, talk, answer };
+  }
+
+  it("tells a restarted helper where speech is in its own audio, not the daemon's", () => {
+    const { hearing, start, quiet, talk } = setup();
+    const first = start();
+    quiet(10_000);
+    talk(600);
+    quiet(1000);
+    vi.advanceTimersByTime(3000); // the turn ends
+    expect(first.find((c) => c.type === 'speech' && c.active)!.at).toBe(10_000);
+    const second = start(); // it stopped and started again: its audio counts from zero
+    quiet(2000);
+    talk(600);
+    expect(second.find((c) => c.type === 'speech' && c.active)!.at).toBe(2000);
+    expect(second.find((c) => c.type === 'cancel')!.at).toBe(1760);
+    hearing.close();
+  });
+
+  it('makes a turn Nova’s after the shortcut only while it follows closely', () => {
+    const { hearing, utterances, start, quiet, talk, answer } = setup();
+    const helper = start();
+    hearing.hold();
+    hearing.release(false); // tapped
+    quiet(500);
+    talk(800);
+    quiet(600);
+    vi.advanceTimersByTime(3000);
+    answer(helper, 'open slack');
+    expect(utterances).toEqual([['open slack', true]]);
+
+    hearing.hold();
+    hearing.release(false); // tapped - and then nothing said for a while
+    vi.advanceTimersByTime(10_000);
+    talk(800);
+    quiet(600);
+    vi.advanceTimersByTime(3000);
+    answer(helper, 'turn it down');
+    expect(utterances.at(-1)).toEqual(['turn it down', false]); // not taken as said to Nova
+
+    hearing.hold();
+    hearing.release(true); // held without a word
+    vi.advanceTimersByTime(2000);
+    talk(800);
+    quiet(600);
+    vi.advanceTimersByTime(3000);
+    answer(helper, 'the tv in the background');
+    expect(utterances.at(-1)).toEqual(['the tv in the background', false]);
+    hearing.close();
   });
 });
 
