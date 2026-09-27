@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { ReflexEvaluationModel, StaticEmbedder, type Embedder, type HeadData, type LearnedExample, type SettingsSnapshot } from '@nova/core';
+import { fingerprint, ReflexEvaluationModel, StaticEmbedder, type Embedder, type HeadData, type LearnedExample, type SettingsSnapshot } from '@nova/core';
 import { settingsFile } from '../config.ts';
 import { DEFAULT_REFLEX_MODEL, isInstalled, readModelFiles, REFLEX_MODELS } from '../models/files.ts';
 
@@ -64,10 +64,15 @@ function classifierFor(model: ReflexEvaluationModel): Promise<HeadData | null> {
   return ready;
 }
 
+/** Unset is fine (it's optional); anything but a list of strings isn't - and would throw later, spread into `trainingExamples()`. */
+const validMasked = (m: unknown): m is string[] | undefined => m === undefined || (Array.isArray(m) && m.every((x) => typeof x === 'string'));
+
 async function readLearned(): Promise<LearnedExample[]> {
   try {
     const parsed: unknown = JSON.parse(await readFile(learnedFile(), 'utf8'));
-    return Array.isArray(parsed) ? parsed.filter((e) => typeof e?.utterance === 'string' && typeof e?.question === 'string' && typeof e?.choice === 'string') : [];
+    return Array.isArray(parsed)
+      ? parsed.filter((e) => typeof e?.utterance === 'string' && typeof e?.question === 'string' && typeof e?.choice === 'string' && validMasked(e?.masked))
+      : [];
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== 'ENOENT') console.warn(`[reflex] can't read ${learnedFile()}: ${(e as Error).message}`);
     return [];
@@ -105,8 +110,13 @@ export async function loadReflex(opts: { learn: boolean; name?: string }): Promi
       embedders.set(name, embedder);
     }
     learned ??= await readLearned();
+    // The pinned revision and per-file checksums, not just the model's name (which never changes
+    // on its own): a saved classifier trained on a since-changed model or reader must retrain.
+    const spec = REFLEX_MODELS[name];
+    const modelKey = spec ? `${name}@${fingerprint(JSON.stringify([spec.revision, spec.files]))}` : name;
     const model: ReflexEvaluationModel = new ReflexEvaluationModel({
       embedder,
+      modelKey,
       learned,
       learn: opts.learn,
       onLearn: () => void saveLearned([...model.learned]),
@@ -122,8 +132,9 @@ export async function loadReflex(opts: { learn: boolean; name?: string }): Promi
   }
 }
 
-/** Forget everything Reflex learned. */
+/** Forget everything Reflex learned: drops the classifier trained on it too, and retrains (in the background - it decides from its examples alone meanwhile). */
 export function forgetLearned(model: ReflexEvaluationModel | null) {
   model?.forget();
+  if (model) void classifierFor(model).then((head) => model.useHead(head));
   return saveLearned([]);
 }

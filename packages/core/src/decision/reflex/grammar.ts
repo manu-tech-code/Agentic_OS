@@ -24,6 +24,21 @@ const LISTS: Record<string, string> = {
   fact: "[my standup is at ten|my birthday is in may|i prefer short answers|i work from home on fridays|my manager is kofi|my car is blue|the office is on the third floor|i'm vegetarian|i'm allergic to nuts|my flight is on tuesday|the deadline is friday|my gym days are monday and thursday|my wife's name is ama|my son's school starts at eight|the project is called nova|i use a mac for work|i like my coffee black|my dentist is on wednesday|the wifi is called home five|my sister lives in accra]",
 };
 
+/**
+ * The individual words used in $pre/$post/$lead/$ask - not phrasings to match, but words that
+ * open or close a request without saying anything about it. Used to recognise a held-out eval
+ * phrasing's near-copies (the same words plus only these) as leakage too, not just its exact,
+ * name-blanked self.
+ */
+export const FILLER_WORDS: ReadonlySet<string> = new Set(
+  (['pre', 'post', 'lead', 'ask'] as const).flatMap((key) =>
+    LISTS[key]!
+      .slice(1, -1) // the outer [ ]
+      .split('|')
+      .flatMap((option) => option.trim().split(/\s+/)),
+  ).filter(Boolean),
+);
+
 export const REFLEX_GRAMMAR: Record<string, string[]> = {
   undo: [
     '$lead [undo|revert|reverse|take back] [that|it|the last thing|what you just did|the last change|that change] $post',

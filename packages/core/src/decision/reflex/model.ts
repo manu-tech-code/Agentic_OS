@@ -1,9 +1,9 @@
 import { answerFromWeights, softmax } from '../distribution.ts';
 import type { CallOptions, EvaluationModelV4, Question, RawAnswer, RawResult, StateInput } from '../types.ts';
 import { dot, type Embedder } from './embedder.ts';
-import { grammarPhrases } from './grammar.ts';
-import { fingerprint, HEAD_VERSION, ReflexHead, trainHead, type HeadData, type TrainOptions } from './head.ts';
-import { aliasesFor, matchName, nameTokens, type NameMatch } from './names.ts';
+import { FILLER_WORDS, grammarPhrases } from './grammar.ts';
+import { DEFAULT_TRAIN_OPTIONS, fingerprint, HEAD_VERSION, ReflexHead, trainHead, type HeadData, type TrainOptions } from './head.ts';
+import { aliasesFor, COMMON, matchName, nameTokens, NONE_SCORE, type NameMatch } from './names.ts';
 import { REFLEX_PHRASES } from './phrases.ts';
 
 /**
@@ -34,6 +34,11 @@ export interface LearnedExample {
 
 export interface ReflexOptions {
   embedder: Embedder;
+  /**
+   * Identifies the embedder's exact weights for `trainingKey()` (e.g. its file revision and
+   * checksums), when that matters more precisely than `embedder.id`. Defaults to `embedder.id`.
+   */
+  modelKey?: string;
   /** Extra phrasings by option key; defaults to Nova's own phrase bank. */
   phrases?: Record<string, string[]>;
   /** Patterns that multiply into more phrasings for the classifier; defaults to Nova's own. */
@@ -86,8 +91,6 @@ const TUNING: Tuning = { temperature: 0.04, otherFloor: 0.2, rejectFloor: 0.6, t
 
 const FALLBACK_KEYS = new Set(['other', 'none', 'unknown', 'no_match']);
 const NAME_TEMPERATURE = 0.05;
-/** Score of "no name mentioned": a match must beat this. */
-const NONE_SCORE = 0.6;
 /** A name this sure gets masked for intent matching. */
 const MASK_SCORE = 0.85;
 const MAX_LEARNED = 2000;
@@ -95,6 +98,12 @@ const MAX_LEARNED = 2000;
 const APP_CONTEXT = new Set(
   'open launch start run fire bring pull switch show get go focus load boot quit close exit kill shut terminate end dismiss use using need want wanna app application'.split(' '),
 );
+/**
+ * A stricter subset, for a match that's several everyday words together ("find my", "to do"):
+ * "need"/"want"/"wanna" are common enough in ordinary sentences ("i need to find my passport")
+ * that they aren't enough on their own the way they are for a single ambiguous word.
+ */
+const STRONG_APP_CONTEXT = new Set('open launch start run fire bring pull switch show get go focus load boot quit close exit kill shut terminate end dismiss app application'.split(' '));
 /** Words that open a reply and settle it, while Nova waits for a yes or no. */
 const NO_WORDS = new Set(['no', 'not', 'nope', 'nah', "don't", 'dont', 'never', 'negative', 'cancel']);
 const YES_WORDS = new Set(['yes', 'yeah', 'yep', 'yup', 'sure', 'ok', 'okay', 'absolutely', 'definitely', 'affirmative']);
@@ -135,7 +144,13 @@ interface State {
   awaitingConfirmationFor: string | null;
   awaitingAppFor: string | null;
   awaitingProjectFor: string | null;
-  /** Agent tasks and timers running now, when Nova says. */
+  /**
+   * Agent tasks and timers running now, when Nova says - undefined when it doesn't know, which
+   * must stay different from a real, counted 0: undefined never penalises `cancel_task`/
+   * `cancel_timer` below, but a 0 that's really "not tracked here" (e.g. counting only one of
+   * several ways a timer can run) would wrongly veto them every time. If a countdown can also be
+   * a reminder, this must count those too, or omit the field rather than send a stale 0.
+   */
   activeTasks?: number;
   activeTimers?: number;
   /** Whether a brain can take what Reflex isn't sure of. */
@@ -163,13 +178,25 @@ const fill = (text: string) => text.replace(/\{(\w+)\}/g, '$1');
 
 const plain = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}{}]+/gu, ' ').trim();
 
-/** Whether a phrasing is one of those held out: the same words, whatever names fill it. */
+/**
+ * Words that open or close a phrasing without changing what it means, for holdout purposes:
+ * model.ts's own openers plus the grammar's $pre/$post/$lead/$ask words - so "cancel the timer"
+ * and a trained "please cancel the timer now" aren't treated as different phrasings.
+ */
+const HELD_OUT_FILLERS = new Set([...FILLERS, ...FILLER_WORDS, 'now']);
+
+/** Whether a phrasing is one of those held out: the same words, whatever names fill it and whatever fillers open or close it. */
 function heldOutCheck(hold: NonNullable<ReflexOptions['holdOut']>): (text: string) => boolean {
   const names = [...new Set([...(hold.names ?? []), ...Object.values(STAND_INS).flat(), 'app', 'agent', 'project'].map(plain).filter(Boolean))];
   names.sort((a, b) => b.length - a.length);
   const escaped = names.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
   const re = new RegExp(`(?<![\\p{L}\\p{N}])(?:${escaped.join('|')})(?![\\p{L}\\p{N}])`, 'gu');
-  const shape = (t: string) => plain(fill(t)).replace(re, 'x').replace(/\s+/g, ' ');
+  const shape = (t: string) =>
+    plain(fill(t))
+      .replace(re, 'x')
+      .split(' ')
+      .filter((w) => w && !HELD_OUT_FILLERS.has(w))
+      .join(' ');
   const held = new Set(hold.texts.map(shape));
   return (text) => held.has(shape(text));
 }
@@ -181,9 +208,16 @@ function readings(phrase: string, n: number): string[] {
   return [masked, phrase.replace(/\{(\w+)\}/g, (_, slot: string) => STAND_INS[slot]?.[n % STAND_INS[slot]!.length] ?? slot)];
 }
 
-/** Choice questions over names: every option is just a name, or a name and a short label. */
-const isNames = (q: ChoiceQuestion) =>
-  Object.entries(q.criteria).every(([key, v]) => FALLBACK_KEYS.has(key) || v == null || (typeof v === 'string' && v.trim().split(/\s+/).length <= 4));
+/**
+ * Choice questions over names (app/agent/project), as opposed to intents (each option a list of
+ * example phrasings): every option's description is a name-shaped thing, null or a plain string,
+ * never a list. Whether any one label is short enough to itself be a naming alias is decided per
+ * option in `names()` - one verbose custom agent label doesn't turn off name matching for every
+ * other option too.
+ */
+const isNames = (q: ChoiceQuestion) => Object.values(q.criteria).every((v) => v == null || typeof v === 'string');
+/** A label plain and short enough to be a naming alias, rather than a description to ignore for that purpose. */
+const isShortLabel = (v: unknown): v is string => typeof v === 'string' && v.trim().split(/\s+/).length <= 4;
 
 export class ReflexEvaluationModel implements EvaluationModelV4 {
   readonly specificationVersion = 'v4' as const;
@@ -244,8 +278,10 @@ export class ReflexEvaluationModel implements EvaluationModelV4 {
     this.opts.onLearn?.(full);
   }
 
+  /** Forget what was learned - including the classifier, which was trained on it and would otherwise still decide from it. */
   forget() {
     this.learnedExamples = [];
+    this.head = null;
     this.version++;
   }
 
@@ -280,9 +316,17 @@ export class ReflexEvaluationModel implements EvaluationModelV4 {
     return out;
   }
 
-  /** A fingerprint of what the classifier would be trained on: a saved one with the same key is still current. */
+  /**
+   * A fingerprint of what the classifier would be trained on: a saved one with the same key is
+   * still current. Covers everything that changes what the trained weights mean - the embedder's
+   * exact weights (not just its name, which never changes on its own), the lead/filler settings
+   * and training hyperparameters that shape the input features and the fit, and the phrasings
+   * themselves - so a stale `reflex-classifier.json` can't silently survive any of those changing.
+   */
   trainingKey() {
-    return fingerprint(JSON.stringify([HEAD_VERSION, this.embedder.id, this.tuning.leadWords, this.trainingExamples()]));
+    return fingerprint(
+      JSON.stringify([HEAD_VERSION, this.opts.modelKey ?? this.embedder.id, this.tuning.leadWords, [...FILLERS].sort(), DEFAULT_TRAIN_OPTIONS, this.trainingExamples()]),
+    );
   }
 
   /** Train the classifier (a second or two) and start using it. `pause` lets a server stay responsive meanwhile. */
@@ -368,10 +412,17 @@ export class ReflexEvaluationModel implements EvaluationModelV4 {
     return { answers, warnings: [] };
   }
 
-  /** An app name that's also an everyday word only counts as an app when the utterance talks about apps. */
+  /**
+   * An app name that's also everyday words (one, like "Weather", or several, like "FindMy" read
+   * as "find my") only counts as an app when the utterance talks about apps - whatever the match
+   * length, since "find my" is exactly as ordinary a thing to say as "weather" is.
+   */
   private maskable(category: string, m: NameMatch, words: string[]) {
-    if (category !== 'app' || m.end - m.start > 1 || !this.embedder.knows?.(words[m.start]!)) return true;
-    return words.some((w) => APP_CONTEXT.has(w));
+    if (category !== 'app') return true;
+    const span = words.slice(m.start, m.end);
+    if (!span.every((w) => COMMON.has(w) || this.embedder.knows?.(w))) return true;
+    const context = span.length > 1 ? STRONG_APP_CONTEXT : APP_CONTEXT;
+    return words.some((w) => context.has(w));
   }
 
   private remember(utterance: string, masked: string[]) {
@@ -383,7 +434,10 @@ export class ReflexEvaluationModel implements EvaluationModelV4 {
     const key = JSON.stringify(q.criteria);
     let aliases = this.nameCache.get(key);
     if (!aliases) {
-      aliases = new Map(Object.entries(q.criteria).map(([name, label]) => [name, FALLBACK_KEYS.has(name) ? [] : aliasesFor(name, typeof label === 'string' ? label : null)]));
+      // A label too long to be a naming alias (a sentence-like custom agent description, say) is
+      // skipped, but the option's own key still is one: that option is still findable by it,
+      // rather than the whole question losing name matching for every option because of it.
+      aliases = new Map(Object.entries(q.criteria).map(([name, label]) => [name, FALLBACK_KEYS.has(name) ? [] : aliasesFor(name, isShortLabel(label) ? label : null)]));
       this.nameCache.set(key, aliases);
       if (this.nameCache.size > 16) this.nameCache.delete(this.nameCache.keys().next().value!);
     }
@@ -463,7 +517,8 @@ export class ReflexEvaluationModel implements EvaluationModelV4 {
     set.keys.forEach((option, i) => {
       // A reply is expected: yes, no or stop are likelier.
       if (s.awaitingConfirmationFor && (option === 'confirm_yes' || option === 'confirm_no' || option === 'stop')) scores[i]! += 0.08;
-      // Nothing running to cancel: "cancel" and "stop" mean stop.
+      // Nothing running to cancel: "cancel" and "stop" mean stop. Only a real, known 0 counts
+      // (see the field's own doc comment above) - undefined (not tracked) never does.
       if ((option === 'cancel_task' && s.activeTasks === 0) || (option === 'cancel_timer' && s.activeTimers === 0)) scores[i]! -= 0.25;
     });
     // Waiting for a yes or no, the first word usually settles it ("not right now", "sure, go on").
