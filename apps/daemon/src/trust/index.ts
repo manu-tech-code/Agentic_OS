@@ -63,8 +63,11 @@ export class Trust {
     this.timer = setInterval(() => void this.tidy(), 6 * 3_600_000);
   }
 
-  /** What NovaBrain gets. */
-  get options(): Pick<NovaOptions, 'actions' | 'trust' | 'beforeTask' | 'afterTask'> {
+  /**
+   * What NovaBrain gets. `onTaskStep` takes each step of an agent's task: the files an Edit/Write
+   * step names (`step.files`) are the only ones undoing that task puts back.
+   */
+  get options(): Pick<NovaOptions, 'actions' | 'trust' | 'beforeTask' | 'afterTask'> & { onTaskStep: (task: TaskRecord, step: { files?: readonly string[] }) => void } {
     return {
       actions: this.actions,
       trust: this.rules,
@@ -74,6 +77,9 @@ export class Trust {
           console.warn(`  [snapshots] after ${task.label}'s task in ${task.project}: ${(e as Error).message}`);
           return null;
         }),
+      onTaskStep: (task: TaskRecord, step: { files?: readonly string[] }) => {
+        if (step.files?.length) this.snapshots.edited(task.id, step.files);
+      },
     };
   }
 
