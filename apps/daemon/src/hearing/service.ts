@@ -29,6 +29,13 @@ export interface HearingEvents {
 
 const RATE = 16_000;
 const MAX_RESTARTS = 3;
+/** A tap of the talk shortcut makes the next turn Nova's for this long; nothing said by then, it lapses. */
+const ARMED_MS = 8000;
+/** Let go without a word: a moment for the speech detector to catch up, then the turn lapses. */
+const ARMED_AFTER_HOLD_MS = 1500;
+
+/** The hearing helper, as the service uses it. */
+type Helper = Pick<HearingHelper, 'command' | 'audio' | 'close'>;
 
 /** The last 30 s of audio, so Smart Turn can hear the turn so far. */
 class AudioRing {
@@ -61,9 +68,12 @@ class AudioRing {
 export class Hearing {
   status: HearingStatus = { engine: 'browser', state: 'ready' };
   private config: HearingConfig | null = null;
-  private helper: HearingHelper | null = null;
+  private helper: Helper | null = null;
+  /** Where the running helper's audio began in the ring: it counts from its own start, so positions sent to it are from there. */
+  private helperFrom = 0;
   private smart: SmartTurn | null = null;
   private smartStarting: Promise<void> | null = null;
+  private smartRestarts = 0;
   private vad = new SpeechActivity();
   private readonly ring = new AudioRing();
   private readonly turnOpts: { patience: Patience; judge: () => Promise<number | null> };
@@ -83,6 +93,8 @@ export class Hearing {
   private restarts = 0;
   /** The talk shortcut went down: the next turn is for Nova (no wake word needed, never taken for its echo). */
   private armed = false;
+  /** Ends `armed` when no turn followed the shortcut. */
+  private armTimer: ReturnType<typeof setTimeout> | undefined;
   /** Turns that were ended while armed, until their text comes back. */
   private readonly explicitTurns = new Set<number>();
   /** Bumped on every (re)start, so a replaced helper's events are ignored. */
@@ -103,11 +115,10 @@ export class Hearing {
     this.turnOpts.patience = config.patience;
     this.setVocabulary(vocabulary);
     this.setWakeWords(wakeWords);
-    if (config.smartTurn && !this.smart && !this.smartStarting) {
-      this.smartStarting = SmartTurn.start()
-        .then((smart) => void (this.smart = smart))
-        .finally(() => (this.smartStarting = null));
-    } else if (!config.smartTurn && this.smart) {
+    if (config.smartTurn) {
+      this.smartRestarts = 0;
+      this.startSmart();
+    } else if (this.smart) {
       this.smart.close();
       this.smart = null;
     }
@@ -154,12 +165,13 @@ export class Hearing {
     const change = this.vad.push(samples);
     if (!change) return;
     const active = change === 'start';
-    const at = Math.round(this.ring.position / 16); // ms of audio so far
+    const at = this.helperMs(); // ms of the helper's audio so far
     if (active && !this.turn.open) {
       // A new turn: whatever was transcribed before it (murmurs below the speech threshold) is dropped.
       this.turnStart = Math.max(0, this.ring.position - RATE / 2);
       this.overlapping = this.spoken !== null;
       this.interrupted = false;
+      clearTimeout(this.armTimer); // after the shortcut: this turn is the one it was for
       this.helper.command({ type: 'cancel', at: Math.max(0, at - 300) });
     }
     this.helper.command({ type: 'speech', active, at: active ? Math.max(0, at - 60) : at });
@@ -172,31 +184,40 @@ export class Hearing {
    */
   hold() {
     this.armed = true;
+    clearTimeout(this.armTimer); // held: it lasts until the key comes up
     this.turn.hold();
     if (this.turn.open) return; // they were already talking: that turn is theirs now
     this.turnStart = this.ring.position;
     this.overlapping = false;
     this.interrupted = false;
-    this.helper?.command({ type: 'cancel', at: Math.round(this.ring.position / 16) });
+    this.helper?.command({ type: 'cancel', at: this.helperMs() });
   }
 
-  /** The shortcut came up: held through what they said, the turn ends now; tapped, it ends when they pause. */
+  /**
+   * The shortcut came up: held through what they said, the turn ends now; tapped, it ends when they
+   * pause. Nothing said, the next turn is Nova's only for a few seconds - never for good.
+   */
   release(finish: boolean) {
     this.turn.release(finish);
+    if (this.armed && !this.turn.open) {
+      clearTimeout(this.armTimer);
+      this.armTimer = setTimeout(() => this.disarm(), finish ? ARMED_AFTER_HOLD_MS : ARMED_MS);
+    }
   }
 
   /** Stop listening for Nova (the shortcut tapped again): the turn in progress is dropped. */
   drop() {
-    this.armed = false;
+    this.disarm();
     this.turn.release(false);
     this.turn.reset();
-    this.helper?.command({ type: 'cancel', at: Math.round(this.ring.position / 16) });
+    this.helper?.command({ type: 'cancel', at: this.helperMs() });
   }
 
   /** The window stopped streaming: drop the turn in progress. */
   pause() {
+    this.disarm();
     this.turn.reset();
-    this.helper?.command({ type: 'cancel', at: Math.round(this.ring.position / 16) });
+    this.helper?.command({ type: 'cancel', at: this.helperMs() });
     this.vad = new SpeechActivity();
   }
 
@@ -213,6 +234,7 @@ export class Hearing {
 
   close() {
     this.generation++;
+    this.disarm();
     this.helper?.close();
     this.helper = null;
     this.smart?.close();
@@ -222,6 +244,34 @@ export class Hearing {
   private setStatus(status: HearingStatus) {
     this.status = status;
     this.events.status(status);
+  }
+
+  /** A point of the audio (now, by default) in ms of what the running helper has been sent. */
+  private helperMs(position = this.ring.position) {
+    return Math.max(0, Math.round((position - this.helperFrom) / 16));
+  }
+
+  /** The shortcut's turn is over, or never came. */
+  private disarm() {
+    clearTimeout(this.armTimer);
+    this.armTimer = undefined;
+    this.armed = false;
+  }
+
+  /** Smart Turn's process, when Settings want it - started again if it stops, a few times. */
+  private startSmart() {
+    if (this.smart || this.smartStarting) return;
+    this.smartStarting = SmartTurn.start((gone) => {
+      if (this.smart !== gone) return;
+      this.smart = null; // turn-taking goes on without it meanwhile
+      if (this.config?.smartTurn && this.smartRestarts++ < MAX_RESTARTS) setTimeout(() => this.config?.smartTurn && this.startSmart(), 5000 * this.smartRestarts);
+    })
+      .then((smart) => {
+        if (smart && !this.config?.smartTurn) smart.close(); // turned off while it started
+        else this.smart = smart;
+      })
+      .catch(() => {})
+      .finally(() => (this.smartStarting = null));
   }
 
   /** Which engine to run: what's asked for, if this Mac has it. */
@@ -239,6 +289,7 @@ export class Hearing {
     this.helper?.close();
     this.helper = null;
     this.turn.reset();
+    this.disarm();
     const config = this.config!;
     const choice = await this.choose(config.engine);
     if (generation !== this.generation) return;
@@ -258,15 +309,27 @@ export class Hearing {
       return;
     }
     if (generation !== this.generation) return;
-    this.helper = new HearingHelper(
-      bin,
-      (event) => generation === this.generation && this.onHelper(engine, event),
-      (code, stderr) => generation === this.generation && this.onExit(engine, code, stderr),
+    this.use(
+      engine,
+      new HearingHelper(
+        bin,
+        (event) => generation === this.generation && this.onHelper(engine, event),
+        (code, stderr) => generation === this.generation && this.onExit(engine, code, stderr),
+      ),
     );
-    this.helper.command({
+  }
+
+  /**
+   * A helper just started. It counts audio from its own start (a restarted one from zero), and it
+   * gets none until it's ready - so positions sent to it are from where the ring is now.
+   */
+  private use(engine: 'apple' | 'parakeet', helper: Helper) {
+    this.helper = helper;
+    this.helperFrom = this.ring.position;
+    helper.command({
       type: 'start',
       engine,
-      locale: config.language.replace('-', '_'),
+      locale: this.config!.language.replace('-', '_'),
       vocabulary: this.vocabulary,
       wakeWords: this.wakeWords,
       modelDir: join(modelsDir(), PARAKEET_MODEL),
@@ -324,10 +387,8 @@ export class Hearing {
 
   private endTurn() {
     const id = ++this.turnId;
-    if (this.armed) {
-      this.explicitTurns.add(id);
-      this.armed = false;
-    }
+    if (this.armed) this.explicitTurns.add(id);
+    this.disarm();
     this.helper?.command({ type: 'finalize', turn: id });
     this.turn.reset();
   }

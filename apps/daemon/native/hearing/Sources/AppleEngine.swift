@@ -38,6 +38,8 @@ final class AppleEngine: Engine {
   private var preparing = false
   /// Audio heard while no session was ready (two turns in quick succession), for the next one.
   private var backlog: [AnalyzerInput] = []
+  /// Where the backlog's audio begins (in samples) - or a later point, if the daemon dropped what came before.
+  private var backlogFrom: Int64 = 0
   private var shown = ""
   private var vocabulary: [String] = []
   private var wakeWords: [String] = []
@@ -82,9 +84,10 @@ final class AppleEngine: Engine {
     return session
   }
 
-  /// Make this session the one hearing the user, starting now. Call with the lock held.
+  /// Make this session the one hearing the user: from the audio that waited for it, if any, else from now.
+  /// Call with the lock held.
   private func activate(_ session: Session) {
-    session.from = Double(fed) / 16000
+    session.from = Double(backlog.isEmpty ? fed : min(backlogFrom, fed)) / 16000
     current = session
     shown = ""
     for input in backlog { session.input.yield(input) }
@@ -150,8 +153,13 @@ final class AppleEngine: Engine {
     samples.withUnsafeBufferPointer { buffer.int16ChannelData![0].update(from: $0.baseAddress!, count: samples.count) }
     lock.withLock {
       let input = AnalyzerInput(buffer: buffer, bufferStartTime: CMTime(value: fed, timescale: 16000))
+      if let current {
+        current.input.yield(input)
+      } else {
+        if backlog.isEmpty { backlogFrom = fed } // the next turn may begin here: its session hears it all
+        backlog.append(input)
+      }
       fed += Int64(samples.count)
-      if let current { current.input.yield(input) } else { backlog.append(input) }
     }
   }
 
@@ -192,10 +200,15 @@ final class AppleEngine: Engine {
     // Only the text so far is dropped (murmurs before the turn): the session keeps hearing, so the
     // turn's first word - spoken just before the speech detector noticed - isn't lost.
     lock.withLock {
-      guard let current else { return }
+      let cut = min(fed, atMs.map { Int64($0) * 16 } ?? fed)
+      // No session yet (it's being prepared): the one that takes the backlog hears it from the cut.
+      guard let current else {
+        backlogFrom = max(backlogFrom, cut)
+        return
+      }
       current.pieces = []
       current.guess = ""
-      current.from = max(current.from, Double(min(fed, atMs.map { Int64($0) * 16 } ?? fed)) / 16000)
+      current.from = max(current.from, Double(cut) / 16000)
       shown = ""
     }
   }

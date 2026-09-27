@@ -1,10 +1,11 @@
-import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { News, Reminder, TaskRecord } from '@nova/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Briefing } from '../src/initiative/briefing.ts';
 import { Deliverer, type Moment } from '../src/initiative/deliver.ts';
+import { Initiative } from '../src/initiative/index.ts';
 import { ReminderStore, type AppleReminders } from '../src/initiative/reminders.ts';
 import { Routines } from '../src/initiative/routines.ts';
 import { InitiativeState, projectIn } from '../src/initiative/state.ts';
@@ -39,9 +40,11 @@ describe('reminders', () => {
   });
   afterEach(() => vi.useRealTimers());
 
-  async function store(file: string, apple: AppleReminders | null = null, mode: 'always' | 'when-asked' | 'never' = 'when-asked') {
+  /** A store, loaded - and, unless `alone`, with someone there to hear it. */
+  async function store(file: string, apple: AppleReminders | null = null, mode: 'always' | 'when-asked' | 'never' = 'when-asked', alone = false) {
     const due: { r: Reminder; late: boolean }[] = [];
     const s = await new ReminderStore({ file, due: (r, late) => due.push({ r, late }), apple: () => apple, mode: () => mode, list: () => '' }).load();
+    if (!alone) s.listening();
     return { s, due };
   }
 
@@ -82,7 +85,7 @@ describe('reminders', () => {
     expect(s.recent()).toBeNull();
   });
 
-  it('brings up what came due while Nova was off, marked late - and drops what is long gone', async () => {
+  it('brings up what came due while Nova was off once someone can hear it, marked late - and drops what is long gone', async () => {
     const file = join(await temp(), 'r.json');
     await writeFile(
       file,
@@ -94,9 +97,78 @@ describe('reminders', () => {
         ],
       }),
     );
-    const { s, due } = await store(file);
+    const { s, due } = await store(file, null, 'when-asked', true);
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(due).toEqual([]); // no window yet, no Nova.app: not said to an empty room
+    await s.flushed();
+    expect(JSON.parse(await readFile(file, 'utf8')).reminders.map((r: Reminder) => r.id)).toEqual(['a', 'c']); // and not lost
+    s.listening();
     expect(due.map((d) => [d.r.text, d.late])).toEqual([['an hour ago', true]]);
     expect(s.list().map((r) => r.text)).toEqual(['later']);
+  });
+
+  it('comes on time by the clock, however long the Mac slept', async () => {
+    const { due, s } = await store(join(await temp(), 'r.json'));
+    await s.add({ text: 'leave for the airport', about: 'to', due: NOW + 8 * 3_600_000 });
+    await vi.advanceTimersByTimeAsync(3_600_000); // an hour awake
+    vi.setSystemTime(Date.now() + 7.5 * 3_600_000); // then asleep, 7½ hours: Node's timers stood still
+    await vi.advanceTimersByTimeAsync(61_000); // a minute after it wakes
+    expect(due.map((d) => [d.r.text, d.late])).toEqual([['leave for the airport', true]]);
+  });
+
+  it("never announces what the Reminders app has long overdue, nor one it brought up already - after a restart too", async () => {
+    const { apple, items } = fakeApple();
+    items.set('OLD', { title: 'renew the car tax', due: NOW - 90 * 86_400_000 }); // months overdue in the app
+    items.set('X', { title: 'water the plants', due: NOW + 30 * 60_000 });
+    const file = join(await temp(), 'r.json');
+    const first = await store(file, apple);
+    await first.s.syncApple();
+    await vi.advanceTimersByTimeAsync(31 * 60_000);
+    expect(first.due.map((d) => d.r.text)).toEqual(['water the plants']);
+    await first.s.flushed();
+    first.s.close();
+    const again = await store(file, apple); // Nova starts again; the app still has both, not done
+    await again.s.syncApple();
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(again.due).toEqual([]);
+    items.set('X', { title: 'water the plants', due: NOW + 2 * 3_600_000 }); // moved to later in the app: that time counts
+    await again.s.syncApple();
+    await vi.advanceTimersByTimeAsync(2 * 3_600_000);
+    expect(again.due.map((d) => d.r.text)).toEqual(['water the plants']);
+  });
+
+  it('keeps its own id for one it put in the Reminders app, so taking it back works after a sync or a restart', async () => {
+    const { apple, items } = fakeApple();
+    const file = join(await temp(), 'r.json');
+    const { s } = await store(file, apple);
+    const milk = await s.add({ text: 'buy milk', about: 'to', due: null, apple: true });
+    await s.syncApple();
+    expect(s.list().find((r) => r.text === 'buy milk')?.id).toBe(milk.id);
+    await s.flushed();
+    s.close();
+    const again = await store(file, apple);
+    expect(await again.s.cancel(milk.id)).toBe(true); // no sync yet since the restart: found by the app's id
+    expect(items.has('A1')).toBe(false);
+  });
+
+  it("keeps a reminders file it can't read beside, rather than writing over it", async () => {
+    const dir = await temp();
+    const file = join(dir, 'reminders.json');
+    await writeFile(file, '{ "reminders": [ { "id": "a", "text": "call mum", "due": 17'); // cut short
+    const { s } = await store(file);
+    await s.add({ text: 'water the plants', about: 'to', due: NOW + 3_600_000 });
+    await s.flushed();
+    const kept = (await readdir(dir)).find((n) => /^reminders\.unreadable-\d{8}-\d{6}\.json$/.test(n));
+    expect(await readFile(join(dir, kept!), 'utf8')).toContain('call mum');
+    expect(JSON.parse(await readFile(file, 'utf8')).reminders.map((r: Reminder) => r.text)).toEqual(['water the plants']);
+
+    // Some of it unreadable (edited by hand): what can be read is kept, and the file as it was beside it.
+    const other = join(await temp(), 'reminders.json');
+    await writeFile(other, JSON.stringify({ reminders: [{ id: 'a', text: 'call mum', due: NOW + 60_000, created: 0 }, { id: 'b', text: 'pay rent', due: 'tomorrow' }] }));
+    const partly = await store(other);
+    expect(partly.s.list().map((r) => r.text)).toEqual(['call mum']);
+    const beside = (await readdir(join(other, '..'))).find((n) => n.startsWith('reminders.unreadable-'));
+    expect(await readFile(join(other, '..', beside!), 'utf8')).toContain('pay rent');
   });
 
   it('puts one in the Reminders app when asked, and reads what the app has', async () => {
@@ -313,6 +385,97 @@ describe('routines on a schedule', () => {
     routines.back();
     expect(ran).toHaveLength(2);
     routines.close();
+  });
+
+  it('skip a run the Mac slept through by hours, and make one it only just missed', async () => {
+    const ran: string[] = [];
+    const routines = new Routines({ routines: () => ({ 'start work': { schedule: 'every day at 9', steps: ['open slack'] } }), save: async () => {}, run: (r) => ran.push(r.name), away: () => false });
+    routines.configure();
+    vi.setSystemTime(new Date(2026, 8, 28, 11, 30)); // asleep through Monday 9:00, awake at 11:30
+    await vi.advanceTimersByTimeAsync(61_000);
+    expect(ran).toEqual([]);
+    vi.setSystemTime(new Date(2026, 8, 29, 9, 10)); // asleep again, awake at 9:10 on Tuesday
+    await vi.advanceTimersByTimeAsync(61_000);
+    expect(ran).toEqual(['start work']);
+    routines.close();
+  });
+
+  it('the briefing at its time too', async () => {
+    const briefed: string[] = [];
+    const config = {
+      name: 'Nova',
+      routines: {},
+      initiative: { briefing: 'time', briefingTime: '08:30', awayMinutes: 10, speak: 'free', appleReminders: 'never', remindersList: '', calendar: false, briefingBrain: false, town: '', units: 'celsius' },
+    };
+    const initiative = new Initiative({
+      home: await temp(),
+      config: () => config as never,
+      presence: { connected: false, status: null, send: () => false } as never,
+      broadcast: () => {},
+      services: () => [],
+      hasBrain: () => false,
+      saveRoutine: async () => {},
+      changed: () => {},
+    });
+    initiative.nova = { tell: () => {}, runRoutine: async (r) => void briefed.push(r.name), cancelTask: () => false, retryTask: () => null };
+    initiative.configure();
+    vi.setSystemTime(new Date(2026, 8, 28, 8, 40)); // the Mac woke ten minutes after 8:30
+    await vi.advanceTimersByTimeAsync(61_000);
+    expect(briefed).toEqual(['Morning briefing']);
+    vi.setSystemTime(new Date(2026, 8, 29, 13, 0)); // the next day it slept till one
+    await vi.advanceTimersByTimeAsync(61_000);
+    expect(briefed).toHaveLength(1);
+    initiative.close();
+  });
+});
+
+describe('what came due before anyone could hear', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it('comes up once the first window or Nova.app connects', async () => {
+    const home = await temp();
+    await writeFile(join(home, 'reminders.json'), JSON.stringify({ reminders: [{ id: 'a', text: 'call mum', about: 'to', due: NOW - 20 * 60_000, created: 0 }] }));
+    const cards: string[] = [];
+    const config = { name: 'Nova', routines: {}, initiative: { briefing: 'off', briefingTime: '08:30', awayMinutes: 10, speak: 'free', appleReminders: 'never', remindersList: '', calendar: false, briefingBrain: false, town: '', units: 'celsius' } };
+    const initiative = await new Initiative({
+      home,
+      config: () => config as never,
+      presence: { connected: false, status: null, send: () => false } as never,
+      broadcast: (e) => void (e.type === 'card' && cards.push(e.card.title)),
+      services: () => [],
+      hasBrain: () => false,
+      saveRoutine: async () => {},
+      changed: () => {},
+    }).load();
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(cards).toEqual([]);
+    initiative.onListener();
+    initiative.onListener(); // every connection says so: once is what counts
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(cards).toEqual(['call mum']);
+    initiative.close();
+  });
+});
+
+describe("Nova's own files", () => {
+  it("are kept beside when they can't be read, never written over", async () => {
+    const dir = await temp();
+    await writeFile(join(dir, 'tasks.json'), '{"tasks": [');
+    await writeFile(join(dir, 'state.json'), 'not json at all');
+    const board = await new TaskStore(join(dir, 'tasks.json')).load();
+    board.update({ id: 'a', agent: 'claude', label: 'Claude', project: 'site', task: 'fix it', status: 'done', started: 1 });
+    await board.flushed();
+    const state = await new InitiativeState(join(dir, 'state.json')).load();
+    state.set('site');
+    await state.flushed();
+    const names = await readdir(dir);
+    expect(names.filter((n) => n.includes('.unreadable-')).map((n) => n.split('.')[0]).sort()).toEqual(['state', 'tasks']);
+    expect(JSON.parse(await readFile(join(dir, 'tasks.json'), 'utf8')).tasks).toHaveLength(1);
+    expect(JSON.parse(await readFile(join(dir, 'state.json'), 'utf8')).project.name).toBe('site');
   });
 });
 

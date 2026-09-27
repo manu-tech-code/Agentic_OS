@@ -1,4 +1,4 @@
-import { appendFile, chmod, mkdir, readdir, readFile, rm } from 'node:fs/promises';
+import { appendFile, chmod, mkdir, open, readdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ActionRecord, ActionService, ActivityItem, UndoStep } from '@nova/core';
 
@@ -9,8 +9,11 @@ import type { ActionRecord, ActionService, ActivityItem, UndoStep } from '@nova/
  * searching reads the older days from disk.
  */
 
-/** A line of a day's file: an action as it happened, or a later change to one (it was undone). */
-type Line = Logged | { id: string; undone: number };
+/**
+ * A line of a day's file: an action as it happened, or a later change to one - it was undone
+ * (`undone` 0: it wasn't after all), or only part of it was and `undo` is what's left.
+ */
+type Line = Logged | { id: string; undone: number; undo?: UndoStep };
 
 interface Logged extends ActivityItem {
   undo?: UndoStep;
@@ -47,6 +50,8 @@ const record = (item: Logged): ActionRecord => ({
 export interface UndoResult {
   ok: boolean;
   message: string;
+  /** Only part of it could be undone: what's left, still to undo (the record keeps it undoable). */
+  rest?: UndoStep;
 }
 
 export class ActionLog implements ActionService {
@@ -121,15 +126,24 @@ export class ActionLog implements ActionService {
     if (this.undoing.has(id)) return { ok: false, message: `I'm already undoing "${item.label}".` };
     this.undoing.add(id);
     try {
-      const result = await this.opts.undo(item.undo, record(item));
-      if (result.ok) {
-        item.undone = this.now();
-        this.write(item.at, { id, undone: item.undone });
+      // On disk as undone before it's done: Nova stopping halfway must never let it be undone twice.
+      const at = this.now();
+      if (!(await this.mark(item.at, { id, undone: at }))) return { ok: false, message: `I can't write to the record, so I haven't undone "${item.label}".` };
+      let result: UndoResult;
+      try {
+        result = await this.opts.undo(item.undo, record(item));
+      } catch (e) {
+        result = { ok: false, message: `I couldn't undo "${item.label}": ${(e as Error).message}` };
+      }
+      if (result.ok && !result.rest) {
+        item.undone = at;
         this.opts.changed?.(shown(item));
+      } else {
+        // Not undone after all - or only part of it, and what's left can still be.
+        if (result.ok) item.undo = result.rest;
+        await this.mark(item.at, { id, undone: 0, ...(result.ok ? { undo: result.rest } : {}) });
       }
       return result;
-    } catch (e) {
-      return { ok: false, message: `I couldn't undo "${item.label}": ${(e as Error).message}` };
     } finally {
       this.undoing.delete(id);
     }
@@ -194,8 +208,12 @@ export class ActionLog implements ActionService {
           byId.set(parsed.id, parsed);
           day.push(parsed);
         } else if (typeof (parsed as { undone?: unknown }).undone === 'number') {
-          const item = byId.get(parsed.id);
-          if (item) item.undone = (parsed as { undone: number }).undone;
+          const change = parsed as { id: string; undone: number; undo?: UndoStep };
+          const item = byId.get(change.id);
+          if (!item) continue;
+          if (change.undone) item.undone = change.undone;
+          else delete item.undone;
+          if (change.undo && typeof change.undo === 'object' && typeof change.undo.kind === 'string') item.undo = change.undo;
         }
       }
       out.push(...day.reverse());
@@ -213,5 +231,26 @@ export class ActionLog implements ActionService {
         if (!this.private.has(file)) await chmod(file, 0o600).then(() => this.private.add(file));
       })
       .catch((e) => console.warn(`  [activity] can't write ${file}: ${(e as Error).message}`));
+  }
+
+  /** A line that must be on disk before Nova goes on (after what's being written already): whether it is. */
+  private mark(at: number, line: Line): Promise<boolean> {
+    const file = join(this.opts.dir, `${dayOf(at)}.jsonl`);
+    const data = `${JSON.stringify(line)}\n`;
+    const done = this.writing.then(async () => {
+      const handle = await open(file, 'a', 0o600);
+      try {
+        await handle.appendFile(data);
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      return true;
+    });
+    this.writing = done.catch(() => false);
+    return done.catch((e) => {
+      console.warn(`  [activity] can't write ${file}: ${(e as Error).message}`);
+      return false;
+    });
   }
 }

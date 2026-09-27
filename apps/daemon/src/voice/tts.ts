@@ -29,6 +29,20 @@ let starting: Promise<boolean> | null = null;
 const jobs = new Map<string, Job>();
 let jobCount = 0;
 
+/**
+ * A message for the voice process, if it's still there: false when it isn't. Never throws, and
+ * never leaves an 'error' unhandled - a voice that stopped mustn't take Nova down with it.
+ */
+function post(child: ChildProcess, message: Record<string, unknown>, failed?: (e: Error) => void) {
+  if (!child.connected) return false;
+  try {
+    child.send(message, (e) => e && failed?.(e));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Start the voice process and load Kokoro (a second or so). False when it isn't installed or won't load. */
 export function kokoro(): Promise<boolean> {
   starting ??= (async () => {
@@ -36,6 +50,7 @@ export function kokoro(): Promise<boolean> {
     if (!where) return false;
     const child = fork(new URL('./worker.ts', import.meta.url), [], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
     worker = child;
+    child.on('error', (e) => console.warn(`  [voice] ${e.message}`)); // it couldn't start, or a message couldn't reach it: 'exit' does the rest
     child.stderr?.on('data', (d: Buffer) => {
       const text = String(d).trim();
       if (text) console.warn(`  [voice] ${text.split('\n').at(-1)}`);
@@ -45,7 +60,7 @@ export function kokoro(): Promise<boolean> {
       if (!job) return;
       if (msg.type === 'chunk') {
         if (job.stillWanted && !job.stillWanted()) {
-          child.send({ type: 'stop', id: msg.id });
+          post(child, { type: 'stop', id: msg.id });
           jobs.delete(msg.id);
           return job.resolve();
         }
@@ -73,7 +88,7 @@ export function kokoro(): Promise<boolean> {
       };
       child.on('message', ready);
       child.once('exit', () => resolve(false));
-      child.send({ type: 'load', dir: where.dir, model: KOKORO_MODEL });
+      if (!post(child, { type: 'load', dir: where.dir, model: KOKORO_MODEL }, () => resolve(false))) resolve(false);
     });
   })();
   return starting;
@@ -102,6 +117,7 @@ export async function synthesize(
   const child = worker;
   return new Promise<void>((resolve, reject) => {
     jobs.set(id, { onChunk: opts.onChunk, stillWanted: opts.stillWanted, resolve, reject });
-    child.send({ type: 'speak', id, text, voice: opts.voice, speed: opts.speed, first: opts.first ?? 0, final: opts.final ?? true });
+    const failed = () => jobs.delete(id) && reject(new Error('The voice stopped.'));
+    if (!post(child, { type: 'speak', id, text, voice: opts.voice, speed: opts.speed, first: opts.first ?? 0, final: opts.final ?? true }, failed)) failed();
   });
 }

@@ -4,9 +4,10 @@ import type { Config } from '../config.ts';
 import type { Presence } from '../shell/presence.ts';
 import { ShellRpc } from '../shell/rpc.ts';
 import { Briefing, type CalendarEvent } from './briefing.ts';
+import { atTime, type Waiting } from './clock.ts';
 import { Deliverer, type Moment } from './deliver.ts';
 import { ReminderStore, type AppleReminders } from './reminders.ts';
-import { Routines } from './routines.ts';
+import { LATE_RUN_MS, Routines } from './routines.ts';
 import { InitiativeState, projectIn } from './state.ts';
 import { TaskStore } from './tasks.ts';
 import { Weather } from './weather.ts';
@@ -20,6 +21,8 @@ export interface NovaForInitiative {
 }
 
 const BUSY: Phase[] = ['thinking', 'acting', 'speaking'];
+/** After the first window or Nova.app connects: a moment for Nova.app to say hello, so it speaks what waited. */
+const SETTLE_MS = 2000;
 const localDay = (at: Date) => `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, '0')}-${String(at.getDate()).padStart(2, '0')}`;
 
 /**
@@ -45,7 +48,8 @@ export class Initiative {
   private wasCall = false;
   private briefWhenBack = false;
   private weatherStatus: SettingsSnapshot['initiative']['weather'] = null;
-  private briefTimer: ReturnType<typeof setTimeout> | undefined;
+  private briefTimer: Waiting | undefined;
+  private listenerTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly timers: ReturnType<typeof setInterval>[] = [];
 
   constructor(
@@ -149,12 +153,33 @@ export class Initiative {
   onContext(context: ShellContext) {
     const unlocked = context.unlockedAt && context.unlockedAt !== this.context?.unlockedAt;
     this.context = context;
-    if (unlocked) this.maybeBrief('unlock');
+    if (unlocked) {
+      this.rearm(); // the Mac may just have woken: what came due while it slept, now
+      this.maybeBrief('unlock');
+    }
     this.check();
   }
 
   onAppConnected() {
+    this.onListener();
     void this.syncApple();
+  }
+
+  /**
+   * A window or Nova.app connected: someone can hear Nova. Call it on every connection - only the
+   * first counts. What came due while no one could (while Nova was off) comes up a moment later,
+   * once Nova.app has said hello and can speak it; until then nothing is said to an empty room.
+   */
+  onListener() {
+    if (this.listenerTimer) return;
+    this.listenerTimer = setTimeout(() => this.reminders.listening(), SETTLE_MS);
+  }
+
+  /** The clock again: after the Mac wakes or the time changes, everything timed is timed afresh. */
+  rearm() {
+    this.reminders.rearm();
+    this.routines.configure();
+    this.armBriefing();
   }
 
   onAppGone() {
@@ -203,7 +228,8 @@ export class Initiative {
 
   close() {
     for (const t of this.timers) clearInterval(t);
-    clearTimeout(this.briefTimer);
+    this.briefTimer?.cancel();
+    clearTimeout(this.listenerTimer);
     this.reminders.close();
     this.routines.close();
   }
@@ -323,18 +349,18 @@ export class Initiative {
     void this.nova?.runRoutine({ name: 'Morning briefing', steps: ['brief me'] });
   }
 
+  /** The briefing at its time, by the wall clock - skipped when the Mac slept through it by hours. */
   private armBriefing() {
-    clearTimeout(this.briefTimer);
+    this.briefTimer?.cancel();
+    this.briefTimer = undefined;
     const { briefing, briefingTime } = this.opts.config().initiative;
     if (briefing !== 'time') return;
     const [hour, minute] = briefingTime.split(':').map(Number);
     const due = nextTime({ every: 'day', hour: hour ?? 8, minute: minute ?? 30 }, new Date()).getTime();
-    this.briefTimer = setTimeout(
-      () => {
-        if (Date.now() + 1000 >= due) this.maybeBrief('time');
-        this.armBriefing();
-      },
-      Math.min(due - Date.now(), 6 * 3_600_000),
-    );
+    this.briefTimer = atTime(due, (late) => {
+      if (late <= LATE_RUN_MS) this.maybeBrief('time');
+      else console.log(`  [briefing] ${briefingTime} came ${Math.round(late / 60_000)} minutes ago, while the Mac slept - tomorrow instead`);
+      this.armBriefing();
+    });
   }
 }

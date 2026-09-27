@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -89,6 +89,41 @@ describe('the record of actions', () => {
     expect(third.log.lastUndoable()?.id).toBe(a.id); // only the failed one is left to undo
     expect(third.log.history().find((i) => i.id === b.id)).toMatchObject({ undone: NOW });
     expect(third.log.stats()).toEqual({ days: 30, kept: 2 });
+  });
+
+  it('keeps what is left of an undo that worked in part, undoable - after a restart too', async () => {
+    const dir = await temp();
+    const rest: UndoStep = { kind: 'reminder-cancel', id: 'r2' };
+    const partly = vi.fn(async () => ({ ok: true, message: 'I put back 1 of the 2; …', rest }));
+    const { log: actions, changed } = log(dir, partly);
+    await actions.load();
+    const a = actions.add(item('Set two reminders'), { kind: 'batch', steps: [{ kind: 'reminder-cancel', id: 'r1' }, rest] });
+    expect((await actions.undo(a.id)).ok).toBe(true);
+    expect(changed).not.toHaveBeenCalled();
+    expect(actions.lastUndoable()?.id).toBe(a.id); // not undone: the rest still can be
+    await actions.flushed();
+
+    const again = log(dir);
+    await again.log.load();
+    expect(again.log.lastUndoable()?.id).toBe(a.id);
+    await again.log.undo(a.id);
+    expect(again.undo).toHaveBeenCalledWith(rest, expect.objectContaining({ id: a.id })); // only what was left
+    expect(again.log.lastUndoable()).toBeNull();
+  });
+
+  it('is on disk as undone before it is undone, so stopping halfway never lets it be undone twice', async () => {
+    const dir = await temp();
+    let during: ActionLog | null = null;
+    const undo = vi.fn(async () => {
+      // Nova stops here, mid-undo: what the record says on disk.
+      during = await new ActionLog({ dir, keepDays: () => 30, undo: async () => ({ ok: true, message: '' }) }).load();
+      return { ok: true, message: 'Okay.' };
+    });
+    const { log: actions } = log(dir, undo);
+    await actions.load();
+    const a = actions.add(item('Quit Spotify'), { kind: 'app-open', app: 'Spotify' });
+    await actions.undo(a.id);
+    expect(during!.lastUndoable()).toBeNull();
   });
 
   it('keeps as many days as Settings says, and searches all of them', async () => {
@@ -196,10 +231,16 @@ describe('undoing', () => {
     expect((await d.undoer.run(past, action)).ok).toBe(false);
   });
 
-  it('says how much of a batch came back', async () => {
+  it('says how much of a batch came back, and keeps what is left to undo', async () => {
     const d = deps();
-    const batch: UndoStep = { kind: 'batch', steps: [{ kind: 'reminder-cancel', id: 'r1' }, { kind: 'reminder-cancel', id: 'nope' }] };
-    expect(await d.undoer.run(batch, action)).toEqual({ ok: true, message: "I put back 1 of the 2; that reminder isn't there any more - it may have gone off already." });
+    const batch: UndoStep = { kind: 'batch', steps: [{ kind: 'reminder-cancel', id: 'r1' }, { kind: 'reminder-cancel', id: 'nope' }, { kind: 'app-quit', app: 'Slack' }] };
+    expect(await d.undoer.run(batch, action)).toEqual({
+      ok: true,
+      message: "I put back 2 of the 3; that reminder isn't there any more - it may have gone off already.",
+      rest: { kind: 'reminder-cancel', id: 'nope' },
+    });
+    const none: UndoStep = { kind: 'batch', steps: [{ kind: 'reminder-cancel', id: 'nope' }] };
+    expect(await d.undoer.run(none, action)).toEqual({ ok: false, message: "That reminder isn't there any more - it may have gone off already." });
   });
 });
 
@@ -230,30 +271,144 @@ describe('snapshots of agents’ projects', () => {
     await rm(home, { recursive: true, force: true });
   });
 
-  it("puts back exactly the agent's files, and never the user's staging", async () => {
+  it("puts back exactly the files the agent edited, and never the user's staging", async () => {
     const s = await snapshots().load();
     const staged = await git(repo, 'diff', '--cached', '--name-only');
     await s.before(task);
-    // The agent edits, adds, deletes.
+    // The agent edits and adds (its Edit/Write steps say so - absolute, or from its folder), and deletes with a command.
     await writeFile(join(repo, 'style.css'), 'h1 { color: blue; }\n');
     await writeFile(join(repo, 'new.js'), 'console.log(1)\n');
+    s.edited(task.id, [join(repo, 'style.css'), 'new.js']);
     await rm(join(repo, 'notes.md'));
     await writeFile(join(repo, 'secret.txt'), 'ignored, never snapshotted\n');
     const step = await s.after(task);
     expect(step).toMatchObject({ kind: 'agent-files', project: 'site', agent: 'Claude' });
-    expect(step!.files.sort()).toEqual(['new.js', 'notes.md', 'style.css']);
+    expect(step!.files.sort()).toEqual(['new.js', 'style.css']);
     expect(await git(repo, 'for-each-ref', '--format=%(refname)', 'refs/nova/snapshots/')).toContain('refs/nova/snapshots/t1');
 
     const result = await s.restore(step!);
     expect(result).toMatchObject({ ok: true });
-    expect(result.message).toContain('the 3 files Claude changed in site are back as they were');
+    expect(result.message).toContain('the 2 files Claude changed in site are back as they were');
+    expect(result.message).toContain('notes.md changed while Claude worked, but not by its own edits - I left it, it may be yours.');
     expect(await readFile(join(repo, 'style.css'), 'utf8')).toBe('h1 { color: red; }\n');
-    expect(await readFile(join(repo, 'notes.md'), 'utf8')).toBe('todo\n');
     await expect(stat(join(repo, 'new.js'))).rejects.toThrow();
+    await expect(stat(join(repo, 'notes.md'))).rejects.toThrow(); // not one of its own edits: left as it is
     expect(await readFile(join(repo, 'secret.txt'), 'utf8')).toContain('ignored'); // not the agent's to take back
     expect(await readFile(join(repo, 'index.html'), 'utf8')).toBe('<h1>Hello</h1>\n');
     expect(await git(repo, 'diff', '--cached', '--name-only')).toBe(staged);
     expect(await git(repo, 'log', '--oneline')).toMatch(/^\w+ first\n$/); // no commits of Nova's on the branch
+  });
+
+  it("leaves what the user edited while the agent worked, and says so", async () => {
+    const s = await snapshots().load();
+    await s.before(task);
+    await writeFile(join(repo, 'style.css'), 'h1 { color: blue; }\n');
+    s.edited(task.id, [join(repo, 'style.css')]);
+    // Meanwhile the user goes on with their own work.
+    await writeFile(join(repo, 'index.html'), '<h1>Hello, world</h1>\n');
+    await writeFile(join(repo, 'todo.md'), 'ship it\n');
+    const step = (await s.after(task))!;
+    expect(step.files).toEqual(['style.css']);
+    const result = await s.restore(step);
+    expect(result.ok).toBe(true);
+    expect(result.message).toBe(
+      'Okay - style.css is back as it was. index.html and todo.md changed while Claude worked, but not by its own edits - I left them, they may be yours.',
+    );
+    expect(await readFile(join(repo, 'style.css'), 'utf8')).toBe('h1 { color: red; }\n');
+    expect(await readFile(join(repo, 'index.html'), 'utf8')).toBe('<h1>Hello, world</h1>\n');
+    expect(await readFile(join(repo, 'todo.md'), 'utf8')).toBe('ship it\n');
+  });
+
+  it('looks only at the project’s own folder in a monorepo', async () => {
+    await mkdir(join(repo, 'app'));
+    await mkdir(join(repo, 'other'));
+    await writeFile(join(repo, 'app', 'a.ts'), 'a\n');
+    await writeFile(join(repo, 'other', 'b.ts'), 'b\n');
+    await git(repo, 'add', 'app', 'other');
+    await git(repo, 'commit', '-q', '-m', 'packages');
+    const s = new Snapshots({ file: join(home, 'snapshots.json'), enabled: () => true, projectPath: () => join(repo, 'app'), keepDays: () => 30 });
+    const app = { ...task, project: 'app' };
+    await s.before(app);
+    await writeFile(join(repo, 'app', 'a.ts'), 'agent\n');
+    await writeFile(join(repo, 'style.css'), 'h1 { color: blue; }\n'); // outside its folder: never taken back
+    s.edited(app.id, ['a.ts', '../style.css']);
+    await writeFile(join(repo, 'other', 'b.ts'), 'the user, in another package\n');
+    const step = (await s.after(app))!;
+    expect(step.files).toEqual(['app/a.ts']);
+    const result = await s.restore(step);
+    expect(result).toEqual({ ok: true, message: 'Okay - a.ts is back as it was.' });
+    expect(await readFile(join(repo, 'app', 'a.ts'), 'utf8')).toBe('a\n');
+    expect(await readFile(join(repo, 'other', 'b.ts'), 'utf8')).toBe('the user, in another package\n');
+    expect(await readFile(join(repo, 'style.css'), 'utf8')).toBe('h1 { color: blue; }\n');
+  });
+
+  it('never deletes a file that was there before the task, ignored or not', async () => {
+    await writeFile(join(repo, '.gitignore'), 'secret.txt\n.env\n');
+    await git(repo, 'commit', '-q', '-am', 'ignore .env');
+    await writeFile(join(repo, '.env'), 'TOKEN=mine\n');
+    const s = await snapshots().load();
+    await s.before(task);
+    // The agent rewrites .gitignore: .env isn't ignored any more, so it's new to the snapshot after.
+    await writeFile(join(repo, '.gitignore'), 'secret.txt\n');
+    s.edited(task.id, ['.gitignore']);
+    const step = (await s.after(task))!;
+    expect(step.files).toEqual(['.gitignore']);
+    const result = await s.restore(step);
+    expect(result.message).toBe('Okay - .gitignore is back as it was. .env changed while Claude worked, but not by its own edits - I left it, it may be yours.');
+    expect(await readFile(join(repo, '.env'), 'utf8')).toBe('TOKEN=mine\n');
+    expect(await readFile(join(repo, '.gitignore'), 'utf8')).toBe('secret.txt\n.env\n');
+
+    // Even one it wrote to itself stays: it isn't the agent's to delete.
+    await s.before({ ...task, id: 't2' });
+    await writeFile(join(repo, '.gitignore'), 'secret.txt\n');
+    await writeFile(join(repo, '.env'), 'TOKEN=the agent\n');
+    s.edited('t2', ['.gitignore', '.env']);
+    const second = (await s.after({ ...task, id: 't2' }))!;
+    expect(second.files.sort()).toEqual(['.env', '.gitignore']);
+    const again = await s.restore(second);
+    expect(again).toMatchObject({ ok: true, message: 'Okay - .gitignore is back as it was. .env was there before the task, so I left it.' });
+    await expect(stat(join(repo, '.env'))).resolves.toBeTruthy();
+  });
+
+  it('puts back text that is not UTF-8 byte for byte', async () => {
+    const latin1 = Buffer.from('caf\xe9 cr\xe8me\n', 'latin1');
+    await writeFile(join(repo, 'menu.txt'), latin1);
+    await git(repo, 'add', 'menu.txt');
+    await git(repo, 'commit', '-q', '-m', 'menu');
+    const s = await snapshots().load();
+    await s.before(task);
+    await writeFile(join(repo, 'menu.txt'), Buffer.from('th\xe9\n', 'latin1'));
+    s.edited(task.id, ['menu.txt']);
+    const result = await s.restore((await s.after(task))!);
+    expect(result.ok).toBe(true);
+    expect((await readFile(join(repo, 'menu.txt'))).equals(latin1)).toBe(true);
+  });
+
+  it('keeps big untracked binaries out of snapshots', async () => {
+    const big = Buffer.alloc(2 * 1024 * 1024, 1);
+    big[10] = 0;
+    await writeFile(join(repo, 'video.bin'), big);
+    await writeFile(join(repo, 'draft.md'), 'small and new\n');
+    const s = await snapshots().load();
+    await s.before(task);
+    const tree = await git(repo, 'ls-tree', '-r', '--name-only', 'refs/nova/snapshots/t1');
+    expect(tree).toContain('draft.md');
+    expect(tree).not.toContain('video.bin');
+    expect(await git(repo, 'cat-file', 'commit', 'refs/nova/snapshots/t1')).toContain('"video.bin"'); // listed as there, so never deleted
+  });
+
+  it("says so when none of what changed was the agent's own editing - and changes nothing", async () => {
+    const s = await snapshots().load();
+    await s.before(task);
+    await writeFile(join(repo, 'style.css'), 'h1 { color: blue; }\n'); // a command it ran, or the user
+    const step = (await s.after(task))!;
+    expect(step).toMatchObject({ kind: 'agent-files', files: [] });
+    const result = await s.restore(step);
+    expect(result).toEqual({
+      ok: false,
+      message: "None of what changed in site was Claude's own editing, so I haven't put anything back: style.css changed while it worked - it may be yours. You can still do it by hand with git.",
+    });
+    expect(await readFile(join(repo, 'style.css'), 'utf8')).toBe('h1 { color: blue; }\n');
   });
 
   it("refuses rather than overwrite what the user changed since - and changes nothing", async () => {
@@ -261,6 +416,7 @@ describe('snapshots of agents’ projects', () => {
     await s.before(task);
     await writeFile(join(repo, 'style.css'), 'h1 { color: blue; }\n');
     await writeFile(join(repo, 'new.js'), 'console.log(1)\n');
+    s.edited(task.id, ['style.css', 'new.js']);
     const step = (await s.after(task))!;
     await writeFile(join(repo, 'style.css'), 'h1 { color: green; }\n'); // the user's own edit
     const result = await s.restore(step);
@@ -274,6 +430,7 @@ describe('snapshots of agents’ projects', () => {
     const s = await snapshots().load();
     await s.before(task);
     await writeFile(join(repo, 'style.css'), 'h1 { color: blue; }\n');
+    s.edited(task.id, ['style.css']);
     await git(repo, 'commit', '-q', '-am', "the agent's commit");
     const step = (await s.after(task))!;
     const result = await s.restore(step);
@@ -282,7 +439,7 @@ describe('snapshots of agents’ projects', () => {
     expect(await readFile(join(repo, 'style.css'), 'utf8')).toBe('h1 { color: red; }\n');
   });
 
-  it('offers nothing when the agent changed nothing, or the project is not a git repository, or snapshots are off', async () => {
+  it('offers nothing when nothing changed, or the project is not a git repository, or snapshots are off', async () => {
     const s = await snapshots().load();
     await s.before(task);
     expect(await s.after(task)).toBeNull();
@@ -300,7 +457,8 @@ describe('snapshots of agents’ projects', () => {
     await s.before(task);
     await s.before({ ...task, id: 't2', label: 'Codex' });
     await writeFile(join(repo, 'style.css'), 'h1 { color: blue; }\n');
-    expect(await s.after(task)).toMatchObject({ shared: true });
+    s.edited(task.id, ['style.css']);
+    expect(await s.after(task)).toMatchObject({ shared: true, files: ['style.css'] });
   });
 });
 

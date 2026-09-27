@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { platform, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -72,6 +72,56 @@ describe('the memory store', () => {
     expect((await store(dir)).list().map((m) => m.text)).toEqual(['my car is blue']);
     await writeFile(join(dir, 'memory.json'), '{ not json');
     expect((await store(dir)).list()).toEqual([]);
+  });
+
+  it('says what a memory said before when saying it again rewords it, so undoing puts those words back', async () => {
+    const memory = await store(await temp());
+    const first = memory.remember('my standup is at 10', 'said');
+    expect(first.replaced).toBeUndefined();
+    const again = memory.remember('My standup is at 10', 'said');
+    expect(again).toEqual({ id: first.id, text: 'My standup is at 10', replaced: 'my standup is at 10' });
+    expect(memory.edit(again.id, again.replaced!)).toBe(true); // what undo does with it
+    expect(memory.list().map((m) => m.text)).toEqual(['my standup is at 10']);
+  });
+
+  it("keeps a file it can't read beside, and never writes over it", async () => {
+    const dir = await temp();
+    const file = join(dir, 'memory.json');
+    await writeFile(file, '{ "memories": [ { "id": "a", "text": "my car is bl');
+    const memory = await store(dir);
+    memory.remember('my standup is at 10', 'said');
+    await memory.flushed();
+    const kept = (await readdir(dir)).find((n) => /^memory\.unreadable-\d{8}-\d{6}\.json$/.test(n));
+    expect(await readFile(join(dir, kept!), 'utf8')).toContain('my car is bl');
+    expect(JSON.parse(await readFile(file, 'utf8')).memories.map((m: { text: string }) => m.text)).toEqual(['my standup is at 10']);
+
+    // One it can't even read, nor move: left alone, nothing saved over it.
+    const locked = await temp();
+    await writeFile(join(locked, 'memory.json'), '[]');
+    await chmod(join(locked, 'memory.json'), 0o000);
+    const blind = await store(locked);
+    blind.remember('my car is blue', 'said');
+    await blind.flushed();
+    await chmod(join(locked, 'memory.json'), 0o600);
+    expect(await readFile(join(locked, 'memory.json'), 'utf8')).toBe('[]');
+  });
+
+  it('keeps what was edited by hand while Nova ran, with its own changes on top', async () => {
+    const dir = await temp();
+    const file = join(dir, 'memory.json');
+    const memory = await store(dir);
+    const standup = memory.remember('my standup is at 10', 'said');
+    const car = memory.remember('my car is blue', 'said');
+    await memory.flushed();
+    // By hand: one reworded, one deleted, one added.
+    const byHand = JSON.parse(await readFile(file, 'utf8')) as { memories: { id: string; text: string }[] };
+    byHand.memories = [{ ...byHand.memories.find((m) => m.id === standup.id)!, text: 'my standup is at 9:30' }, { id: 'hand', text: 'my gym days are monday and thursday', created: 1, source: 'said' } as never];
+    await new Promise((r) => setTimeout(r, 20)); // a different modification time
+    await writeFile(file, JSON.stringify(byHand));
+    memory.remember('i like my coffee black', 'said');
+    await memory.flushed();
+    expect(JSON.parse(await readFile(file, 'utf8')).memories.map((m: { text: string }) => m.text)).toEqual(['my standup is at 9:30', 'my gym days are monday and thursday', 'i like my coffee black']);
+    expect(memory.list().some((m) => m.id === car.id)).toBe(false);
   });
 });
 
