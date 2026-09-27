@@ -227,6 +227,34 @@ describe.skipIf(!built)('hearing with the helper', () => {
     expect(utterances).toHaveLength(1);
     expect(utterances[0]!.toLowerCase()).toMatch(/nova.*i want to.*set a timer for (5|five) minutes/);
   }, 60_000);
+
+  it.skipIf(!parakeet)('still hears with Parakeet after its helper starts again', async () => {
+    const utterances: string[] = [];
+    const hearing = new Hearing({ status: () => {}, transcript: () => {}, utterance: (t) => utterances.push(t), bargeIn: () => {} });
+    const ready = async () => {
+      for (let i = 0; i < 600 && !hearing.listening; i++) await new Promise((r) => setTimeout(r, 50));
+      expect(hearing.listening).toBe(true);
+    };
+    const say = async (samples: Int16Array) => {
+      const audio = new Int16Array([...new Int16Array(8000), ...samples, ...new Int16Array(16_000 * 2)]);
+      for (let i = 0; i < audio.length; i += 320) {
+        const chunk = audio.subarray(i, i + 320);
+        hearing.audio(Buffer.from(chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength)));
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      const heard = utterances.length;
+      for (let i = 0; i < 100 && utterances.length === heard; i++) await new Promise((r) => setTimeout(r, 50));
+    };
+    hearing.configure({ engine: 'parakeet', language: 'en-US', patience: 'quick', smartTurn: false, bargeIn: true }, ['Nova'], ['nova']);
+    await ready();
+    await say(speech('Nova, open Figma please.'));
+    hearing.retry(); // a new helper process, counting its audio from zero
+    await new Promise((r) => setTimeout(r, 100));
+    await ready();
+    await say(speech('Nova, set a timer for ten minutes.'));
+    hearing.close();
+    expect(utterances.map((u) => u.toLowerCase())).toEqual([expect.stringMatching(/open figma/), expect.stringMatching(/set a timer for (10|ten) minutes/)]);
+  }, 120_000);
 });
 
 describe.skipIf(!smartTurn || !onMac)('Smart Turn', () => {

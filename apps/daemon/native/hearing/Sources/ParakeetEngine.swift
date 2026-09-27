@@ -79,7 +79,9 @@ final class ParakeetEngine: Engine {
     lock.withLock {
       speaking = active
       if active && turnFrom == nil {
-        turnFrom = max(bufferStart, Int64(atMs) * 16 - Self.preRoll)
+        // Positions count from this helper's start; one past what it has heard (never sent by a
+        // daemon that counts right) still starts the turn at the audio that's here.
+        turnFrom = min(max(bufferStart, Int64(atMs) * 16 - Self.preRoll), max(bufferStart, fed - Self.preRoll))
         draftedAt = fed
       }
     }
