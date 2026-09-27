@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
@@ -63,6 +64,22 @@ describe("Nova's tools, for any agent", () => {
     ]);
     server.close();
     child.kill();
+  });
+
+  it('keep answering after a request is cut off halfway', async () => {
+    const bridge = await startBridge({ specs: () => [], call: async () => 'ok' });
+    const server = bridge.tools('Codex');
+    const url = new URL(server.env.NOVA_BRIDGE_URL!);
+    await new Promise<void>((resolve) => {
+      const socket = connect(Number(url.port), '127.0.0.1', () => {
+        socket.write('POST /call HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: 1000\r\n\r\n{"token":');
+        setTimeout(() => (socket.destroy(), resolve()), 50);
+      });
+    });
+    await new Promise((r) => setTimeout(r, 100));
+    const res = await fetch(`${url.origin}/tools`, { method: 'POST', body: JSON.stringify({ token: server.env.NOVA_TOOLS_TOKEN }) });
+    expect(await res.json()).toEqual({ tools: [] });
+    server.close();
   });
 
   it('are attached the way each CLI takes them', () => {

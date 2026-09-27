@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
-import { createServer, type IncomingMessage } from 'node:http';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { homedir, platform as osPlatform } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
@@ -30,6 +30,7 @@ import { IntegrationHub } from './integrations/hub.ts';
 import { Journal, MemoryStore } from './memory/store.ts';
 import { describeContext, Eyes } from './screen/eyes.ts';
 import { connectionToken, refusal, tokenFile, windowOrigins } from './shell/access.ts';
+import { readClientEvent } from './shell/events.ts';
 import { Presence } from './shell/presence.ts';
 import { serveUi, UI_DIR } from './shell/static.ts';
 import { DEFAULT_REFLEX_MODEL, downloadModel, isInstalled, KOKORO_MODEL, MODELS, PARAKEET_MODEL, SMART_TURN_MODEL, whereInstalled } from './models/files.ts';
@@ -37,6 +38,20 @@ import { forgetLearned, loadReflex, reflexEmbedder, type ReflexRuntime } from '.
 import { buildSnapshot, validateChanges } from './snapshot.ts';
 import { Trust } from './trust/index.ts';
 import { kokoro, sentences, stopVoice, synthesize } from './voice/tts.ts';
+
+// Something that failed where nothing waited for it is logged, and Nova carries on. An exception
+// nothing caught is survived when it's only a connection or a program that failed (a system call);
+// anything else leaves the daemon in a state nobody knows, so it stops cleanly (Nova.app starts it again).
+/** Stops the daemon cleanly: set once everything it has to stop exists. */
+let shutdown: (code: number) => void = (code) => process.exit(code);
+const why = (e: unknown) => (e instanceof Error ? (e.stack ?? e.message) : String(e));
+process.on('unhandledRejection', (reason) => console.error(`  [daemon] something failed unnoticed: ${why(reason)}`));
+process.on('uncaughtException', (error) => {
+  const { syscall, code } = error as NodeJS.ErrnoException;
+  if (syscall || code?.startsWith('ERR_STREAM_')) return console.error(`  [daemon] ${why(error)}`);
+  console.error(`  [daemon] stopping after an unexpected error: ${why(error)}`);
+  shutdown(1);
+});
 
 loadDotEnv(); // constants and secrets
 const migrated = await migrateSettings(process.env);
@@ -116,7 +131,7 @@ async function buildRuntime(): Promise<Runtime> {
   const voiceAt = await whereInstalled(KOKORO_MODEL);
   const voiceInstalled = voiceAt !== null;
   const [parakeetInstalled, smartTurnInstalled] = await Promise.all([isInstalled(PARAKEET_MODEL), isInstalled(SMART_TURN_MODEL)]);
-  if (voiceInstalled) void kokoro(); // warm it up before the first reply
+  if (voiceInstalled) kokoro().catch((e) => console.warn(`  [voice] Kokoro didn't load: ${(e as Error).message}`)); // warm it up before the first reply
   const engine = createDecisionEngine({
     engine: config.engine,
     fallback: config.fallback,
@@ -255,7 +270,8 @@ integrations.configure(runtime.config.integrations);
 const home = dirname(settingsFile());
 const memory = await new MemoryStore(join(home, 'memory.json'), () => reflexEmbedder(), new Journal(join(home, 'conversations'), () => runtime.config.memory.keepDays)).load();
 memory.suggestions = runtime.config.memory.suggest;
-void memory.journal.prune();
+const pruneJournal = () => memory.journal.prune().catch((e) => console.warn(`  [memory] couldn't tidy the conversation history: ${(e as Error).message}`));
+void pruneJournal();
 
 // Nova Eyes: what the user is working in, with each question, and the screen when they ask.
 const eyes =
@@ -285,7 +301,13 @@ const trust = await new Trust({
   home,
   config: () => runtime.config,
   broadcast,
-  save: (changes) => saveSettings(changes),
+  // Nobody waits for these ("yes, always" is saved while Nova carries on): a save that fails - the
+  // settings file doesn't read as JSON, say - is logged and shown, and the rule holds until Nova restarts.
+  save: (changes) =>
+    saveSettings(changes).catch((e) => {
+      console.warn(`  [trust] couldn't save to ${settingsFile()}: ${(e as Error).message}`);
+      broadcast({ type: 'error', message: `Couldn't save that to Settings: ${(e as Error).message}` });
+    }),
   projectPath: (name) => runtime.host?.projectPath(name),
 }).load();
 const platform = createPlatform();
@@ -339,7 +361,7 @@ hearing = new Hearing({
     broadcastSnapshot();
   },
   transcript: (text, final) => broadcast({ type: 'transcript', text, final }),
-  utterance: (text, explicit) => void nova.handle(text, explicit ? 'shortcut' : 'voice'),
+  utterance: (text, explicit) => void nova.handle(text, explicit ? 'shortcut' : 'voice').catch((e) => console.warn(`  [nova] ${why(e)}`)),
   bargeIn() {
     broadcast({ type: 'barge-in' }); // windows stop the audio
     speaking = null; // and the rest of the reply isn't synthesized
@@ -393,7 +415,10 @@ const snapshot = async () =>
 let snapshots = 0;
 function broadcastSnapshot() {
   const n = ++snapshots; // probing servers takes a moment; only the newest snapshot goes out
-  void snapshot().then((s) => n === snapshots && broadcast({ type: 'settings', snapshot: s }));
+  snapshot().then(
+    (s) => n === snapshots && broadcast({ type: 'settings', snapshot: s }),
+    (e) => console.warn(`  [settings] couldn't put Settings together: ${why(e)}`),
+  );
 }
 // Reminders due while Nova was off come up now; routines and the briefing get their times.
 snapshotsReady = true;
@@ -411,7 +436,11 @@ integrationsChanged = () => {
 };
 
 /** Reflex's classifier trains in the background: tell the Settings window when it's ready. */
-const whenTrained = (r: Runtime) => void r.reflex.classifier.then((trained) => trained && runtime === r && broadcastSnapshot());
+const whenTrained = (r: Runtime) =>
+  void r.reflex.classifier.then(
+    (trained) => trained && runtime === r && broadcastSnapshot(),
+    (e) => console.warn(`  [reflex] its classifier didn't train: ${why(e)}`),
+  );
 whenTrained(runtime);
 
 /** Switch to a new runtime live, and tell every window. */
@@ -424,7 +453,7 @@ function apply(next: Runtime) {
   hearing!.configure(next.config.hearing, vocabulary(), next.config.wakeWords);
   integrations.configure(next.config.integrations);
   memory.suggestions = next.config.memory.suggest;
-  if (next.config.memory.keepDays !== keptDays) void memory.journal.prune().then(broadcastSnapshot);
+  if (next.config.memory.keepDays !== keptDays) void pruneJournal().then(broadcastSnapshot);
   presence.configure(next.config.presence);
   initiative!.configure();
   trust.configure();
@@ -518,17 +547,29 @@ const page = (title: string, message: string) =>
 const escape = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
 // The daemon's own address: WebSocket for windows, and the page the browser returns to after signing in.
-const http = createServer(async (req, res) => {
-  const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+async function respond(req: IncomingMessage, res: ServerResponse) {
+  let url: URL;
+  try {
+    url = new URL(req.url ?? '/', 'http://127.0.0.1');
+  } catch {
+    return void res.writeHead(400).end(); // not an address at all, e.g. "//%"
+  }
   if (req.method === 'GET' && url.pathname === '/oauth/callback') {
     const done = await integrations
       .completeSignIn(url.searchParams.get('state') ?? '', url.searchParams.get('code'), url.searchParams.get('error'))
       .catch((e: Error) => ({ ok: false, message: e.message }));
     res.writeHead(done.ok ? 200 : 400, { 'content-type': 'text/html; charset=utf-8' });
-    return res.end(page(done.ok ? 'Connected' : "Couldn't connect", escape(done.message)));
+    return void res.end(page(done.ok ? 'Connected' : "Couldn't connect", escape(done.message)));
   }
   if (await serveUi(req, res, port, UI_DIR, wsToken)) return;
   res.writeHead(404).end();
+}
+const http = createServer((req, res) => {
+  respond(req, res).catch((e) => {
+    console.warn(`  [http] ${why(e)}`);
+    if (!res.headersSent) res.writeHead(500);
+    res.end();
+  });
 });
 const wss = new WebSocketServer({
   server: http,
@@ -538,6 +579,12 @@ const wss = new WebSocketServer({
     else done(true);
   },
 });
+// Another daemon has the port (or it can't be had): a daemon nobody can reach is no use.
+http.on('error', (e: NodeJS.ErrnoException) => {
+  console.error(e.code === 'EADDRINUSE' ? `  [daemon] port ${port} is in use - is Nova already running?` : `  [daemon] ${why(e)}`);
+  shutdown(1);
+});
+wss.on('error', () => {}); // the same error, passed on by the WebSocket server: handled just above
 http.listen(port, '127.0.0.1');
 
 wss.on('connection', (ws, req) => {
@@ -556,18 +603,11 @@ wss.on('connection', (ws, req) => {
     if (micOwner === ws) (micOwner = null), hearing!.pause();
     presence.detach(ws);
   });
-  ws.on('message', async (raw, isBinary) => {
-    // Microphone audio from the window that hears for Nova.
-    if (isBinary) {
-      if (ws === micOwner) hearing!.audio(raw as Buffer);
-      return;
-    }
-    let event: ClientEvent;
-    try {
-      event = JSON.parse(String(raw));
-    } catch {
-      return;
-    }
+  // A broken connection (a bad frame, a reset) ends only that connection.
+  ws.on('error', (e) => console.warn(`  [ws] ${e.message}`));
+
+  /** One event from this client, already checked to be one Nova understands. */
+  const onEvent = async (event: ClientEvent) => {
     if (event.type === 'utterance') await nova.handle(event.text, event.source);
     else if (event.type === 'audio-start') {
       // The latest window to start its microphone hears for Nova - unless the Mac app does.
@@ -598,7 +638,7 @@ wss.on('connection', (ws, req) => {
     } else if (event.type === 'shell-context') {
       if (presence.isApp(ws)) initiative!.onContext(event.context);
     } else if (event.type === 'notification-action') {
-      if (presence.isApp(ws)) void initiative!.onNotification(event.ref, event.action);
+      if (presence.isApp(ws)) await initiative!.onNotification(event.ref, event.action);
     } else if (event.type === 'task-cancel' || event.type === 'task-retry' || event.type === 'reminder-cancel') {
       if (event.type === 'task-cancel') initiative!.cancelTask(event.id);
       else if (event.type === 'task-retry') {
@@ -713,23 +753,39 @@ wss.on('connection', (ws, req) => {
         send(ws, { type: 'settings-result', ok: false, message: (error as Error).message });
       }
     }
+  };
+
+  ws.on('message', (raw, isBinary) => {
+    // Microphone audio from the window that hears for Nova.
+    if (isBinary) {
+      if (ws === micOwner) hearing!.audio(raw as Buffer);
+      return;
+    }
+    const event = readClientEvent(String(raw));
+    if (!event) return console.warn("  [ws] ignored a message that isn't one Nova understands");
+    onEvent(event).catch((e) => {
+      console.warn(`  [ws] ${event.type}: ${why(e)}`);
+      send(ws, { type: 'error', message: `That didn't work: ${(e as Error).message}` });
+    });
   });
 });
 
-// Ctrl+C, or tsx watch restarting after an edit: stop the voice process and the agents kept running.
-for (const signal of ['SIGINT', 'SIGTERM'] as const) {
-  process.once(signal, () => {
-    stopVoice();
-    hearing?.close();
-    integrations.close();
-    eyes?.close();
-    runtime.host?.close();
-    // What was just said to remember gets to disk first (a moment at most).
-    initiative?.close();
-    trust.close();
-    void Promise.race([Promise.all([memory.flushed(), initiative?.flushed(), trust.flushed()]), new Promise((r) => setTimeout(r, 1000))]).finally(() => process.exit(0));
-  });
-}
+// Ctrl+C, tsx watch restarting after an edit, or an error nothing could handle: stop the voice
+// process and the agents kept running, and let what was just said to remember get to disk first.
+let stopping = false;
+shutdown = (code) => {
+  if (stopping) return;
+  stopping = true;
+  for (const stop of [stopVoice, () => hearing?.close(), () => integrations.close(), () => eyes?.close(), () => runtime.host?.close(), () => initiative?.close(), () => trust.close()]) {
+    try {
+      stop();
+    } catch (e) {
+      console.warn(`  [daemon] while stopping: ${why(e)}`);
+    }
+  }
+  void Promise.race([Promise.all([memory.flushed(), initiative?.flushed(), trust.flushed()]), new Promise((r) => setTimeout(r, 1000))]).finally(() => process.exit(code));
+};
+for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, () => shutdown(0));
 
 function banner() {
   const { config, options } = runtime;

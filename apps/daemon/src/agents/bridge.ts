@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { createServer, type IncomingMessage } from 'node:http';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { outputText, type ToolHost } from '@nova/core';
@@ -32,8 +32,9 @@ export type Approvals = Bridge;
 export async function startBridge(tools: ToolHost) {
   const approvers = new Map<string, (prompt: PermissionPrompt) => Promise<boolean>>();
   const callers = new Map<string, string>(); // token -> who is calling, e.g. "Claude"
-  const server = createServer(async (req, res) => {
+  const handle = async (req: IncomingMessage, res: ServerResponse) => {
     const body = req.method === 'POST' ? await readJson(req) : null;
+    if (res.destroyed) return; // the agent went away mid-request
     const reply = (value: unknown) => {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify(value));
@@ -50,6 +51,12 @@ export async function startBridge(tools: ToolHost) {
       return reply({ text: outputText(output), image: typeof output === 'object' ? output.image : undefined });
     }
     res.writeHead(403).end();
+  };
+  const server = createServer((req, res) => {
+    handle(req, res).catch((e) => {
+      console.warn(`  [bridge] ${(e as Error).message}`);
+      if (!res.headersSent && !res.destroyed) res.writeHead(500).end();
+    });
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   server.unref();
@@ -77,13 +84,14 @@ export async function startBridge(tools: ToolHost) {
 export const claudeMcpConfig = (server: McpServer) =>
   JSON.stringify({ mcpServers: { [server.name]: { command: server.command, args: server.args, env: server.env } } });
 
+/** A request's JSON body; null when it isn't JSON, is too big, or the request was cut off. */
 async function readJson(req: IncomingMessage): Promise<any> {
   let raw = '';
-  for await (const chunk of req) {
-    raw += chunk;
-    if (raw.length > 1_000_000) return null;
-  }
   try {
+    for await (const chunk of req) {
+      raw += chunk;
+      if (raw.length > 1_000_000) return null;
+    }
     return JSON.parse(raw);
   } catch {
     return null;
