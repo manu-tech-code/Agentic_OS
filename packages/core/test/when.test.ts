@@ -25,6 +25,26 @@ describe('countdowns', () => {
     expect(durationMs('45 seconds')).toBe(45_000);
     expect(durationMs('nothing here')).toBeNull();
   });
+
+  it('reads a half either side of the unit', () => {
+    expect(durationMs('2 hours and a half')).toBe(150 * 60_000);
+    expect(durationMs('two and a half hours')).toBe(150 * 60_000);
+    expect(durationMs('a day and a half')).toBe(36 * 3_600_000);
+    expect(when('in 2 hours and a half')).toBe('2026-09-27 16:13');
+    expect(when('in two and a half hours')).toBe('2026-09-27 16:13');
+    expect(at('remind me in two and a half hours to stretch')?.rest).toBe('remind me to stretch');
+  });
+
+  it('takes days and weeks from now as a day - at the time said, or this time of day', () => {
+    expect(when('in 2 days at 5pm')).toBe('2026-09-29 17:00');
+    expect(at('remind me in 2 days at 5pm to call mum')?.rest).toBe('remind me to call mum');
+    expect(when('in 2 days in the morning')).toBe('2026-09-29 09:00');
+    expect(when('in 3 weeks')).toBe('2026-10-18 13:43');
+    expect(when('a week from now at 10am')).toBe('2026-10-04 10:00');
+    // A day away isn't a countdown: cancelling the timers leaves it alone.
+    expect(at('remind me in 3 weeks to renew my passport')?.inMs).toBeUndefined();
+    expect(at('in 1 day and 3 hours')?.inMs).toBe(27 * 3_600_000);
+  });
 });
 
 describe('times of day', () => {
@@ -59,6 +79,23 @@ describe('times of day', () => {
     expect(at('remind me to buy 5 apples')).toBeNull();
     expect(at('at 5 people')).toBeNull();
     expect(at('the sun is out and i sat down')).toBeNull();
+    // A dot makes a clock time only after "at", or with am or pm: on its own, 12.50 is a price.
+    expect(at('pay the 12.50 bill')).toBeNull();
+    expect(when('pay the 12.50 bill tomorrow')).toBe('2026-09-28 09:00');
+    expect(at('pay the 12.50 bill tomorrow')?.rest).toBe('pay the 12.50 bill');
+    expect(when('at 5.30')).toBe('2026-09-27 17:30');
+    expect(when('5.30 pm')).toBe('2026-09-27 17:30');
+  });
+
+  it('lets the part of the day said with the day settle am or pm', () => {
+    expect(when('tomorrow evening at 8')).toBe('2026-09-28 20:00');
+    expect(when('tomorrow morning at 5')).toBe('2026-09-28 05:00');
+    expect(when('on friday evening at 7')).toBe('2026-10-02 19:00');
+    expect(when('tomorrow at 8 in the evening')).toBe('2026-09-28 20:00');
+    expect(when('tomorrow afternoon at 3')).toBe('2026-09-28 15:00');
+    expect(when('tomorrow evening at 8am')).toBe('2026-09-28 08:00'); // said: as said
+    expect(local(parseWhen('at 7 tonight', new Date(2026, 8, 27, 6, 30))?.at)).toBe('2026-09-27 19:00');
+    expect(local(parseWhen('tonight at 9', new Date(2026, 8, 27, 6, 30))?.at)).toBe('2026-09-27 21:00');
   });
 });
 

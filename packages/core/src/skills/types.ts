@@ -56,6 +56,8 @@ export interface SkillContext {
   trust?: TrustService;
   /** Stop everything at once: agents, questions, speech, routines - and mute the microphone. Says how many tasks stopped. */
   halt?: () => number;
+  /** What the skill's `prepare` settled when the request came in: the thing a confirmation named. */
+  prepared?: unknown;
 }
 
 /** One entry of the record of what Nova did. */
@@ -113,10 +115,15 @@ export interface Reminder {
   /** When it's (next) due, epoch ms; null for one only in the Reminders app, with no time. */
   due: number | null;
   schedule?: Schedule;
-  /** A countdown ("in 10 minutes"): cancelling the timers cancels it. */
+  /** A timer, or a short wait ("in 10 minutes"): cancelling the timers cancels it. A reminder days away is none. */
   countdown?: boolean;
   /** It's in the Reminders app too (so it reaches the iPhone). */
   apple?: boolean;
+  /**
+   * It lives only in the Reminders app (made there, not by Nova): Nova can't bring it back once
+   * it's cancelled, so cancelling everything by voice leaves it alone. (Ids starting "apple-" are these too.)
+   */
+  appleOnly?: boolean;
 }
 
 export interface ReminderService {
@@ -232,6 +239,15 @@ export interface Skill {
   rememberAs?: (ctx: SkillContext) => { key: string; label: string } | null;
   /** Offered only when agents are paired. */
   needsAgents?: boolean;
+  /** An agent may be named ("undo what Claude did"); as a tool it takes `agent`, and none means anyone's. */
+  namesAgent?: boolean;
+  /** It acts on what the request says (a duration, a fact, a task): a tool call without `request` is refused, never filled in from an example. */
+  needsRequest?: boolean;
+  /**
+   * Settle what the request is about when it comes in (the action "undo" means), so a yes to the
+   * confirmation acts on exactly that - not on whatever is newest by then. Reaches the skill as `ctx.prepared`.
+   */
+  prepare?: (ctx: SkillContext) => unknown;
   /** Only a tool for brains, never something System 1 picks for an utterance (reading the screen). */
   toolOnly?: boolean;
   /**
@@ -248,6 +264,8 @@ export interface Skill {
   informs?: boolean;
   /** Spoken confirmation prompt for tier >= 2. */
   confirmPrompt?: (ctx: SkillContext) => string;
+  /** What Nova says when a request of this skill needs a tap on screen (tier 3): where the user can do it. */
+  tapPrompt?: (ctx: SkillContext) => string;
   run(ctx: SkillContext): Promise<SkillResult>;
 }
 

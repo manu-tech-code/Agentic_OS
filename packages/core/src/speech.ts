@@ -285,15 +285,21 @@ export function isEcho(heard: string, spoken: string) {
 }
 
 /** Words that stop Nova mid-sentence on their own. */
-const STOP_WORDS = new Set(['stop', 'wait', 'cancel', 'enough', 'quiet', 'shh', 'hush', 'pause', 'nova', 'no']);
+const STOP_WORDS = new Set(['stop', 'wait', 'cancel', 'enough', 'quiet', 'shh', 'hush', 'pause', 'no']);
 
 /**
  * Whether what's being heard while Nova speaks is the user talking over it: two or more words
- * that aren't Nova's own, or a word that means stop.
+ * that aren't Nova's own, a word that means stop, or its name - `names` are its wake words
+ * ("hey jarvis", "jarvis"), so a name the user gave it counts and the old one doesn't. What
+ * matches what Nova is saying is its own voice coming back ("No timers are running" heard as "no").
  */
-export function isBargeIn(heard: string, spoken: string) {
+export function isBargeIn(heard: string, spoken: string, names: string[] = ['nova']) {
   const words = heard.toLowerCase().match(WORDS) ?? [];
-  if (!words.length) return false;
+  if (!words.length || isEcho(heard, spoken)) return false;
   if (STOP_WORDS.has(words[0]!)) return true;
-  return words.length >= 2 && !isEcho(heard, spoken);
+  const called = names.some((name) => {
+    const own = name.toLowerCase().match(WORDS) ?? [];
+    return own.length > 0 && own.every((w, i) => words[i] === w);
+  });
+  return called || words.length >= 2;
 }

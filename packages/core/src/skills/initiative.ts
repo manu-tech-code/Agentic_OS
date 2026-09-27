@@ -1,4 +1,5 @@
-import { clockText, describeWhen, durationMs, onDay, parseWhen, spokenDuration } from '../when.ts';
+import type { RiskTier } from '../protocol.ts';
+import { clockText, describeWhen, durationMs, isCountdown, onDay, parseWhen, spokenDuration } from '../when.ts';
 import { toYou } from './memory.ts';
 import type { Reminder, Routine, Skill, SkillContext } from './types.ts';
 
@@ -68,10 +69,17 @@ function inRange(said: string, now: Date) {
   return { from: 0, to: Infinity, label: '' };
 }
 
-/** The reminder a "cancel" means: one about those words, one at that time - or all of them. */
+/** "Cancel all my reminders", "delete every reminder" - never "every" or "each" in what a reminder says. */
+const ALL = /\b(?:all|every\s+one)\s+(?:of\s+)?(?:my\s+|the\s+|your\s+)?reminders\b|\bevery\s+(?:single\s+)?reminder\b|\ball\s+of\s+them\b/i;
+
+/** Made in the Reminders app, not by Nova: once cancelled, it can't be brought back. */
+export const appleOnly = (r: Reminder) => Boolean(r.appleOnly) || r.id.startsWith('apple-');
+
+/** The reminder a "cancel" means: one about those words, one at that time - or all of Nova's own. */
 export function cancelling(ctx: SkillContext): { all: boolean; items: Reminder[] } {
   const items = (ctx.reminders?.list() ?? []).filter((r) => !r.countdown || r.text);
-  if (/\b(?:all|every|each)\b/i.test(ctx.utterance)) return { all: true, items };
+  // Everything at once takes only Nova's own: what the user keeps in the Reminders app stays there.
+  if (ALL.test(ctx.utterance)) return { all: true, items: items.filter((r) => !appleOnly(r)) };
   const target = ctx.utterance
     .replace(/^\s*(?:(?:hey|okay|ok|please|nova)[\s,]+)*(?:(?:can|could)\s+you\s+)?(?:cancel|delete|remove|clear|drop|forget|stop|scrap|get rid of|turn off|call off)\s+/i, '')
     .replace(/\b(?:the|my|that|this|reminders?|to|about|for|please|one)\b/gi, ' ');
@@ -88,63 +96,122 @@ export function cancelling(ctx: SkillContext): { all: boolean; items: Reminder[]
   return { all: false, items: scored.length && (scored.length === 1 || scored[0]!.score > scored[1]!.score) ? [scored[0]!.r] : [] };
 }
 
+/**
+ * How much a cancel needs: one reminder is confirmed out loud; several at once is a mass delete,
+ * which needs a tap on screen - never a spoken yes alone. Nothing to cancel needs nothing.
+ */
+export function cancelTier(ctx: SkillContext): RiskTier {
+  const { all, items } = cancelling(ctx);
+  return !items.length ? 0 : all && items.length > 1 ? 3 : 2;
+}
+
 /** "Cancel the reminder to call your mum tomorrow at 9 AM?" */
 export function cancelPrompt(ctx: SkillContext) {
   const { all, items } = cancelling(ctx);
   const now = ctx.platform.now();
+  if (all && items.length > 1) return `Cancel all ${items.length} of your reminders?`;
   const first = items[0];
-  return all ? `Cancel all ${items.length} of your reminders?` : `Cancel the reminder ${first ? `${saidBack(first, first.about) || ''} ${first.due ? onDay(new Date(first.due), now) : ''}`.trim() : ''}?`;
+  const what = first ? `${saidBack(first, first.about)} ${first.due ? onDay(new Date(first.due), now) : ''}`.trim() : '';
+  return `Cancel the reminder${what ? ` ${what}` : ''}?${first && appleOnly(first) ? " It's in your Reminders app, and I can't bring it back." : ''}`;
 }
+
+/** Where to cancel them all instead: by hand, in Settings - or one at a time by voice. */
+export const cancelOnScreen = (ctx: SkillContext) =>
+  `Cancelling all ${cancelling(ctx).items.length} of your reminders at once needs a tap on screen - they're in Settings → Reminders & routines. Or tell me one at a time.`;
 
 export async function cancelReminders(ctx: SkillContext) {
   const { all, items } = cancelling(ctx);
   if (!items.length || !ctx.reminders) return { say: "I couldn't find that reminder. Ask me what your reminders are to hear them.", activity: 'Reminder: none to cancel' };
   for (const r of items) await ctx.reminders.cancel(r.id);
   // Undone by putting them back as they were (a reminder only in the Reminders app is gone from there for good).
-  const steps = items.filter((r) => !r.id.startsWith('apple-')).map(({ id: _id, ...reminder }) => ({ kind: 'reminder-restore' as const, reminder }));
+  const steps = items.filter((r) => !appleOnly(r)).map(({ id: _id, appleOnly: _only, ...reminder }) => ({ kind: 'reminder-restore' as const, reminder }));
   return {
-    say: all ? 'Done, all your reminders are cancelled.' : 'Done, that reminder is cancelled.',
-    activity: all ? 'Cancelled all reminders' : `Cancelled a reminder: ${items[0]!.text}`,
+    say: all && items.length > 1 ? `Done, all ${items.length} of your reminders are cancelled.` : 'Done, that reminder is cancelled.',
+    activity: all && items.length > 1 ? `Cancelled all ${items.length} reminders` : `Cancelled a reminder: ${items[0]!.text}`,
     undo: steps.length ? (steps.length === 1 ? steps[0] : { kind: 'batch' as const, steps }) : undefined,
   };
+}
+
+/** What a routine's steps start with. */
+const STEP_VERBS = ['open', 'launch', 'start', 'quit', 'close', 'brief', 'tell', 'read', 'remind', 'set', 'ask', 'play', 'show', 'turn', 'mute', 'check', 'give', 'stop', 'switch', 'run', 'pause'];
+/** A step's verb, also as "opens", "launches" ("a routine that opens my email"). */
+const STEP_VERB = new RegExp(`^(${STEP_VERBS.join('|')})(?:e?s)?$`, 'i');
+
+/** "opens my email" → "open my email": a step as the user would say it to Nova. */
+function imperative(step: string) {
+  const [first = '', ...rest] = step.split(' ');
+  const verb = STEP_VERB.exec(first)?.[1];
+  return verb ? [verb.toLowerCase(), ...rest].join(' ') : step;
 }
 
 /** Steps said one after another: "open Slack, then Linear and brief me" → each its own request. */
 export function splitSteps(text: string): string[] {
   return text
-    .split(/\s*[,;]\s*(?:and\s+|then\s+|and\s+then\s+)?|\s+(?:and\s+)?then\s+|\s+and\s+(?=(?:open|launch|start|quit|close|brief|tell|read|remind|set|ask|play|show|turn|mute|check|give|what|stop)\b)/i)
-    .map((s) => tidy(s.replace(/^(?:and|then|please)\s+/i, '')))
+    .split(new RegExp(`\\s*[,;]\\s*(?:and\\s+|then\\s+|and\\s+then\\s+)?|\\s+(?:and\\s+)?then\\s+|\\s+and\\s+(?=(?:${[...STEP_VERBS, 'what'].join('|')})(?:e?s)?\\b)`, 'i'))
+    .map((s) => imperative(tidy(s.replace(/^(?:and|then|please)\s+/i, ''))))
     .filter(Boolean);
 }
 
-/** "when I say start work, open Slack and brief me" or "every weekday at 9, open Slack": a routine. */
+/** A routine's name in Settings (routines.<name>): letters, digits, spaces, - and _ - "im home", "every weekday at 8-30 am". */
+export const entryName = (text: string) =>
+  text
+    .toLowerCase()
+    .replace(/['’]/g, '')
+    .replace(/(\p{N}):(\p{N})/gu, '$1-$2')
+    .replace(/[^\p{L}\p{N}_ -]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/^[\s_-]+|[\s_-]+$/g, '') || 'routine';
+
+/** "Make a routine (called focus) that…": the rest says the steps, and when. */
+const MAKE =
+  /^(?:make|create|add|set\s+up)\s+(?:me\s+)?(?:a\s+|an\s+)?(?:new\s+)?routine\b(?:\s+(?:called|named)\s+(?:["“'‘]([^"”'’]+)["”'’]|(.+?)(?=\s+(?:that|which|where|to|when(?:ever)?|if|every|each|on)\b|\s*[:,]|\s*$)))?/i;
+const I_SAY = String.raw`(?:when(?:ever)?|if)\s+i\s+say\s+`;
+
+/** Where the phrase ends: at the quote that closes it, a comma or a colon - or where the first step begins. */
+function triggerEnd(tail: string): { trigger: string; steps: string } | null {
+  // A quote closes only the one that opened it; an apostrophe inside a word ("I'm home") is no quote.
+  const quoted = /^["“'‘]\s*(.+?)\s*["”'’](?!\p{L})\s*[,:]?\s*(.*)$/su.exec(tail);
+  if (quoted) return { trigger: quoted[1]!, steps: quoted[2]! };
+  const comma = /\s*[,:]\s*/.exec(tail);
+  if (comma && comma.index > 0) return { trigger: tail.slice(0, comma.index), steps: tail.slice(comma.index + comma[0].length) };
+  const words = tail.split(/\s+/);
+  const at = words.findIndex((word, i) => i > 0 && STEP_VERB.test(word));
+  return at < 1 ? null : { trigger: words.slice(0, at).join(' '), steps: words.slice(at).join(' ') };
+}
+
+function phraseRoutine(trigger: string, steps: string, named?: string): Routine | null {
+  const phrase = tidy(trigger).toLowerCase();
+  const list = splitSteps(steps.replace(/^(?:you\s+should\s+|please\s+|i\s+want\s+you\s+to\s+)/i, ''));
+  return phrase && list.length ? { name: entryName(named ?? phrase), phrase, steps: list } : null;
+}
+
+/**
+ * A routine from what was said: "when I say start work, open Slack and brief me", "make a routine
+ * that opens my email when I say good morning", or "every weekday at 9, open Slack".
+ */
 export function routineFrom(said: string, now: Date): Routine | null {
-  const text = said.replace(/^\s*(?:(?:hey|okay|ok|so|nova)[\s,]+)*/i, '').replace(/^(?:make|create|add|set up)\s+(?:a\s+)?routine\s*(?:called\s+\S+\s*)?[:,]?\s*/i, '');
-  const phrase = /^(?:when(?:ever)?|if)\s+i\s+say\s+["“']?(.+)$/i.exec(text);
-  if (phrase) {
-    // The trigger ends at a comma, a colon or a closing quote - or where the first step begins.
-    const tail = phrase[1]!;
-    const cut = /["”']\s*[,:]?\s*|\s*[,:]\s*/.exec(tail);
-    let trigger: string;
-    let steps: string;
-    if (cut && cut.index > 0) {
-      trigger = tail.slice(0, cut.index);
-      steps = tail.slice(cut.index + cut[0].length);
-    } else {
-      const words = tail.split(/\s+/);
-      const at = words.findIndex((word, i) => i > 0 && /^(?:open|launch|quit|close|brief|tell|read|remind|set|ask|play|show|turn|mute|check|give|start)$/i.test(word));
-      if (at < 1) return null;
-      trigger = words.slice(0, at).join(' ');
-      steps = words.slice(at).join(' ');
-    }
-    const list = splitSteps(steps.replace(/^(?:you\s+should\s+|please\s+|i\s+want\s+you\s+to\s+)/i, ''));
-    return trigger.trim() && list.length ? { name: tidy(trigger).toLowerCase(), phrase: tidy(trigger).toLowerCase(), steps: list } : null;
+  let text = said.replace(/^\s*(?:(?:hey|okay|ok|so|nova)[\s,]+)*/i, '').trim();
+  let named: string | undefined;
+  const make = MAKE.exec(text);
+  if (make) {
+    named = (make[1] ?? make[2])?.trim() || undefined;
+    text = text.slice(make[0].length).replace(/^[\s:,]*(?:(?:that|which|where|to|so\s+that)\s+)?/i, '');
   }
+  // The phrase first: "when I say start work, open Slack".
+  const first = new RegExp(`^${I_SAY}(.+)$`, 'is').exec(text);
+  if (first) {
+    const cut = triggerEnd(first[1]!);
+    return cut ? phraseRoutine(cut.trigger, cut.steps, named) : null;
+  }
+  // The steps first: "open my email when I say good morning".
+  const last = new RegExp(`^(.+?)[,\\s]+${I_SAY}["“'‘]?(.+?)["”'’]?[.!]?$`, 'is').exec(text);
+  if (last) return phraseRoutine(last[2]!, last[1]!, named);
   const when = parseWhen(text, now);
   if (when?.schedule && when.schedule.every !== 'interval') {
     const steps = splitSteps(when.rest);
     if (!steps.length || steps.some((s) => /\bremind me\b/i.test(s))) return null; // that's a reminder
-    return { name: describeWhen(when, now), schedule: describeWhen(when, now), steps };
+    const schedule = describeWhen(when, now);
+    return { name: entryName(named ?? schedule), schedule, steps };
   }
   return null;
 }
@@ -153,6 +220,7 @@ export const initiativeSkills: Skill[] = [
   {
     id: 'remind',
     wholeUtterance: true,
+    needsRequest: true,
     summary:
       'Remind the user at a time: once ("at 5", "tomorrow at 9", "on Friday") or repeating ("every weekday at 8:30"). Put what and when in request, as said. "In my Reminders" also puts it in the Reminders app.',
     tier: 1,
@@ -175,7 +243,8 @@ export const initiativeSkills: Skill[] = [
         if (!text) return { say: 'What should I remind you about?', activity: 'Reminder: what?' };
         return { say: 'When should I remind you?', needs: 'when', activity: 'Reminder: when?' };
       }
-      const item = await service.add({ text, about, due: when.at.getTime(), schedule: when.schedule, countdown: Boolean(when.inMs), apple: toApple && appleOk });
+      // Only a short wait is a countdown: "cancel the timer" never takes "in 3 weeks, renew my passport" with it.
+      const item = await service.add({ text, about, due: when.at.getTime(), schedule: when.schedule, countdown: isCountdown(when), apple: toApple && appleOk });
       const spoken = describeWhen(when, now);
       const what = saidBack(item, about);
       const also = item.apple ? " It's in your Reminders too." : toApple ? (appleOk ? " I couldn't add it to the Reminders app, so it's only with me." : " (Nova.app isn't running, so it's only with me for now.)") : '';
@@ -213,11 +282,13 @@ export const initiativeSkills: Skill[] = [
   },
   {
     id: 'cancel_reminder',
-    summary: 'Cancel a reminder the user names (by what it is about, or its time), or all of them.',
+    summary: 'Cancel a reminder the user names (by what it is about, or its time). Cancelling all of them at once needs the user to tap on screen. Put which one in request.',
     tier: 2,
-    tierFor: (ctx) => (cancelling(ctx).items.length ? 2 : 0),
+    tierFor: (ctx) => cancelTier(ctx),
+    needsRequest: true,
     examples: ['cancel the reminder to call mum', 'delete my reminder about the dentist', 'remove the 5pm reminder', 'cancel all my reminders'],
     confirmPrompt: (ctx) => cancelPrompt(ctx),
+    tapPrompt: (ctx) => cancelOnScreen(ctx),
     run: (ctx) => cancelReminders(ctx),
   },
   {

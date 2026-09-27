@@ -4,6 +4,7 @@ import type { Skill } from './types.ts';
 export const agentSkills: Skill[] = [
   {
     id: 'agent_task',
+    needsRequest: true,
     summary: "Hand a coding task to a paired coding agent (Claude Code, Codex, ...) to do in one of the user's project folders. Put the whole task in request.",
     tier: 2,
     needsProject: true,
