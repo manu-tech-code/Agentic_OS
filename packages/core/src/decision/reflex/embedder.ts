@@ -93,13 +93,20 @@ export function readSafetensor(bytes: Uint8Array, name: string): { data: Float32
   const tensor = header[name];
   if (!tensor) throw new Error(`The model has no "${name}" tensor.`);
   const [start, end] = tensor.data_offsets as [number, number];
-  const raw = bytes.slice(8 + headerLength + start, 8 + headerLength + end); // a copy, so it's aligned
-  if (tensor.dtype === 'F32') return { data: new Float32Array(raw.buffer, 0, raw.byteLength / 4), shape: tensor.shape };
-  if (tensor.dtype === 'F16') {
-    const halves = new Uint16Array(raw.buffer, 0, raw.byteLength / 2);
-    return { data: Float32Array.from(halves, halfToFloat), shape: tensor.shape };
-  }
-  throw new Error(`Reflex can't read ${tensor.dtype} weights.`);
+  // A real copy into a fresh buffer, whatever `bytes` actually is: Node's `Buffer#slice` (unlike
+  // `Uint8Array#slice`) returns a *view* onto the same underlying (and often much bigger) buffer,
+  // so reading from byte 0 of `raw.buffer` would read the file's own header, not the tensor.
+  const raw = Uint8Array.prototype.slice.call(bytes, 8 + headerLength + start, 8 + headerLength + end) as Uint8Array;
+  const [rows, dim] = tensor.shape as [number, number];
+  const data =
+    tensor.dtype === 'F32'
+      ? new Float32Array(raw.buffer, raw.byteOffset, raw.byteLength / 4)
+      : tensor.dtype === 'F16'
+        ? Float32Array.from(new Uint16Array(raw.buffer, raw.byteOffset, raw.byteLength / 2), halfToFloat)
+        : null;
+  if (!data) throw new Error(`Reflex can't read ${tensor.dtype} weights.`);
+  if (data.length !== rows * dim) throw new Error(`The "${name}" tensor has ${data.length} numbers, not ${rows}×${dim}.`);
+  return { data, shape: tensor.shape };
 }
 
 /** A Model2Vec static embedding model. */
