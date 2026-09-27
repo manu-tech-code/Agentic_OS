@@ -1,5 +1,6 @@
+import type { UndoStep } from '../protocol.ts';
 import { spokenDuration } from '../when.ts';
-import { cancelling, cancelPrompt, cancelReminders, reminderText, snoozeReminder, snoozesRecent } from './initiative.ts';
+import { cancelling, cancelOnScreen, cancelPrompt, cancelReminders, cancelTier, reminderText, snoozeReminder, snoozesRecent } from './initiative.ts';
 import { toYou } from './memory.ts';
 import type { Skill } from './types.ts';
 
@@ -113,24 +114,35 @@ export const builtinSkills: Skill[] = [
   },
   {
     id: 'cancel_timer',
-    summary: 'Cancel the running timers.',
+    summary: 'Cancel the running timers (and waits of up to an hour, like "remind me in 10 minutes").',
     tier: 0,
     examples: ['cancel the timer', 'stop the timer', 'clear my timers'],
-    // "Cancel my reminder" with no timer running means a reminder: that's confirmed first.
-    tierFor: (ctx) => (cancelsReminder(ctx) ? 2 : 0),
+    // "Cancel my reminder to call mum" names a reminder: that's confirmed first - all of them at once needs a tap.
+    tierFor: (ctx) => (cancelsReminder(ctx) ? cancelTier(ctx) : 0),
     confirmPrompt: (ctx) => cancelPrompt(ctx),
+    tapPrompt: (ctx) => cancelOnScreen(ctx),
     async run(ctx) {
       const { timers, reminders, utterance } = ctx;
       if (cancelsReminder(ctx)) return cancelReminders(ctx);
       let n = timers.cancelAll();
+      const back: UndoStep[] = [];
       if (reminders) {
-        // Timers and "in 10 minutes" reminders; reminders at a time are cancelled by name (cancel_reminder).
-        for (const r of reminders.list().filter((r) => r.countdown)) if (await reminders.cancel(r.id)) n++;
+        // Only countdowns - timers and short waits. Reminders at a time, or days away, are cancelled by name (cancel_reminder).
+        for (const { id, appleOnly: _only, ...r } of reminders.list().filter((r) => r.countdown)) {
+          if (!(await reminders.cancel(id))) continue;
+          n++;
+          back.push({ kind: 'reminder-restore', reminder: r });
+        }
         if (!n && /\breminder/i.test(utterance) && reminders.list().length) {
           return { say: 'No timers are running. To cancel a reminder, tell me which - like "cancel the reminder to call mum".', activity: 'No timers running' };
         }
       }
-      return { say: n ? `Cancelled ${n === 1 ? 'your timer' : `${n} timers`}.` : 'No timers running.', activity: 'Cancelled timers' };
+      return {
+        say: n ? `Cancelled ${n === 1 ? 'your timer' : `${n} timers`}.` : 'No timers running.',
+        activity: n ? `Cancelled ${n === 1 ? 'a timer' : `${n} timers`}` : 'No timers running',
+        // Those Nova keeps come back as they were ("undo that"); one only in memory can't.
+        undo: back.length ? (back.length === 1 ? back[0] : { kind: 'batch', steps: back }) : undefined,
+      };
     },
   },
 ];
@@ -156,9 +168,9 @@ export function parseDuration(text: string): number | null {
   return total > 0 ? total : null;
 }
 
-/** No timer to cancel, and a reminder the words name: "cancel my reminder" is about that. */
+/** A reminder the words name ("cancel my reminder to call mum"): it's about that, whether or not a timer runs. */
 function cancelsReminder(ctx: Parameters<NonNullable<Skill['tierFor']>>[0]) {
-  if (!ctx.reminders || !/\breminder/i.test(ctx.utterance) || ctx.reminders.list().some((r) => r.countdown)) return false;
+  if (!ctx.reminders || !/\breminder/i.test(ctx.utterance) || /\btimer/i.test(ctx.utterance)) return false;
   return cancelling(ctx).items.length > 0;
 }
 

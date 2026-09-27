@@ -1,4 +1,4 @@
-import { describeWhen, parseWhen } from '../when.ts';
+import { describeWhen, isCountdown, parseWhen } from '../when.ts';
 import type { MemoryItem, Skill, SkillContext } from './types.ts';
 
 /** The user asked for it to be remembered, in so many words. */
@@ -85,7 +85,7 @@ export const memorySkills: Skill[] = [
       const when = task && ctx.reminders ? parseWhen(fact, ctx.platform.now()) : null;
       if (when && ctx.reminders && explicitly(ctx)) {
         const text = when.rest.replace(/^to\s+/i, '').trim();
-        const item = await ctx.reminders.add({ text, about: 'to', due: when.at.getTime(), schedule: when.schedule, countdown: Boolean(when.inMs) });
+        const item = await ctx.reminders.add({ text, about: 'to', due: when.at.getTime(), schedule: when.schedule, countdown: isCountdown(when) });
         return { say: `Okay, I'll remind you to ${toYou(text)} ${describeWhen(when, ctx.platform.now())}.`, data: `Reminder set: ${text}`, activity: `Reminder: ${text}`, undo: { kind: 'reminder-cancel', id: item.id } };
       }
       const saved = ctx.memory.remember(fact, explicitly(ctx) ? 'said' : 'suggested');

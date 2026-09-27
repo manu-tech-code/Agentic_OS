@@ -386,7 +386,7 @@ export class NovaBrain implements ToolHost {
     // flight (an agent working on its own) the user said nothing, and the request's own wording never counts.
     const context = this.context(utterance, resolved, this.answering ?? '');
     const gate = gateFor(skill.tierFor?.(context) ?? skill.tier);
-    if (gate === 'tap') return 'That needs a confirmation on screen, so it was not done.';
+    if (gate === 'tap') return `${skill.tapPrompt?.(context) ?? 'That needs a confirmation on screen.'} It was not done.`;
     if (gate === 'confirm') {
       const remember = skill.rememberAs?.(context);
       if (!(remember && this.opts.trust?.allows(remember.key))) {
@@ -590,6 +590,11 @@ export class NovaBrain implements ToolHost {
 
   private async route(skill: Skill, utterance: string, resolved: Resolved, p: number, by = 'you') {
     const tier = skill.tierFor?.(this.context(utterance, resolved)) ?? skill.tier;
+    // A tap on screen, never a spoken yes (cancelling all the reminders): nothing is done, so saying where to do it
+    // needs only a fair idea of what was meant.
+    if (gateFor(tier) === 'tap' && p >= MIN_CONFIDENCE[1]) {
+      return this.say(utterance, skill.tapPrompt?.(this.context(utterance, resolved)) ?? 'That needs a confirmation on screen.');
+    }
     if (p < MIN_CONFIDENCE[tier]) {
       return this.say(utterance, "Sorry, I'm not sure what you meant. Could you say that again?");
     }

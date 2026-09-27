@@ -113,10 +113,15 @@ export interface Reminder {
   /** When it's (next) due, epoch ms; null for one only in the Reminders app, with no time. */
   due: number | null;
   schedule?: Schedule;
-  /** A countdown ("in 10 minutes"): cancelling the timers cancels it. */
+  /** A timer, or a short wait ("in 10 minutes"): cancelling the timers cancels it. A reminder days away is none. */
   countdown?: boolean;
   /** It's in the Reminders app too (so it reaches the iPhone). */
   apple?: boolean;
+  /**
+   * It lives only in the Reminders app (made there, not by Nova): Nova can't bring it back once
+   * it's cancelled, so cancelling everything by voice leaves it alone. (Ids starting "apple-" are these too.)
+   */
+  appleOnly?: boolean;
 }
 
 export interface ReminderService {
@@ -248,6 +253,8 @@ export interface Skill {
   informs?: boolean;
   /** Spoken confirmation prompt for tier >= 2. */
   confirmPrompt?: (ctx: SkillContext) => string;
+  /** What Nova says when a request of this skill needs a tap on screen (tier 3): where the user can do it. */
+  tapPrompt?: (ctx: SkillContext) => string;
   run(ctx: SkillContext): Promise<SkillResult>;
 }
 

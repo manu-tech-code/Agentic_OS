@@ -9,6 +9,7 @@ import {
   NovaBrain,
   reminderText,
   routineFrom,
+  settingProblem,
   splitSteps,
   type AgentHost,
   type News,
@@ -135,7 +136,7 @@ describe('reminders', () => {
     // "Cancel my reminders" heard as the timer skill, with no timer running: the reminders, confirmed first.
     const all = ctx('cancel all my reminders', { reminders, timers: { start: () => '', cancelAll: () => 0 } } as never);
     expect(tierOf(skill('cancel_timer'), all)).toBe(2);
-    expect(skill('cancel_timer').confirmPrompt!(all)).toBe('Cancel all 1 of your reminders?');
+    expect(skill('cancel_timer').confirmPrompt!(all)).toBe('Cancel the reminder to call your mum at 5 PM?'); // all of one
   });
 
   it('snoozes and marks done the one just brought up', async () => {
@@ -157,6 +158,91 @@ describe('reminders', () => {
     expect(result.say).toBe("Okay, I'll remind you to check the oven in 10 minutes.");
     expect(reminders.items[0]).toMatchObject({ text: 'check the oven', about: 'to', countdown: true, ms: 600_000 });
   });
+
+  it('cancels one named by what it says - "every" and "each" in it are words, not "all"', async () => {
+    const reminders = fakeReminders();
+    await reminders.add({ text: 'call my mum', about: 'to', due: new Date(2026, 8, 27, 17, 0).getTime() });
+    await reminders.add({ text: 'water every plant', about: 'to', due: new Date(2026, 8, 28, 9, 0).getTime() });
+    const c = ctx('cancel the reminder to water every plant', { reminders });
+    expect(tierOf(skill('cancel_reminder'), c)).toBe(2);
+    expect(skill('cancel_reminder').confirmPrompt!(c)).toBe('Cancel the reminder to water every plant tomorrow at 9 AM?');
+    await skill('cancel_reminder').run(c);
+    expect(reminders.items.map((r) => r.text)).toEqual(['call my mum']);
+  });
+
+  it('never cancels them all on a spoken yes: that needs a tap on screen, and the Reminders app is left alone', async () => {
+    const reminders = fakeReminders();
+    await reminders.add({ text: 'call my mum', about: 'to', due: new Date(2026, 8, 27, 17, 0).getTime() });
+    await reminders.add({ text: 'pay the rent', about: 'to', due: new Date(2026, 8, 28, 9, 0).getTime() });
+    reminders.items.push({ id: 'apple-1', text: 'buy milk', about: 'to', due: null, apple: true });
+    const timers = { start: () => '', cancelAll: () => 0 };
+    for (const said of ['cancel all my reminders', 'delete every reminder', 'clear all of my reminders']) {
+      const all = ctx(said, { reminders, timers } as never);
+      expect(tierOf(skill('cancel_reminder'), all), said).toBe(3);
+      expect(tierOf(skill('cancel_timer'), all), said).toBe(3);
+    }
+    // One of Nova's own left, and one only in the Reminders app: that one isn't swept up with it.
+    await reminders.cancel(reminders.items[1]!.id);
+    const all = ctx('cancel all my reminders', { reminders, timers } as never);
+    expect(tierOf(skill('cancel_reminder'), all)).toBe(2);
+    await skill('cancel_reminder').run(all);
+    expect(reminders.items.map((r) => r.id)).toEqual(['apple-1']);
+  });
+
+  it('through NovaBrain, says where to cancel them all instead of asking for a yes', async () => {
+    const { nova, reminders, says } = await setup();
+    await reminders.add({ text: 'call my mum', about: 'to', due: new Date(2026, 8, 27, 17, 0).getTime() });
+    await reminders.add({ text: 'pay the rent', about: 'to', due: new Date(2026, 8, 28, 9, 0).getTime() });
+    await nova.handle('nova cancel all my reminders');
+    expect(says().at(-1)).toMatch(/needs a tap on screen/);
+    await nova.handle('yes');
+    expect(reminders.items).toHaveLength(2);
+  });
+
+  it('says an app-only reminder cannot be brought back', async () => {
+    const reminders = fakeReminders();
+    reminders.items.push({ id: 'apple-1', text: 'buy milk', about: 'to', due: null, apple: true });
+    const c = ctx('cancel the reminder to buy milk', { reminders });
+    expect(skill('cancel_reminder').confirmPrompt!(c)).toBe("Cancel the reminder to buy milk? It's in your Reminders app, and I can't bring it back.");
+  });
+});
+
+describe('timers and reminders in a while', () => {
+  const timers = { start: () => '', cancelAll: () => 0 };
+
+  it('keeps "in 3 weeks" a reminder - only timers and short waits are countdowns', async () => {
+    const reminders = fakeReminders();
+    await skill('remind').run(ctx('remind me in 3 weeks to renew my passport', { reminders }));
+    await skill('remind').run(ctx('remind me in 2 hours to call my mum', { reminders }));
+    await skill('remind').run(ctx('remind me in 20 minutes to take the pizza out', { reminders }));
+    await skill('set_timer').run(ctx('set a timer for 2 hours', { reminders, timers } as never));
+    expect(reminders.items.map((r) => [r.text, Boolean(r.countdown)])).toEqual([
+      ['renew my passport', false],
+      ['call my mum', false],
+      ['take the pizza out', true],
+      ['', true],
+    ]);
+  });
+
+  it('"cancel the timer" cancels the timers only - and can be undone', async () => {
+    const reminders = fakeReminders();
+    await skill('remind').run(ctx('remind me in 3 weeks to renew my passport', { reminders }));
+    await skill('set_timer').run(ctx('set a timer for 10 minutes', { reminders, timers } as never));
+    const result = await skill('cancel_timer').run(ctx('cancel the timer', { reminders, timers } as never));
+    expect(result.say).toBe('Cancelled your timer.');
+    expect(reminders.items.map((r) => r.text)).toEqual(['renew my passport']);
+    expect(result.undo).toMatchObject({ kind: 'reminder-restore', reminder: { text: '', countdown: true, ms: 600_000 } });
+  });
+
+  it('"cancel my reminder to …" means that reminder, even while a timer runs', async () => {
+    const reminders = fakeReminders();
+    await skill('set_timer').run(ctx('set a timer for 10 minutes', { reminders, timers } as never));
+    await reminders.add({ text: 'call my mum', about: 'to', due: new Date(2026, 8, 27, 17, 0).getTime() });
+    const c = ctx('cancel my reminder to call my mum', { reminders, timers } as never);
+    expect(tierOf(skill('cancel_timer'), c)).toBe(2);
+    await skill('cancel_timer').run(c);
+    expect(reminders.items.map((r) => r.text)).toEqual(['']); // the timer runs on
+  });
 });
 
 describe('routines by voice', () => {
@@ -167,6 +253,23 @@ describe('routines by voice', () => {
     expect(routineFrom('every weekday at 9 open slack and brief me', NOW)).toMatchObject({ schedule: 'every weekday at 9 AM', steps: ['open slack', 'brief me'] });
     expect(routineFrom('every friday at 5 remind me to file my hours', NOW)).toBeNull(); // that's a reminder
     expect(splitSteps('open slack, then linear and brief me')).toEqual(['open slack', 'linear', 'brief me']);
+  });
+
+  it("keeps an apostrophe in the phrase, and names every routine so it can be saved", () => {
+    const home = routineFrom("when I say I'm home, open spotify and brief me", NOW);
+    expect(home).toEqual({ name: 'im home', phrase: "i'm home", steps: ['open spotify', 'brief me'] });
+    expect(routineFrom("when I say 'I'm off' quit slack", NOW)).toMatchObject({ phrase: "i'm off", steps: ['quit slack'] });
+    const weekday = routineFrom('every weekday at 8:30, open slack and brief me', NOW)!;
+    expect(weekday).toMatchObject({ schedule: 'every weekday at 8:30 AM', steps: ['open slack', 'brief me'] });
+    for (const r of [home!, weekday]) {
+      expect(settingProblem(`routines.${r.name}`, { ...(r.phrase ? { phrase: r.phrase } : {}), ...(r.schedule ? { schedule: r.schedule } : {}), steps: r.steps }), r.name).toBeNull();
+    }
+  });
+
+  it('reads the steps first, then the phrase', () => {
+    expect(routineFrom('make a routine that opens my email when i say good morning', NOW)).toEqual({ name: 'good morning', phrase: 'good morning', steps: ['open my email'] });
+    expect(routineFrom('create a routine called focus that quits slack and opens linear when I say focus time', NOW)).toEqual({ name: 'focus', phrase: 'focus time', steps: ['quit slack', 'open linear'] });
+    expect(routineFrom('open slack and brief me whenever i say start work', NOW)).toMatchObject({ phrase: 'start work', steps: ['open slack', 'brief me'] });
   });
 });
 

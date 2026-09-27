@@ -108,6 +108,10 @@ const DURATION = `(?:${NUM}\\s+and\\s+a\\s+half\\s+(?:second|sec|minute|min|hour
 /** "3 days", "2 weeks": whole days away, which are a day on the calendar (at the time said) rather than a countdown. */
 const onlyDays = (duration: string) => /\b(?:day|week)s?\b/i.test(duration) && !/\b(?:second|sec|minute|min|hour|hr)s?\b|\bhalf\b|\bquarter\b/i.test(duration);
 
+/** A wait this short ("in 20 minutes") is kept as a countdown, which "cancel the timer" cancels; a longer one is a reminder. */
+export const COUNTDOWN_MAX_MS = 3_600_000;
+export const isCountdown = (when: Pick<When, 'inMs'> | null | undefined) => Boolean(when?.inMs && when.inMs <= COUNTDOWN_MAX_MS);
+
 /** Understand when, or null if no time was said. `now` is the user's own clock. */
 export function parseWhen(text: string, now: Date): When | null {
   const w = new Words(` ${plainly(text)} `);
