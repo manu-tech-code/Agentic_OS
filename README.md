@@ -378,9 +378,10 @@ cloud. Nova calls it directly - `POST https://api.typesafe.ai/v1/systemone` with
 3. Settings → Decisions → Decision engine → **Jev**. The model is `jev-latest` unless you pin one (`jev-1.13.0`).
 
 What goes to TypeSafe with each thing you say: your last three exchanges with Nova and the choices it weighs (its skills,
-and your apps', agents' and projects' names) - Settings → Privacy & trust shows it while Jev decides. If Jev errors or
-runs past the time limit (1.5 s by default), Reflex decides on the Mac instead, and it keeps learning from what you
-confirm. Automatic never picks Jev: it only decides when you choose it. `REFLEX_JEV=1 npm run reflex:eval` measures Jev
+and your apps', agents' and projects' names) - Settings → Privacy & trust shows it while Jev decides. When Jev is less
+than 80% sure of a skill and there's a brain to answer (a paired agent or a local model), the brain gets the request -
+and can still use that skill - rather than Nova acting on a guess, as Reflex does by itself. If Jev errors or runs past
+the time limit (1.5 s by default), Reflex decides on the Mac instead, and it keeps learning from what you confirm. Automatic never picks Jev: it only decides when you choose it. `REFLEX_JEV=1 npm run reflex:eval` measures Jev
 on the same phrasings as Reflex (a billed call per phrasing).
 
 ## Using a local model (LM Studio, Ollama, oMLX, mlx_lm, llama.cpp)

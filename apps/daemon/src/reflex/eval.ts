@@ -18,6 +18,8 @@ import {
   topProbability,
   type EvaluationModelV4,
 } from '@nova/core';
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { loadConfig, loadDotEnv, readSettings } from '../config.ts';
 import { EVAL_AGENTS, EVAL_APPS, EVAL_PROJECTS, REPLIES, SET_A, SET_B, SET_C, SET_D, SET_E } from './evalSet.ts';
 import { DEFAULT_REFLEX_MODEL, readModelFiles } from '../models/files.ts';
@@ -76,13 +78,25 @@ const sets = ([['A', SET_A], ['B', SET_B], ['C', SET_C], ['D', SET_D], ['E', SET
 const HELD_OUT = new Set(['C', 'E']);
 // REFLEX_JEV=1 measures Jev too, on the same phrasings - through Nova's DecisionEngine, with no fallback,
 // so a failure counts as one. It needs NOVA_JEV_API_KEY, and each phrasing is a billed call to TypeSafe.
+// REFLEX_JEV_FLOOR=0.7 sets below what Jev's skill picks go to the brain (with REFLEX_CANTHINK=1; 0 acts
+// on everything); REFLEX_JEV_CACHE=<file> keeps Jev's answers by request, so another floor costs nothing.
 const jev = process.env.REFLEX_JEV === '1' ? jevModel(loadConfig((await readSettings().catch(() => null)) ?? {}, process.env)) : null;
 const models = [['keywords', keywords], ['examples', examplesOnly], ['reflex  ', reflex], ...(jev ? ([['jev     ', jev]] as const) : [])] as const;
 
 function jevModel(config: ReturnType<typeof loadConfig>): EvaluationModelV4 {
   if (!config.jevKey) throw new Error("REFLEX_JEV=1 needs Jev's key: NOVA_JEV_API_KEY=... in .env.");
-  const engine = createDecisionEngine({ engine: 'jev', fallback: 'none', jevApiKey: config.jevKey, jevModel: process.env.REFLEX_JEV_MODEL || config.jevModel, timeoutMs: 20_000 });
-  console.log(`Also measuring ${engine.name}: a call to TypeSafe for every phrasing.`);
+  const floor = process.env.REFLEX_JEV_FLOOR === undefined ? undefined : Number(process.env.REFLEX_JEV_FLOOR);
+  const cache = process.env.REFLEX_JEV_CACHE ? cachedFetch(process.env.REFLEX_JEV_CACHE) : undefined;
+  const engine = createDecisionEngine({
+    engine: 'jev',
+    fallback: 'none',
+    jevApiKey: config.jevKey,
+    jevModel: process.env.REFLEX_JEV_MODEL || config.jevModel,
+    jevDoubt: floor,
+    jevFetch: cache,
+    timeoutMs: 20_000,
+  });
+  console.log(`Also measuring ${engine.name}${floor !== undefined ? ` (unsure below ${floor} goes to the brain)` : ''}: a call to TypeSafe for every phrasing${cache ? ' not in the cache (its times are 0)' : ''}.`);
   return {
     specificationVersion: 'v4',
     provider: 'typesafe',
@@ -178,4 +192,24 @@ for (const [label, model] of models) {
     else wrong.push(`"${r.u}" → ${choice}`);
   }
   console.log(`Replies   ${label} ${pct(ok, REPLIES.length)} (${ok}/${REPLIES.length})${model === reflex || model === jev ? ` · wrong: ${wrong.join(' | ') || 'none'}` : ''}`);
+}
+
+/** Jev's answers kept by request (the key is a header, so it's never in the file): a second run asks only what's new. */
+function cachedFetch(file: string): typeof fetch {
+  const kept: Record<string, { status: number; body: string }> = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {};
+  let added = 0;
+  const save = () => void (added && writeFileSync(file, JSON.stringify(kept)));
+  process.on('exit', save);
+  return (async (url: string | URL | Request, init?: RequestInit) => {
+    const key = createHash('sha256').update(String(init?.body ?? '')).digest('hex');
+    const hit = kept[key];
+    if (hit) return new Response(hit.body, { status: hit.status });
+    const res = await fetch(url, init);
+    const body = await res.text();
+    if (res.ok) {
+      kept[key] = { status: res.status, body };
+      if (++added % 100 === 0) save();
+    }
+    return new Response(body, { status: res.status });
+  }) as typeof fetch;
 }
