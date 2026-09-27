@@ -13,6 +13,11 @@ export interface IntegrationTool extends ToolSpec {
   /** "Linear", for Activity and spoken prompts. */
   label: string;
   tier: RiskTier;
+  /**
+   * The service labels it read-only. "Yes, always" is remembered only for such a tool (and never
+   * for one whose name says it moves money, runs code, deletes or sends); the user allows others in Settings.
+   */
+  readOnly?: boolean;
   /** What a call would do, to say out loud: `Linear: create issue "Fix the login bug"`. */
   summary(args: Record<string, unknown>): string;
 }

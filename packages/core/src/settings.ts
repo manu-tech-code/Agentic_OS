@@ -5,7 +5,7 @@
  * Dependency-free so shells can import it.
  */
 
-import { looksSecret, type AskPolicy, type ToolPolicy } from './integrations.ts';
+import { argsSecret, looksSecret, urlSecret, type AskPolicy, type ToolPolicy } from './integrations.ts';
 import { shortcutProblem } from './shortcut.ts';
 import type { Reminder, Routine, TaskRecord } from './skills/types.ts';
 import { parseWhen } from './when.ts';
@@ -716,6 +716,9 @@ function integrationProblem(name: string, v: unknown): string | null {
   if (hosted && !(typeof v.url === 'string' && /^https?:\/\/\S+$/.test(v.url))) return 'needs a url starting with http:// or https://';
   if (local && !(typeof v.command === 'string' && v.command.trim())) return 'needs a command';
   if (v.args !== undefined && !isTextList(v.args)) return 'needs args to be a list of text';
+  // A token pasted into args or the address would sit in the settings file, in plain sight - like one in a header.
+  if (isTextList(v.args) && argsSecret(v.args)) return 'has what looks like a secret in args - put it in .env and write ${NAME} in env instead';
+  if (hosted && urlSecret(v.url as string)) return 'has what looks like a secret in the url - put it in .env and send it in a header instead, like "Authorization": "Bearer ${NAME}"';
   for (const key of ['env', 'headers'] as const) {
     const map = v[key];
     if (map === undefined) continue;

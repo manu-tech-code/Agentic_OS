@@ -3,6 +3,7 @@ import { topProbability } from '../decision/distribution.ts';
 import { aliasesFor, matchName, nameTokens } from '../decision/reflex/names.ts';
 import type { DecisionEngine } from '../decision/types.ts';
 import { gateFor, MIN_CONFIDENCE } from '../guardian.ts';
+import { mayRememberTool, toolRisk } from '../integrations.ts';
 import type { ActivityItem, Card, Phase, ServerEvent, UiPrefs, UndoStep } from '../protocol.ts';
 import type { HearingStatus } from '../settings.ts';
 import { wakeWordsFor } from '../settings.ts';
@@ -416,10 +417,12 @@ export class NovaBrain implements ToolHost {
     if (!tool) return `There's no tool called ${name}.`;
     const call = { name, ok: false };
     this.lesson?.calls.push(call);
-    const gate = gateFor(tool.tier);
-    if (gate === 'tap') return 'That needs a confirmation on screen, so it was not done.';
-    // "Yes, always" to one of a service's tools lets it run without asking - never one that deletes.
-    const remember = /delete|remove|destroy|drop|purge|archive|revoke|cancel/i.test(name) ? undefined : { key: `tool:${name}`, label: `Use ${tool.label}` };
+    // The user's choice sets the tier; a tool they didn't allow that moves money needs a tap on screen, whatever the hub said.
+    const gate = gateFor(tool.tier >= 2 && toolRisk(name) === 'money' ? 3 : tool.tier);
+    if (gate === 'tap') return `Moving money through ${tool.label} needs a tap on screen, never a spoken yes - so it was not done.`;
+    // "Yes, always" is remembered only for a tool that just reads; the user allows any other in Settings → Integrations.
+    const action = name.slice(name.indexOf('__') + 2).replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ').toLowerCase();
+    const remember = mayRememberTool(tool) ? { key: `tool:${name}`, label: `Use ${tool.label} to ${action}` } : undefined;
     if (gate === 'confirm' && !(remember && this.opts.trust?.allows(remember.key))) {
       if (!(await this.approve(`${caller} wants to use ${tool.summary(args)}. Allow it?`, `${caller}: ${tool.label}`, undefined, remember))) return 'The user said no, so it was not done.';
     }
@@ -1052,7 +1055,9 @@ export class NovaBrain implements ToolHost {
   /** Remember a "yes, always" (or "for today"): only for what may be remembered. */
   private rememberYes(remember: { key: string; label: string } | null | undefined, said: string) {
     const scope = alwaysIn(said);
-    if (!scope || !remember || !this.opts.trust) return '';
+    if (!scope || !this.opts.trust) return '';
+    // Said "always" to something that must be asked every time (a risky command, a tool that changes things): say so.
+    if (!remember) return " I'll still ask each time for that one.";
     const today = new Date(this.now());
     const until = scope === 'today' ? `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}` : undefined;
     void this.opts.trust.allow(remember.key, remember.label, until);
