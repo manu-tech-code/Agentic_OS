@@ -109,6 +109,15 @@ export function InitiativePanel({ snapshot, name, onSave, onAction }: Props) {
   );
 }
 
+/** A settings-key segment safe for any trigger typed in: the words themselves stay in schedule/phrase,
+ * so a time like "8:30" (":" fails the key check) or "8.30" (a "." would split the settings path) never
+ * breaks where the routine is stored. */
+const slugify = (s: string) =>
+  s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'routine';
+
 function NewRoutine({ onSave }: { onSave: Save }) {
   const [trigger, setTrigger] = useState('');
   const [steps, setSteps] = useState('');
@@ -118,9 +127,9 @@ function NewRoutine({ onSave }: { onSave: Save }) {
     .map((s) => s.trim())
     .filter(Boolean);
   const save = () => {
-    const name = trigger.trim().toLowerCase();
-    if (!name || !list.length) return;
-    onSave({ [`routines.${name}`]: scheduled ? { schedule: trigger.trim(), steps: list } : { phrase: name, steps: list } });
+    const text = trigger.trim();
+    if (!text || !list.length) return;
+    onSave({ [`routines.${slugify(text)}`]: scheduled ? { schedule: text, steps: list } : { phrase: text.toLowerCase(), steps: list } });
     setTrigger('');
     setSteps('');
   };
