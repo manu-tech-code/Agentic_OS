@@ -11,7 +11,7 @@ import {
   type IntegrationTools,
 } from '@nova/core';
 import { HttpTransport, McpClient, McpError, NeedsSignIn, SseTransport, StdioTransport, type McpTool } from './mcp.ts';
-import { authorizeUrl, discover, exchange, pkce, refresh, register, SignIns, type SignIn } from './oauth.ts';
+import { authorizeUrl, discover, exchange, pkce, refresh, register, resourceCovers, SignIns, type SignIn } from './oauth.ts';
 
 interface Connection {
   name: string;
@@ -37,6 +37,30 @@ const CALL_TIMEOUT = 120_000;
 
 const connectionPart = (e: IntegrationEntry) => JSON.stringify([e.url, e.command, e.args, e.env, e.headers, e.enabled]);
 
+/**
+ * Nova's own secrets and constants in .env, which no integration is ever given - so an entry in the
+ * settings file can't send them anywhere: the AI Gateway's key, the local model servers' keys
+ * (NOVA_<SERVER>_API_KEY) and Nova's settings. A service's own secret gets a name of its own, such
+ * as NOVA_GITHUB_TOKEN or NOVA_STRIPE_KEY.
+ */
+export const NOVA_OWN_SECRET =
+  /^(?:AI_GATEWAY_API_KEY|VERCEL_OIDC_TOKEN|NOVA_[A-Z0-9_]*_API_KEY|NOVA_(?:PORT|UI_ORIGINS|SETTINGS_FILE|AGENTS_FILE|MODELS_DIR|BUNDLED_MODELS|SIGN_IDENTITY|DRY_RUN|HEARING_DEBUG|BRIDGE_URL|TOOLS_TOKEN|APPROVAL_TOKEN))$/;
+
+/** Two addresses of one server (a trailing slash aside). */
+function sameServer(a: string | undefined, b: string | undefined) {
+  if (!a || !b) return false;
+  try {
+    const clean = (u: string) => {
+      const url = new URL(u);
+      url.hash = '';
+      return url.href.replace(/\/$/, '');
+    };
+    return clean(a) === clean(b);
+  } catch {
+    return false;
+  }
+}
+
 export interface HubOptions {
   env: NodeJS.ProcessEnv;
   /** Where the browser comes back after signing in (the daemon's /oauth/callback). */
@@ -46,6 +70,8 @@ export interface HubOptions {
   /** Connections, tools or states changed. */
   changed: () => void;
   signIns?: SignIns;
+  /** How long a service may take to say hello (a local one gets twice as long) and to list its tools, in ms. */
+  timeouts?: { connect?: number; list?: number };
 }
 
 /**
@@ -57,6 +83,10 @@ export class IntegrationHub implements IntegrationTools {
   private readonly signIns: SignIns;
   private readonly pending = new Map<string, { name: string; verifier: string; at: number }>();
   private signedIn = new Set<string>();
+  /** Sign-ins being renewed, by integration: one renewal at a time, whoever needs it. */
+  private readonly renewing = new Map<string, Promise<boolean>>();
+  /** Tool names that came out the same for two tools, last said in the log. */
+  private clashes = '';
 
   constructor(private readonly opts: HubOptions) {
     this.signIns = opts.signIns ?? new SignIns();
@@ -91,55 +121,87 @@ export class IntegrationHub implements IntegrationTools {
 
   // --- Tools, for NovaBrain -----------------------------------------------------------------
 
-  specs(): IntegrationTool[] {
-    const out: IntegrationTool[] = [];
+  /**
+   * Every connected service's tools, by the one name brains know each by. Two tools whose names
+   * come out the same ("a.b" and "a_b" are both "srv__a_b") are both left out: which one a call
+   * meant can't be known, and they may have different rules.
+   */
+  private catalog(): Map<string, { c: Connection; tool: McpTool }> {
+    const byName = new Map<string, { c: Connection; tool: McpTool }>();
+    const clashes = new Set<string>();
     for (const c of this.connections.values()) {
       if (c.state !== 'connected') continue;
-      const label = this.label(c);
       for (const tool of c.tools) {
-        const policy = toolPolicy(c.entry, { name: tool.name, readOnly: tool.annotations?.readOnlyHint === true });
-        if (policy === 'block') continue;
-        const tier = policyTier(policy);
-        const schema = (tool.inputSchema ?? {}) as Record<string, unknown>;
-        const title = tool.title ?? tool.annotations?.title;
-        out.push({
-          name: toolName(c.name, tool.name),
-          label,
-          tier,
-          description: `${label}: ${(tool.description ?? title ?? tool.name).trim().slice(0, 1000)}${tier >= 2 ? ' The assistant asks the user out loud first.' : ''}`,
-          parameters: {
-            ...schema,
-            type: 'object',
-            properties: (schema.properties as Record<string, unknown>) ?? {},
-            required: Array.isArray(schema.required) ? (schema.required as string[]) : [],
-          },
-          summary: (args) => describeCall(label, tool.name, args, title),
-        });
+        const name = toolName(c.name, tool.name);
+        const taken = byName.get(name);
+        if (taken && !(taken.c === c && taken.tool.name === tool.name)) clashes.add(name);
+        else if (!taken) byName.set(name, { c, tool });
       }
+    }
+    for (const name of clashes) byName.delete(name);
+    const said = [...clashes].sort().join(', ');
+    if (said && said !== this.clashes) console.warn(`  [integrations] left out ${said}: two tools share each of these names`);
+    this.clashes = said;
+    return byName;
+  }
+
+  private policy(c: Connection, tool: McpTool) {
+    return toolPolicy(c.entry, { name: tool.name, readOnly: tool.annotations?.readOnlyHint === true });
+  }
+
+  specs(): IntegrationTool[] {
+    const out: IntegrationTool[] = [];
+    for (const [name, { c, tool }] of this.catalog()) {
+      const policy = this.policy(c, tool);
+      if (policy === 'block') continue;
+      const label = this.label(c);
+      const tier = policyTier(policy);
+      const schema = (tool.inputSchema ?? {}) as Record<string, unknown>;
+      const title = tool.title ?? tool.annotations?.title;
+      out.push({
+        name,
+        label,
+        tier,
+        description: `${label}: ${(tool.description ?? title ?? tool.name).trim().slice(0, 1000)}${tier >= 2 ? ' The assistant asks the user out loud first.' : ''}`,
+        parameters: {
+          ...schema,
+          type: 'object',
+          properties: (schema.properties as Record<string, unknown>) ?? {},
+          required: Array.isArray(schema.required) ? (schema.required as string[]) : [],
+        },
+        summary: (args) => describeCall(label, tool.name, args, title),
+      });
     }
     return out;
   }
 
   async call(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
-    for (const c of this.connections.values()) {
-      const tool = c.tools.find((t) => toolName(c.name, t.name) === name);
-      if (!tool) continue;
-      if (!c.client || c.state !== 'connected') throw new Error(`${this.label(c)} isn't connected.`);
-      const limit = AbortSignal.timeout(CALL_TIMEOUT);
-      const stop = signal ? AbortSignal.any([signal, limit]) : limit;
-      try {
-        return await c.client.callTool(tool.name, args, stop);
-      } catch (e) {
-        if (e instanceof NeedsSignIn) {
-          // The sign-in ran out mid-session: renew it once, then ask the user to sign in again.
-          if (await this.renew(c.name)) return c.client.callTool(tool.name, args, stop);
-          c.canSignIn = true;
-          this.set(c, 'sign-in', 'The sign-in ran out. Sign in again.');
+    const found = this.catalog().get(name);
+    if (!found) throw new Error(`No integration offers ${name}.`);
+    const { c, tool } = found;
+    // The user's rule, again: a tool blocked since the brain saw the list is still blocked.
+    if (this.policy(c, tool) === 'block') throw new Error(`${this.label(c)}'s ${tool.name} is blocked in Settings.`);
+    const client = c.client;
+    if (!client) throw new Error(`${this.label(c)} isn't connected.`);
+    const limit = AbortSignal.timeout(CALL_TIMEOUT);
+    const stop = signal ? AbortSignal.any([signal, limit]) : limit;
+    const token = (await this.signIns.get(c.name))?.tokens?.access_token;
+    try {
+      return await client.callTool(tool.name, args, stop);
+    } catch (e) {
+      if (!(e instanceof NeedsSignIn)) throw e;
+      // The sign-in ran out mid-session: renew it once (unless another call just did), then ask the user to sign in again.
+      if (await this.renew(c.name, token)) {
+        try {
+          return await client.callTool(tool.name, args, stop);
+        } catch (again) {
+          if (!(again instanceof NeedsSignIn)) throw again;
         }
-        throw e;
       }
+      c.canSignIn = true;
+      this.set(c, 'sign-in', 'The sign-in ran out. Sign in again.');
+      throw e;
     }
-    throw new Error(`No integration offers ${name}.`);
   }
 
   // --- Status, for Settings -----------------------------------------------------------------
@@ -176,14 +238,16 @@ export class IntegrationHub implements IntegrationTools {
   async signIn(name: string): Promise<string> {
     const c = this.connections.get(name);
     if (!c?.entry.url) throw new Error('Only hosted integrations sign in with the browser.');
-    const found = await discover(c.entry.url, c.resourceMetadata);
+    const server = c.entry.url;
+    const found = await discover(server, c.resourceMetadata);
     const redirect = this.opts.redirectUri();
-    const known = await this.signIns.get(name);
+    const stored = await this.signIns.get(name);
+    const known = stored && this.boundTo(stored, server) ? stored : undefined; // one for another address is no use here
     const client =
       known && known.client.redirect_uri === redirect && known.authServer.token_endpoint === found.authServer.token_endpoint
         ? known.client
         : await register(found.authServer, redirect);
-    await this.signIns.set(name, { ...found, client, tokens: known?.tokens });
+    await this.signIns.set(name, { ...found, server, client, tokens: known?.tokens });
     const { verifier, challenge } = pkce();
     const state = randomBytes(24).toString('base64url');
     for (const [s, p] of this.pending) if (Date.now() - p.at > 15 * 60_000) this.pending.delete(s);
@@ -247,30 +311,55 @@ export class IntegrationHub implements IntegrationTools {
     return [...new Set([...Object.values(entry.env ?? {}), ...Object.values(entry.headers ?? {})].flatMap(secretRefs))];
   }
 
-  /** Values with their ${NAME}s filled in from .env. */
+  /** Values with their ${NAME}s filled in from .env - never with one of Nova's own secrets. */
   private resolve(map: Record<string, string> | undefined) {
-    return Object.fromEntries(Object.entries(map ?? {}).map(([k, v]) => [k, v.replace(/\$\{([A-Z0-9_]+)\}/g, (_, name: string) => this.opts.env[name] ?? '')]));
+    return Object.fromEntries(
+      Object.entries(map ?? {}).map(([k, v]) => [k, v.replace(/\$\{([A-Z0-9_]+)\}/g, (_, name: string) => (NOVA_OWN_SECRET.test(name) ? '' : (this.opts.env[name] ?? '')))]),
+    );
+  }
+
+  /** Whether a sign-in's tokens are for this address: the one signed in to (older sign-ins: the resource they're for). */
+  private boundTo(signIn: SignIn, url: string) {
+    return signIn.server ? sameServer(signIn.server, url) : resourceCovers(signIn.resource, url);
   }
 
   private async headersFor(c: Connection): Promise<Record<string, string>> {
     const headers = this.resolve(c.entry.headers);
     const signIn = await this.signIns.get(c.name);
     if (!signIn?.tokens) return headers;
-    if (signIn.tokens.expires_at && signIn.tokens.expires_at - Date.now() < 60_000) await this.renew(c.name, signIn);
+    // The address changed since signing in: that service's tokens never go to the new one.
+    if (!c.entry.url || !this.boundTo(signIn, c.entry.url)) {
+      await this.signIns.delete(c.name);
+      this.signedIn.delete(c.name);
+      console.warn(`  [integrations] ${c.name}'s address changed since signing in, so Nova forgot that sign-in`);
+      return headers;
+    }
+    if (signIn.tokens.expires_at && signIn.tokens.expires_at - Date.now() < 60_000) await this.renew(c.name, signIn.tokens.access_token);
     const current = await this.signIns.get(c.name);
     return current?.tokens ? { ...headers, authorization: `Bearer ${current.tokens.access_token}` } : headers;
   }
 
-  /** Renew a sign-in with its refresh token; false if it can't be. */
-  private async renew(name: string, known?: SignIn) {
-    const signIn = known ?? (await this.signIns.get(name));
-    if (!signIn?.tokens?.refresh_token) return false;
-    try {
-      await this.signIns.set(name, { ...signIn, tokens: await refresh(signIn) });
-      return true;
-    } catch {
-      return false;
-    }
+  /**
+   * Renew a sign-in with its refresh token; false if it can't be. One renewal at a time per
+   * integration - calls that need it at once share it (a refresh token often works only once) - and
+   * none when another call already renewed the tokens `stale` was the access token of.
+   */
+  private renew(name: string, stale?: string): Promise<boolean> {
+    const running = this.renewing.get(name);
+    if (running) return running;
+    const renewal = (async () => {
+      const signIn = await this.signIns.get(name);
+      if (!signIn?.tokens?.refresh_token) return false;
+      if (stale !== undefined && signIn.tokens.access_token !== stale) return true; // renewed meanwhile
+      try {
+        await this.signIns.set(name, { ...signIn, tokens: await refresh(signIn) });
+        return true;
+      } catch {
+        return false;
+      }
+    })().finally(() => this.renewing.delete(name));
+    this.renewing.set(name, renewal);
+    return renewal;
   }
 
   private set(c: Connection, state: IntegrationStatus['state'], message?: string) {
@@ -287,42 +376,53 @@ export class IntegrationHub implements IntegrationTools {
     c.tools = [];
   }
 
+  /** A client that has said hello - or, if it couldn't, closed again (its process stopped, its streams let go). */
+  private async greeted(client: McpClient, ms: number): Promise<McpClient> {
+    try {
+      await client.connect(AbortSignal.timeout(ms));
+      return client;
+    } catch (e) {
+      client.close();
+      throw e;
+    }
+  }
+
   private async open(c: Connection): Promise<McpClient> {
     const e = c.entry;
-    if (e.command) {
-      const client = new McpClient(new StdioTransport(e.command, e.args ?? [], this.resolve(e.env), this.opts.env));
-      await client.connect(AbortSignal.timeout(60_000));
-      return client;
-    }
+    if (e.command) return this.greeted(new McpClient(new StdioTransport(e.command, e.args ?? [], this.resolve(e.env), this.opts.env)), this.timeouts.connect * 2);
     const headers = () => this.headersFor(c);
     // Streamable HTTP first; a server that only speaks the older SSE transport says so by refusing the POST.
     if (!/\/sse\/?$/.test(new URL(e.url!).pathname)) {
-      const client = new McpClient(new HttpTransport(e.url!, headers));
       try {
-        await client.connect(AbortSignal.timeout(30_000));
-        return client;
+        return await this.greeted(new McpClient(new HttpTransport(e.url!, headers)), this.timeouts.connect);
       } catch (err) {
         if (!(err instanceof McpError) || ![400, 404, 405].includes(err.code ?? 0)) throw err;
       }
     }
     const sse = new SseTransport(e.url!, headers);
-    await sse.open();
-    const client = new McpClient(sse);
-    await client.connect(AbortSignal.timeout(30_000));
-    return client;
+    await sse.open(AbortSignal.timeout(this.timeouts.connect));
+    return this.greeted(new McpClient(sse), this.timeouts.connect);
+  }
+
+  private get timeouts() {
+    return { connect: 30_000, list: 30_000, ...this.opts.timeouts };
   }
 
   private async connect(c: Connection) {
     this.stop(c);
     const generation = c.generation;
     if (c.entry.enabled === false) return this.set(c, 'off');
-    const missing = this.secretNames(c.entry).filter((name) => !this.opts.env[name]);
+    const names = this.secretNames(c.entry);
+    const own = names.filter((name) => NOVA_OWN_SECRET.test(name));
+    if (own.length) return this.set(c, 'error', `${own.join(' and ')} ${own.length > 1 ? 'are' : 'is'} Nova's own - give this service a secret of its own in .env (for example NOVA_${c.name.toUpperCase().replace(/\W/g, '_')}_TOKEN).`);
+    const missing = names.filter((name) => !this.opts.env[name]);
     if (missing.length) return this.set(c, 'error', `Add ${missing.join(' and ')} to .env, then press Retry.`);
     this.set(c, 'connecting');
+    let client: McpClient | undefined;
     try {
-      const client = await this.open(c);
+      client = await this.open(c);
       if (generation !== c.generation) return client.close();
-      const tools = await client.listTools(AbortSignal.timeout(30_000));
+      const tools = await client.listTools(AbortSignal.timeout(this.timeouts.list));
       if (generation !== c.generation) return client.close();
       c.client = client;
       c.tools = tools;
@@ -333,6 +433,7 @@ export class IntegrationHub implements IntegrationTools {
       client.transport.onClose = (why) => generation === c.generation && this.lost(c, why);
       this.set(c, 'connected');
     } catch (e) {
+      if (client !== c.client) client?.close(); // it said hello but couldn't list its tools: it goes
       if (generation !== c.generation) return;
       if (e instanceof NeedsSignIn) {
         c.canSignIn = true;

@@ -24,8 +24,10 @@ const TYPES: Record<string, string> = {
  * Nova's window, served from the daemon's own address, so the Mac app needs no dev server. Only
  * for requests addressed to this Mac by name (a page elsewhere pointing its own domain at
  * 127.0.0.1 gets nothing), only files inside the build, and never inside another site's frame.
+ * The page carries the daemon's connection secret (`token`): other sites can't read it - the
+ * daemon allows no cross-origin reads - so only this window can use it.
  */
-export async function serveUi(req: IncomingMessage, res: ServerResponse, port: number, root = UI_DIR): Promise<boolean> {
+export async function serveUi(req: IncomingMessage, res: ServerResponse, port: number, root = UI_DIR, token?: string): Promise<boolean> {
   if (req.method !== 'GET' && req.method !== 'HEAD') return false;
   if (req.headers.host !== `127.0.0.1:${port}` && req.headers.host !== `localhost:${port}`) return false;
   let path: string;
@@ -46,8 +48,12 @@ export async function serveUi(req: IncomingMessage, res: ServerResponse, port: n
     return false;
   }
   const index = file === resolve(base, 'index.html');
-  // The page learns it came from the daemon itself, so it talks to the daemon at this address.
-  if (index) body = Buffer.from(body.toString('utf8').replace('<head>', '<head>\n    <meta name="nova-daemon" content="1" />'));
+  // The page learns it came from the daemon itself, so it talks to the daemon at this address, and
+  // how to show it that it's Nova's own window.
+  if (index) {
+    const secret = token && /^[A-Za-z0-9_-]+$/.test(token) ? `\n    <meta name="nova-token" content="${token}" />` : '';
+    body = Buffer.from(body.toString('utf8').replace('<head>', `<head>\n    <meta name="nova-daemon" content="1" />${secret}`));
+  }
   const hashed = file.startsWith(resolve(base, 'assets') + sep); // Vite puts a hash in these names
   res.writeHead(200, {
     'content-type': TYPES[extname(file).toLowerCase()] ?? 'application/octet-stream',

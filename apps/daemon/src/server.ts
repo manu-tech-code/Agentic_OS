@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
-import { createServer } from 'node:http';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { homedir, platform as osPlatform } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
@@ -19,7 +19,7 @@ import {
 } from '@nova/core';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { startBridge } from './agents/bridge.ts';
-import { createAgentHost, type NovaAgentHost } from './agents/host.ts';
+import { createAgentHost, findProjects, type NovaAgentHost } from './agents/host.ts';
 import type { CustomAgentSpec } from './agents/presets.ts';
 import { loadConfig, loadDotEnv, migrateSettings, readSettings, settingsFile, settingsInEnv, watchSettings, writeSettings, type Config, type Settings } from './config.ts';
 import { modelResolver } from './models.ts';
@@ -29,16 +29,34 @@ import { Initiative } from './initiative/index.ts';
 import { IntegrationHub } from './integrations/hub.ts';
 import { Journal, MemoryStore } from './memory/store.ts';
 import { describeContext, Eyes } from './screen/eyes.ts';
+import { connectionToken, refusal, tokenFile, windowOrigins } from './shell/access.ts';
+import { readClientEvent } from './shell/events.ts';
 import { Presence } from './shell/presence.ts';
-import { serveUi } from './shell/static.ts';
+import { serveUi, UI_DIR } from './shell/static.ts';
 import { DEFAULT_REFLEX_MODEL, downloadModel, isInstalled, KOKORO_MODEL, MODELS, PARAKEET_MODEL, SMART_TURN_MODEL, whereInstalled } from './models/files.ts';
 import { forgetLearned, loadReflex, reflexEmbedder, type ReflexRuntime } from './reflex/runtime.ts';
 import { buildSnapshot, validateChanges } from './snapshot.ts';
 import { Trust } from './trust/index.ts';
 import { kokoro, sentences, stopVoice, synthesize } from './voice/tts.ts';
 
+// Something that failed where nothing waited for it is logged, and Nova carries on. An exception
+// nothing caught is survived when it's only a connection or a program that failed (a system call);
+// anything else leaves the daemon in a state nobody knows, so it stops cleanly (Nova.app starts it again).
+/** Stops the daemon cleanly: set once everything it has to stop exists. */
+let shutdown: (code: number) => void = (code) => process.exit(code);
+const why = (e: unknown) => (e instanceof Error ? (e.stack ?? e.message) : String(e));
+process.on('unhandledRejection', (reason) => console.error(`  [daemon] something failed unnoticed: ${why(reason)}`));
+process.on('uncaughtException', (error) => {
+  const { syscall, code } = error as NodeJS.ErrnoException;
+  if (syscall || code?.startsWith('ERR_STREAM_')) return console.error(`  [daemon] ${why(error)}`);
+  console.error(`  [daemon] stopping after an unexpected error: ${why(error)}`);
+  shutdown(1);
+});
+
 loadDotEnv(); // constants and secrets
 const migrated = await migrateSettings(process.env);
+/** What every client shows to connect: a secret only this user can read (see shell/access.ts). */
+const wsToken = await connectionToken();
 // Agents and models act through Nova's skills, with Nova's rules: tool calls come back here.
 let toolHost: NovaBrain | undefined; // set once Nova is up
 const tools: ToolHost = {
@@ -69,34 +87,57 @@ interface Runtime {
   /** Whether hearing's downloadable models are installed. */
   parakeetInstalled: boolean;
   smartTurnInstalled: boolean;
-  /** Paired agents, some kept running as brains; closed when the runtime is replaced. */
+  /** Paired agents, some kept running as brains; closed when a runtime with other agent settings replaces this one. */
   host: NovaAgentHost | null;
+  /** What the host was made from: the same again, and the next runtime keeps it (and the brain's answer in progress). */
+  agentsKey: string;
   options: NovaSettings;
 }
 
-/** Everything Nova runs on: the settings file, plus constants and secrets from .env. */
-async function buildRuntime(): Promise<Runtime> {
-  let settings: Settings = {};
-  let fileError: string | undefined;
+/** The settings file as it is now, or why it can't be read. */
+async function currentSettings(): Promise<{ settings: Settings; fileError?: string }> {
   try {
-    settings = (await readSettings()) ?? {};
+    return { settings: (await readSettings()) ?? {} };
   } catch (e) {
-    fileError = (e as Error).message;
+    return { settings: {}, fileError: (e as Error).message };
   }
+}
+
+/**
+ * Everything Nova runs on: the settings file, plus constants and secrets from .env. The agents of
+ * `previous` stay if nothing about them changed - saving an unrelated setting ("yes, always", say)
+ * never restarts the brain mid-answer.
+ */
+async function buildRuntime(previous?: Runtime): Promise<Runtime> {
+  const { settings, fileError } = await currentSettings();
   const config = loadConfig(settings, process.env);
+  const custom = { ...(await readAgentsFile(config.agentsFile)), ...config.customAgents };
+  const folders = [...(await findProjects(config.projectsDir, config.projects))];
+  const agentsKey = JSON.stringify([config.agents, custom, folders, config.agentOptions, config.agentTaskTimeoutMs, config.name]);
+  const kept = previous && previous.agentsKey === agentsKey;
+  const agents = kept
+    ? previous.host
+    : await createAgentHost({
+        names: config.agents,
+        custom,
+        projects: config.projects,
+        projectsDir: config.projectsDir,
+        options: config.agentOptions,
+        bridge,
+        taskTimeoutMs: config.agentTaskTimeoutMs,
+        assistant: config.name,
+      });
+  try {
+    return await finishRuntime(settings, fileError, config, custom, agents, agentsKey);
+  } catch (e) {
+    if (!kept) agents?.close(); // made for a runtime that never came: its agents go too
+    throw e;
+  }
+}
+
+async function finishRuntime(settings: Settings, fileError: string | undefined, config: Config, custom: Record<string, CustomAgentSpec>, agents: NovaAgentHost | null, agentsKey: string): Promise<Runtime> {
   const models = modelResolver(config.localProviders);
   const hasKey = Boolean(config.gatewayKey);
-  const custom = { ...(await readAgentsFile(config.agentsFile)), ...config.customAgents };
-  const agents = await createAgentHost({
-    names: config.agents,
-    custom,
-    projects: config.projects,
-    projectsDir: config.projectsDir,
-    options: config.agentOptions,
-    bridge,
-    taskTimeoutMs: config.agentTaskTimeoutMs,
-    assistant: config.name,
-  });
 
   // Who answers open questions: a paired agent (claude, codex, ...), a local model (lmstudio/...)
   // or an AI Gateway id (needs the key). Automatic (empty) means the default paired agent.
@@ -113,7 +154,7 @@ async function buildRuntime(): Promise<Runtime> {
   const voiceAt = await whereInstalled(KOKORO_MODEL);
   const voiceInstalled = voiceAt !== null;
   const [parakeetInstalled, smartTurnInstalled] = await Promise.all([isInstalled(PARAKEET_MODEL), isInstalled(SMART_TURN_MODEL)]);
-  if (voiceInstalled) void kokoro(); // warm it up before the first reply
+  if (voiceInstalled) kokoro().catch((e) => console.warn(`  [voice] Kokoro didn't load: ${(e as Error).message}`)); // warm it up before the first reply
   const engine = createDecisionEngine({
     engine: config.engine,
     fallback: config.fallback,
@@ -136,6 +177,7 @@ async function buildRuntime(): Promise<Runtime> {
     parakeetInstalled,
     smartTurnInstalled,
     host: agents,
+    agentsKey,
     options: {
       name: config.name,
       engine,
@@ -252,7 +294,8 @@ integrations.configure(runtime.config.integrations);
 const home = dirname(settingsFile());
 const memory = await new MemoryStore(join(home, 'memory.json'), () => reflexEmbedder(), new Journal(join(home, 'conversations'), () => runtime.config.memory.keepDays)).load();
 memory.suggestions = runtime.config.memory.suggest;
-void memory.journal.prune();
+const pruneJournal = () => memory.journal.prune().catch((e) => console.warn(`  [memory] couldn't tidy the conversation history: ${(e as Error).message}`));
+void pruneJournal();
 
 // Nova Eyes: what the user is working in, with each question, and the screen when they ask.
 const eyes =
@@ -282,7 +325,13 @@ const trust = await new Trust({
   home,
   config: () => runtime.config,
   broadcast,
-  save: (changes) => saveSettings(changes),
+  // Nobody waits for these ("yes, always" is saved while Nova carries on): a save that fails - the
+  // settings file doesn't read as JSON, say - is logged and shown, and the rule holds until Nova restarts.
+  save: (changes) =>
+    saveSettings(changes).catch((e) => {
+      console.warn(`  [trust] couldn't save to ${settingsFile()}: ${(e as Error).message}`);
+      broadcast({ type: 'error', message: `Couldn't save that to Settings: ${(e as Error).message}` });
+    }),
   projectPath: (name) => runtime.host?.projectPath(name),
 }).load();
 const platform = createPlatform();
@@ -336,7 +385,7 @@ hearing = new Hearing({
     broadcastSnapshot();
   },
   transcript: (text, final) => broadcast({ type: 'transcript', text, final }),
-  utterance: (text, explicit) => void nova.handle(text, explicit ? 'shortcut' : 'voice'),
+  utterance: (text, explicit) => void nova.handle(text, explicit ? 'shortcut' : 'voice').catch((e) => console.warn(`  [nova] ${why(e)}`)),
   bargeIn() {
     broadcast({ type: 'barge-in' }); // windows stop the audio
     speaking = null; // and the rest of the reply isn't synthesized
@@ -390,7 +439,10 @@ const snapshot = async () =>
 let snapshots = 0;
 function broadcastSnapshot() {
   const n = ++snapshots; // probing servers takes a moment; only the newest snapshot goes out
-  void snapshot().then((s) => n === snapshots && broadcast({ type: 'settings', snapshot: s }));
+  snapshot().then(
+    (s) => n === snapshots && broadcast({ type: 'settings', snapshot: s }),
+    (e) => console.warn(`  [settings] couldn't put Settings together: ${why(e)}`),
+  );
 }
 // Reminders due while Nova was off come up now; routines and the briefing get their times.
 snapshotsReady = true;
@@ -408,7 +460,11 @@ integrationsChanged = () => {
 };
 
 /** Reflex's classifier trains in the background: tell the Settings window when it's ready. */
-const whenTrained = (r: Runtime) => void r.reflex.classifier.then((trained) => trained && runtime === r && broadcastSnapshot());
+const whenTrained = (r: Runtime) =>
+  void r.reflex.classifier.then(
+    (trained) => trained && runtime === r && broadcastSnapshot(),
+    (e) => console.warn(`  [reflex] its classifier didn't train: ${why(e)}`),
+  );
 whenTrained(runtime);
 
 /** Switch to a new runtime live, and tell every window. */
@@ -421,7 +477,7 @@ function apply(next: Runtime) {
   hearing!.configure(next.config.hearing, vocabulary(), next.config.wakeWords);
   integrations.configure(next.config.integrations);
   memory.suggestions = next.config.memory.suggest;
-  if (next.config.memory.keepDays !== keptDays) void memory.journal.prune().then(broadcastSnapshot);
+  if (next.config.memory.keepDays !== keptDays) void pruneJournal().then(broadcastSnapshot);
   presence.configure(next.config.presence);
   initiative!.configure();
   trust.configure();
@@ -445,7 +501,7 @@ function saveSettings(changes: unknown) {
     const settings = (await readSettings()) ?? {}; // throws for a broken file, so it's never overwritten
     for (const [key, value] of Object.entries(changes)) setPath(settings, key, value ?? undefined);
     await writeSettings(settings);
-    apply(await buildRuntime());
+    apply(await buildRuntime(runtime));
   });
 }
 
@@ -459,7 +515,7 @@ function installReflex(progress: (message: string) => void) {
         if (file === 'model.safetensors' && pct !== shown) progress(`Downloading Reflex… ${(shown = pct)}%`);
       },
     });
-    apply(await buildRuntime());
+    apply(await buildRuntime(runtime));
     return runtime.reflex.model ? 'Reflex is installed and making decisions.' : "Reflex downloaded, but it didn't load - see the daemon log.";
   });
 }
@@ -477,7 +533,7 @@ function installHearing(model: 'parakeet' | 'smart-turn', progress: (message: st
         if (file === big && pct !== shown) progress(`Downloading ${model === 'parakeet' ? 'Parakeet' : 'Smart Turn'}… ${(shown = pct)}%`);
       },
     });
-    apply(await buildRuntime());
+    apply(await buildRuntime(runtime));
     if (model === 'parakeet') hearing!.retry(); // it may have been waiting for this
     return model === 'parakeet'
       ? 'Parakeet is installed. Choose it in Settings → Hearing → Speech recognition.'
@@ -496,48 +552,72 @@ function forgetReflex() {
 // Edits made by hand apply as soon as the file is saved.
 watchSettings(() =>
   queue(async () => {
-    const next = await buildRuntime();
-    if (JSON.stringify([next.settings, next.fileError]) === JSON.stringify([runtime.settings, runtime.fileError])) return; // e.g. our own save
+    // Compared before anything is built: Nova's own save (already applied) starts no second set of agents.
+    const { settings, fileError } = await currentSettings();
+    if (JSON.stringify([settings, fileError]) === JSON.stringify([runtime.settings, runtime.fileError])) return;
     console.log(`  [settings] ${settingsFile()} changed - applying it`);
-    apply(next);
+    apply(await buildRuntime(runtime));
   }).catch((e) => console.warn(`  [settings] ${(e as Error).message}`)),
 );
 
-// Any web page can try to reach localhost - only accept our own shells. Settings changes are
-// allowed only from Nova's own window (or a local process, which already runs as the user).
-const ALLOWED_ORIGIN = /^(https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?|tauri:\/\/localhost|https?:\/\/tauri\.localhost)$/;
-const SETTINGS_ORIGINS = new Set([
-  ...(process.env.NOVA_UI_ORIGINS ?? 'http://localhost:5173,http://127.0.0.1:5173,tauri://localhost,http://tauri.localhost,https://tauri.localhost')
-    .split(',')
-    .map((s) => s.trim()),
-  // The window the daemon serves itself (the Mac app shows it).
-  `http://127.0.0.1:${port}`,
-  `http://localhost:${port}`,
-]);
+// Any web page can try to reach localhost, so every client shows the connection secret (a file only
+// this user can read) and, if it's a page, is one of Nova's own windows: the dev server's or the one
+// the daemon serves (NOVA_UI_ORIGINS). Programs on this Mac - Nova.app - send no Origin. Only those
+// connect, so everything a client can do - speak for the user, change settings, read memories - is
+// theirs alone; being Nova's ears and voice (shell-hello) is Nova.app's alone.
+const windows = windowOrigins(process.env, port);
 
 const page = (title: string, message: string) =>
   `<!doctype html><meta charset="utf-8"><title>${title}</title><body style="font:16px -apple-system,system-ui,sans-serif;display:grid;place-items:center;height:90vh;color:#222"><div><h2>${title}</h2><p>${message}</p></div></body>`;
 const escape = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
 // The daemon's own address: WebSocket for windows, and the page the browser returns to after signing in.
-const http = createServer(async (req, res) => {
-  const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+async function respond(req: IncomingMessage, res: ServerResponse) {
+  let url: URL;
+  try {
+    url = new URL(req.url ?? '/', 'http://127.0.0.1');
+  } catch {
+    return void res.writeHead(400).end(); // not an address at all, e.g. "//%"
+  }
   if (req.method === 'GET' && url.pathname === '/oauth/callback') {
     const done = await integrations
       .completeSignIn(url.searchParams.get('state') ?? '', url.searchParams.get('code'), url.searchParams.get('error'))
       .catch((e: Error) => ({ ok: false, message: e.message }));
     res.writeHead(done.ok ? 200 : 400, { 'content-type': 'text/html; charset=utf-8' });
-    return res.end(page(done.ok ? 'Connected' : "Couldn't connect", escape(done.message)));
+    return void res.end(page(done.ok ? 'Connected' : "Couldn't connect", escape(done.message)));
   }
-  if (await serveUi(req, res, port)) return;
+  if (await serveUi(req, res, port, UI_DIR, wsToken)) return;
   res.writeHead(404).end();
+}
+const http = createServer((req, res) => {
+  respond(req, res).catch((e) => {
+    console.warn(`  [http] ${why(e)}`);
+    if (!res.headersSent) res.writeHead(500);
+    res.end();
+  });
 });
-const wss = new WebSocketServer({ server: http, verifyClient: ({ origin }: { origin?: string }) => !origin || ALLOWED_ORIGIN.test(origin) });
+const wss = new WebSocketServer({
+  server: http,
+  verifyClient: ({ origin, req }: { origin?: string; req: IncomingMessage }, done: (ok: boolean, code?: number, message?: string) => void) => {
+    const refused = refusal(origin, req.url, wsToken, windows);
+    if (refused) done(false, refused, refused === 401 ? 'Unauthorized' : 'Forbidden');
+    else done(true);
+  },
+});
+// Another daemon has the port (or it can't be had): a daemon nobody can reach is no use.
+http.on('error', (e: NodeJS.ErrnoException) => {
+  console.error(e.code === 'EADDRINUSE' ? `  [daemon] port ${port} is in use - is Nova already running?` : `  [daemon] ${why(e)}`);
+  shutdown(1);
+});
+wss.on('error', () => {}); // the same error, passed on by the WebSocket server: handled just above
 http.listen(port, '127.0.0.1');
 
 wss.on('connection', (ws, req) => {
   const origin = req.headers.origin;
-  const mayConfigure = !origin || SETTINGS_ORIGINS.has(origin);
+  // verifyClient already turned away everyone else; this is the same rule, where events are handled.
+  if (refusal(origin, req.url, wsToken, windows)) return ws.close(1008, 'Not one of Nova’s windows');
+  /** A program on this Mac rather than a page: only it may be Nova's ears and voice. */
+  const native = origin === undefined;
   clients.add(ws);
   send(ws, nova.hello());
   send(ws, { type: 'voice-owner', app: presence.connected });
@@ -548,18 +628,11 @@ wss.on('connection', (ws, req) => {
     if (micOwner === ws) (micOwner = null), hearing!.pause();
     presence.detach(ws);
   });
-  ws.on('message', async (raw, isBinary) => {
-    // Microphone audio from the window that hears for Nova.
-    if (isBinary) {
-      if (ws === micOwner) hearing!.audio(raw as Buffer);
-      return;
-    }
-    let event: ClientEvent;
-    try {
-      event = JSON.parse(String(raw));
-    } catch {
-      return;
-    }
+  // A broken connection (a bad frame, a reset) ends only that connection.
+  ws.on('error', (e) => console.warn(`  [ws] ${e.message}`));
+
+  /** One event from this client, already checked to be one Nova understands. */
+  const onEvent = async (event: ClientEvent) => {
     if (event.type === 'utterance') await nova.handle(event.text, event.source);
     else if (event.type === 'audio-start') {
       // The latest window to start its microphone hears for Nova - unless the Mac app does.
@@ -570,6 +643,8 @@ wss.on('connection', (ws, req) => {
     }
     else if (event.type === 'speech-finished') nova.speechFinished();
     else if (event.type === 'shell-hello') {
+      // A page can't take over Nova's microphone, voice and the app's requests - only Nova.app can.
+      if (!native) return send(ws, { type: 'error', message: 'Only Nova.app hears and speaks for Nova.' });
       presence.attach(ws, event.version, runtime.config.presence);
       // A first run: the app opens its window on the walkthrough (once).
       if (presence.isApp(ws) && !initiative!.state.onboarded && !welcomed) {
@@ -588,15 +663,13 @@ wss.on('connection', (ws, req) => {
     } else if (event.type === 'shell-context') {
       if (presence.isApp(ws)) initiative!.onContext(event.context);
     } else if (event.type === 'notification-action') {
-      if (presence.isApp(ws)) void initiative!.onNotification(event.ref, event.action);
+      if (presence.isApp(ws)) await initiative!.onNotification(event.ref, event.action);
     } else if (event.type === 'task-cancel' || event.type === 'task-retry' || event.type === 'reminder-cancel') {
-      if (!mayConfigure) return send(ws, { type: 'settings-result', ok: false, message: 'Only the Nova app can change this.' });
       if (event.type === 'task-cancel') initiative!.cancelTask(event.id);
       else if (event.type === 'task-retry') {
         if (!initiative!.retryTask(event.id)) send(ws, { type: 'settings-result', ok: false, message: "That task can't be run again - its agent or project is gone." });
       } else if (await initiative!.reminders.cancel(event.id)) broadcastSnapshot();
     } else if (event.type === 'activity-undo') {
-      if (!mayConfigure) return send(ws, { type: 'settings-result', ok: false, message: 'Only the Nova app can undo things.' });
       const action = trust.actions.recent(7).find((a) => a.id === event.id);
       const result = await trust.actions.undo(event.id);
       if (result.ok && action) note(`Undid: ${action.label}`, 'done');
@@ -610,7 +683,6 @@ wss.on('connection', (ws, req) => {
       speaking = null;
       nova.stopEverything();
     } else if (event.type === 'setup-done') {
-      if (!mayConfigure) return;
       initiative!.state.setUp();
       broadcastSnapshot();
     } else if (event.type === 'talk-start') {
@@ -627,7 +699,6 @@ wss.on('connection', (ws, req) => {
       hearing!.drop();
       nova.stopListening();
     } else if (event.type === 'shell-action') {
-      if (!mayConfigure) return send(ws, { type: 'settings-result', ok: false, message: 'Only the Nova app can change settings.' });
       if (!presence.action(event.action)) send(ws, { type: 'settings-result', ok: false, message: "Nova.app isn't running - open it, or install it with npm run app." });
     }
     else if (event.type === 'cancel') {
@@ -639,7 +710,6 @@ wss.on('connection', (ws, req) => {
     }
     else if (event.type === 'settings-get') send(ws, { type: 'settings', snapshot: await snapshot() });
     else if (event.type === 'settings-set') {
-      if (!mayConfigure) return send(ws, { type: 'settings-result', ok: false, message: 'Only the Nova app can change settings.' });
       try {
         await saveSettings(event.values);
         send(ws, { type: 'settings-result', ok: true, message: 'Saved' });
@@ -647,7 +717,6 @@ wss.on('connection', (ws, req) => {
         send(ws, { type: 'settings-result', ok: false, message: (error as Error).message });
       }
     } else if (event.type === 'memory-edit' || event.type === 'memory-delete' || event.type === 'memory-clear' || event.type === 'conversations-clear') {
-      if (!mayConfigure) return send(ws, { type: 'settings-result', ok: false, message: 'Only the Nova app can change settings.' });
       if (event.type === 'memory-edit') memory.edit(event.id, event.text);
       else if (event.type === 'memory-delete') memory.forget(event.id);
       else if (event.type === 'memory-clear') await memory.clear();
@@ -657,7 +726,6 @@ wss.on('connection', (ws, req) => {
     } else if (event.type === 'screen-permission' || event.type === 'screen-restart' || event.type === 'screen-preview') {
       if (!eyes) return send(ws, { type: 'settings-result', ok: false, message: 'Seeing the screen needs macOS.' });
       try {
-        if (!mayConfigure) return send(ws, { type: 'settings-result', ok: false, message: 'Only the Nova app can change settings.' });
         if (event.type === 'screen-preview') {
           const { config } = runtime;
           const seen = config.screen.context ? describeContext(await eyes.context(), config.name) : null;
@@ -686,7 +754,6 @@ wss.on('connection', (ws, req) => {
         send(ws, { type: 'settings-result', ok: false, message: (error as Error).message });
       }
     } else if (event.type === 'integration-sign-in' || event.type === 'integration-sign-out' || event.type === 'integration-retry') {
-      if (!mayConfigure) return send(ws, { type: 'settings-result', ok: false, message: 'Only the Nova app can change settings.' });
       try {
         if (event.type === 'integration-sign-in') {
           await integrations.signIn(event.name);
@@ -702,7 +769,6 @@ wss.on('connection', (ws, req) => {
         send(ws, { type: 'settings-result', ok: false, message: (error as Error).message });
       }
     } else if (event.type === 'reflex-install' || event.type === 'reflex-forget' || event.type === 'hearing-install') {
-      if (!mayConfigure) return send(ws, { type: 'settings-result', ok: false, message: 'Only the Nova app can change settings.' });
       try {
         const progress = (message: string) => send(ws, { type: 'settings-result', ok: true, message });
         const done =
@@ -712,29 +778,45 @@ wss.on('connection', (ws, req) => {
         send(ws, { type: 'settings-result', ok: false, message: (error as Error).message });
       }
     }
+  };
+
+  ws.on('message', (raw, isBinary) => {
+    // Microphone audio from the window that hears for Nova.
+    if (isBinary) {
+      if (ws === micOwner) hearing!.audio(raw as Buffer);
+      return;
+    }
+    const event = readClientEvent(String(raw));
+    if (!event) return console.warn("  [ws] ignored a message that isn't one Nova understands");
+    onEvent(event).catch((e) => {
+      console.warn(`  [ws] ${event.type}: ${why(e)}`);
+      send(ws, { type: 'error', message: `That didn't work: ${(e as Error).message}` });
+    });
   });
 });
 
-// Ctrl+C, or tsx watch restarting after an edit: stop the voice process and the agents kept running.
-for (const signal of ['SIGINT', 'SIGTERM'] as const) {
-  process.once(signal, () => {
-    stopVoice();
-    hearing?.close();
-    integrations.close();
-    eyes?.close();
-    runtime.host?.close();
-    // What was just said to remember gets to disk first (a moment at most).
-    initiative?.close();
-    trust.close();
-    void Promise.race([Promise.all([memory.flushed(), initiative?.flushed(), trust.flushed()]), new Promise((r) => setTimeout(r, 1000))]).finally(() => process.exit(0));
-  });
-}
+// Ctrl+C, tsx watch restarting after an edit, or an error nothing could handle: stop the voice
+// process and the agents kept running, and let what was just said to remember get to disk first.
+let stopping = false;
+shutdown = (code) => {
+  if (stopping) return;
+  stopping = true;
+  for (const stop of [stopVoice, () => hearing?.close(), () => integrations.close(), () => eyes?.close(), () => runtime.host?.close(), () => initiative?.close(), () => trust.close()]) {
+    try {
+      stop();
+    } catch (e) {
+      console.warn(`  [daemon] while stopping: ${why(e)}`);
+    }
+  }
+  void Promise.race([Promise.all([memory.flushed(), initiative?.flushed(), trust.flushed()]), new Promise((r) => setTimeout(r, 1000))]).finally(() => process.exit(code));
+};
+for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, () => shutdown(0));
 
 function banner() {
   const { config, options } = runtime;
   const agents = options.agents;
   console.log(`
-  Nova daemon  ws://127.0.0.1:${port}
+  Nova daemon  ws://127.0.0.1:${port} · clients show the secret in ${tokenFile()}
   Settings     ${settingsFile()}
   Name         ${config.name}
   System 1     ${options.engine.name}${runtime.reflex.model ? ` · learned ${runtime.reflex.model.learned.length}` : ['auto', 'reflex'].includes(config.engine) ? ' (install Reflex: npm run reflex:download, or Settings → Decisions)' : ''}

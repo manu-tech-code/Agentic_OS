@@ -1,20 +1,42 @@
 import Foundation
 
+extension ShellConfig {
+  /// The daemon's connection secret, which only this user can read: next to the settings file.
+  var tokenFile: URL { home.appendingPathComponent("run", isDirectory: true).appendingPathComponent("ws-token") }
+}
+
 /// The app's line to the daemon: a WebSocket on this Mac, with JSON events both ways and the
 /// microphone as binary frames. It reconnects by itself - the daemon restarts, or starts late.
+/// The daemon only answers clients that show its connection secret, read afresh for each connection.
 final class Link: NSObject, URLSessionWebSocketDelegate {
   var onEvent: ([String: Any]) -> Void = { _ in }
   var onOpen: () -> Void = {}
   var onClose: () -> Void = {}
   private(set) var isOpen = false
   private let url: URL
+  private let tokenFile: URL?
   private var task: URLSessionWebSocketTask?
   private lazy var session = URLSession(configuration: .ephemeral, delegate: self, delegateQueue: .main)
   private var retry: Timer?
   private var stopped = true
 
-  init(url: URL) {
+  init(url: URL, tokenFile: URL?) {
     self.url = url
+    self.tokenFile = tokenFile
+  }
+
+  /// The secret's file is where shell.json says the settings file is.
+  convenience init(url: URL) {
+    self.init(url: url, tokenFile: ShellConfig.load()?.tokenFile)
+  }
+
+  /// The daemon's address with the secret, as the file holds it now (it's made when the daemon first starts).
+  private func address() -> URL {
+    guard let tokenFile, let raw = try? String(contentsOf: tokenFile, encoding: .utf8) else { return url }
+    let token = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !token.isEmpty, var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
+    parts.queryItems = (parts.queryItems ?? []).filter { $0.name != "token" } + [URLQueryItem(name: "token", value: token)]
+    return parts.url ?? url
   }
 
   func start() {
@@ -43,7 +65,7 @@ final class Link: NSObject, URLSessionWebSocketDelegate {
   private func connect() {
     retry?.invalidate()
     retry = nil
-    let task = session.webSocketTask(with: url)
+    let task = session.webSocketTask(with: address())
     task.maximumMessageSize = 32 << 20 // a long sentence of speech audio is several MB of base64
     self.task = task
     task.resume()
