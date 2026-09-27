@@ -138,4 +138,16 @@ describe('hearing on the Mac', () => {
     expect(isBargeIn('on your screen', said)).toBe(false); // echo
     expect(isBargeIn('okay', said)).toBe(false); // one word that isn't "stop"
   });
+
+  it("isn't stopped by its own voice saying a stop word, and answers to the name it was given", () => {
+    expect(isBargeIn('no', 'No timers are running.')).toBe(false); // Nova's own "No…", heard back
+    expect(isBargeIn('stop', 'Stop everything? Say yes or no.')).toBe(false);
+    expect(isBargeIn('no', 'Quit Spotify? Unsaved work could be lost.')).toBe(true);
+    expect(isBargeIn('no stop', 'No timers are running.')).toBe(true); // more than the echo
+    const jarvis = ['hey jarvis', 'okay jarvis', 'jarvis'];
+    const said = 'Opening Figma now. It should be on your screen in a moment.';
+    expect(isBargeIn('jarvis', said, jarvis)).toBe(true);
+    expect(isBargeIn('nova', said, jarvis)).toBe(false); // not its name any more
+    expect(isBargeIn('okay', said, jarvis)).toBe(false); // half a wake word
+  });
 });
