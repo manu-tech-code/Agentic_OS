@@ -40,7 +40,9 @@ final class HudPanel: NSPanel {
     if mode != self.mode { novaLog.notice("orb: \(mode, privacy: .public) \(Int(width))×\(Int(height))") }
     self.mode = mode
     guard mode != "hidden" else { return disappear() }
-    let size = NSSize(width: max(40, width), height: max(40, height))
+    // However the page misbehaves (a bug, or a stranger's page it shouldn't have loaded at all), the
+    // orb never grows past a small card - never big enough to cover the screen or block what's under it.
+    let size = NSSize(width: HudPanel.clamp(width), height: HudPanel.clamp(height))
     glass.maskImage = HudPanel.mask(radius: mode == "orb" ? size.height / 2 : 20)
     if !isVisible {
       screenShown = HudPanel.screenUnderPointer()
@@ -76,6 +78,10 @@ final class HudPanel: NSPanel {
     let y = corner.hasPrefix("top") ? area.maxY - size.height : area.minY
     return NSRect(x: x.rounded(), y: y.rounded(), width: size.width, height: size.height)
   }
+
+  /// However big the page claims to be, never smaller than the collapsed orb or bigger than a card
+  /// comfortably holding a few lines of reply.
+  static func clamp(_ value: CGFloat) -> CGFloat { min(max(40, value), 480) }
 
   private static func screenUnderPointer() -> NSScreen? {
     let mouse = NSEvent.mouseLocation

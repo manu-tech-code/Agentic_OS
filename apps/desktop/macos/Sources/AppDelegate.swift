@@ -92,12 +92,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     if let stop = AppDelegate.stopShortcut, let problem = stopKey.register(stop) { novaLog.error("The stop shortcut: \(problem, privacy: .public)") }
     bar.fill = { [weak self] in self?.fillMenu($0) }
 
-    hudPage = WebHost(transparent: true) { [weak self] in self?.page(hud: true) ?? config.daemonPage }
+    hudPage = WebHost(transparent: true, allowedOrigins: { [weak self] in self?.allowedOrigins() ?? [] }) { [weak self] in self?.page(hud: true) ?? config.daemonPage }
     hudPage.onMessage = { [weak self] in self?.fromPage($0) }
     hudPage.onLoad = { [weak self] in self?.pushState(force: true) }
     hud = HudPanel(web: hudPage.view)
     hud.title = name
 
+    // What Settings said last time, so the microphone behaves correctly from this moment - not
+    // "always" (the hardcoded default) - even before the daemon connects and says it again.
+    if let last = PresenceConfig.loadLast() {
+      presence = last
+      configured = true
+    }
     watchSystem()
     locked = AppDelegate.screenLocked()
     checkDevUi()
@@ -160,6 +166,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       if let json = event["presence"] as? [String: Any] {
         presence = PresenceConfig(json)
         configured = true
+        presence.saveAsLast()
         applyPresence()
       }
     case "shell-action":
@@ -168,12 +175,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       answer(event)
     case "phase":
       phase = event["phase"] as? String ?? "idle"
-      if phase == "idle" {
-        // The conversation is over: back to listening the usual way.
-        summoned = false
-        tapped = false
-        talk = nil
-      }
+      if phase == "idle" { clearTalk() } // the conversation is over: back to listening the usual way
     case "transcript":
       if let text = event["text"] as? String, !text.isEmpty { heardSinceTap = true }
     case "say":
@@ -292,9 +294,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
   /// Whether the microphone should be on right now.
   private var wantsMicrophone: Bool {
-    guard micAllowed, !asleep, link.isOpen, hearing != "browser" else { return false }
-    if summoned { return true }
+    // Not configured yet: Settings hasn't said what to do (or a persisted guess), so the microphone
+    // stays off rather than briefly listening "always" - the hardcoded default - at every launch.
+    guard configured, micAllowed, !asleep, link.isOpen, hearing != "browser" else { return false }
+    // Locked or muted always wins, even over a shortcut summon from before the screen locked.
     if muted || (locked && presence.pauseWhenLocked) { return false }
+    if summoned { return true }
     switch presence.listen {
     case "always": return true
     case "window": return window?.isVisible == true
@@ -324,12 +329,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   private func setMuted(_ on: Bool) {
     muted = on
     UserDefaults.standard.set(on, forKey: "muted")
-    if on {
-      summoned = false
-      tapped = false
-      talk = nil
-    }
+    if on { clearTalk() }
     refresh()
+  }
+
+  /// Whatever the shortcut was doing is over: muted, the screen locked or slept, or the conversation
+  /// finished. Cleared here so a stale summon can't keep the microphone on through any of those.
+  private func clearTalk() {
+    summoned = false
+    tapped = false
+    talk = nil
   }
 
   private func level(_ value: Float) {
@@ -349,8 +358,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     if voice.speaking { voice.stopPlayback() } // cut in at once; the daemon stops the rest
     summoned = true
     talk = "hold"
-    refresh() // the microphone comes on, if it was off
+    // Before refresh(), which can block for a moment rebuilding voice processing for the microphone -
+    // the daemon should hear "talk-start" (and so stop and listen) without waiting on that.
     link.send(["type": "talk-start"])
+    refresh() // the microphone comes on, if it was off
     if presence.sounds && !secondTap { voice.chime() }
     pushState(force: true)
   }
@@ -555,14 +566,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     case "expand": openWindow()
     case "talk": talkNow()
     case "mute": setMuted(message["on"] as? Bool ?? true)
+    case "preview":
+      if let voice = message["voice"] as? String { previewVoice(voice) }
     default: break
     }
+  }
+
+  /// Settings asked to hear a voice: asked for over the app's own connection, so the audio comes
+  /// back through Voice's engine (already wired to `handle`'s "audio" case) - echo-cancelled, like
+  /// any other reply - rather than through the page's own, which the microphone would just hear.
+  private func previewVoice(_ voice: String) {
+    link.send(["type": "voice-preview", "id": "preview-\(UUID().uuidString.prefix(8))", "voice": voice])
   }
 
   private func openWindow(panel: String? = nil) {
     if window == nil {
       windowPanel = panel
-      let page = WebHost(transparent: false) { [weak self] in self?.page(hud: false) ?? self!.config.daemonPage }
+      let page = WebHost(transparent: false, allowedOrigins: { [weak self] in self?.allowedOrigins() ?? [] }) { [weak self] in self?.page(hud: false) ?? self!.config.daemonPage }
       page.onMessage = { [weak self] in self?.fromPage($0) }
       page.onLoad = { [weak self] in
         self?.windowPanel = nil
@@ -572,6 +592,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       window.delegate = self
       self.window = window
       windowPage = page
+    } else if let panel {
+      // windowPanel only takes on a fresh page load - the window already has one, so the page is
+      // told directly (novaShell.open), the same way a live state push reaches it.
+      windowPage?.call("open", panel)
     }
     NSApp.setActivationPolicy(.regular)
     window?.makeKeyAndOrderFront(nil)
@@ -600,8 +624,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     guard let dev = config.devUi, let url = URL(string: dev) else { return }
     var request = URLRequest(url: url)
     request.timeoutInterval = 0.6
-    URLSession.shared.dataTask(with: request) { [weak self] _, response, _ in
-      let up = (response as? HTTPURLResponse)?.statusCode == 200
+    URLSession.shared.dataTask(with: request) { [weak self] data, response, _ in
+      let up = (response as? HTTPURLResponse)?.statusCode == 200 && AppDelegate.isNovaPage(data)
       DispatchQueue.main.async {
         guard let self, up != self.devUiUp else { return }
         self.devUiUp = up
@@ -611,12 +635,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }.resume()
   }
 
+  /// Whatever answers on the dev server's port - before the app treats it as Nova's own and loads it
+  /// into its privileged views. Anyone can run a Vite project on 5173; this checks the page itself,
+  /// not just that something's there. `apps/desktop/index.html` ideally carries a `nova-app` meta tag
+  /// (ask the lead to add one) - until then, the page's known entry point is the fallback signal.
+  static func isNovaPage(_ data: Data?) -> Bool {
+    guard let data, let body = String(data: data, encoding: .utf8) else { return false }
+    return body.contains(#"name="nova-app""#) || (body.contains("/src/main.tsx") && body.contains("<title>Nova</title>"))
+  }
+
+  /// Origins the page may load from and talk to the app from: the daemon's own address always, and
+  /// the dev server too while it's confirmed to be Nova's own and switched on. Anything else is a
+  /// stranger that happens to answer on the same port, or a page trying to take Nova's window
+  /// somewhere else - never trusted with the microphone, HUD sizing, or a place to navigate to.
+  private func allowedOrigins() -> Set<String> {
+    var origins: Set<String> = []
+    if let o = WebHost.originString(config.daemonPage) { origins.insert(o) }
+    if devUiUp, let dev = config.devUi, let url = URL(string: dev), let o = WebHost.originString(url) { origins.insert(o) }
+    return origins
+  }
+
   // MARK: The Mac
 
   private func watchSystem() {
     let distributed = DistributedNotificationCenter.default()
     distributed.addObserver(forName: .init("com.apple.screenIsLocked"), object: nil, queue: .main) { [weak self] _ in
       self?.locked = true
+      self?.clearTalk() // whatever the shortcut had going is over now, not resumed on unlock
       self?.refresh()
       self?.pushContext(force: true)
     }
@@ -631,6 +676,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let workspace = NSWorkspace.shared.notificationCenter
     workspace.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
       self?.asleep = true
+      self?.clearTalk() // whatever the shortcut had going is over now, not resumed on waking
       self?.refresh()
     }
     workspace.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in

@@ -58,4 +58,22 @@ struct PresenceConfig: Equatable {
     launchAtLogin = json["launchAtLogin"] as? Bool ?? launchAtLogin
     daemon = json["daemon"] as? String ?? daemon
   }
+
+  var json: [String: Any] {
+    ["shortcut": shortcut, "listen": listen, "pauseWhenLocked": pauseWhenLocked, "orb": orb, "orbSeconds": orbSeconds, "sounds": sounds, "launchAtLogin": launchAtLogin, "daemon": daemon]
+  }
+
+  private static let defaultsKey = "lastPresence"
+
+  /// What Settings said last time, kept on this Mac so the microphone behaves correctly from launch -
+  /// before the daemon connects and says the real thing (shell-config).
+  static func loadLast() -> PresenceConfig? {
+    guard let data = UserDefaults.standard.data(forKey: defaultsKey), let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+    return PresenceConfig(json)
+  }
+
+  func saveAsLast() {
+    guard let data = try? JSONSerialization.data(withJSONObject: json) else { return }
+    UserDefaults.standard.set(data, forKey: Self.defaultsKey)
+  }
 }
