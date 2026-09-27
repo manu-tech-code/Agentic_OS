@@ -9,12 +9,18 @@ on:
 permissions:
   contents: write
 
+# One release at a time: two quick merges into main never race for a name.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   release:
     name: Release branch
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Branch the release off main
         run: |
           version=$(node -p "require('./package.json').version")
