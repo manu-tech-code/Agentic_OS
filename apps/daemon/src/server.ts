@@ -444,7 +444,7 @@ function broadcastSnapshot() {
     (e) => console.warn(`  [settings] couldn't put Settings together: ${why(e)}`),
   );
 }
-// Reminders due while Nova was off come up now; routines and the briefing get their times.
+// Reminders due while Nova was off come up once a window or Nova.app connects; routines and the briefing get their times.
 snapshotsReady = true;
 await initiative.load();
 
@@ -619,6 +619,7 @@ wss.on('connection', (ws, req) => {
   /** A program on this Mac rather than a page: only it may be Nova's ears and voice. */
   const native = origin === undefined;
   clients.add(ws);
+  initiative!.onListener(); // someone can hear now: reminders that came due while Nova was off
   send(ws, nova.hello());
   send(ws, { type: 'voice-owner', app: presence.connected });
   send(ws, { type: 'tasks', tasks: initiative!.tasks.list().slice(0, 50) });
@@ -706,7 +707,10 @@ wss.on('connection', (ws, req) => {
       nova.cancel();
     }
     else if (event.type === 'voice-preview') {
-      speakAloud(event.id, `Hi, I'm ${runtime.config.name}. This is how I sound.`, event.voice, (e) => send(ws, e));
+      // Played where Nova's voice plays (Nova.app's echo canceller knows it), and heard as Nova speaking - never as a request.
+      const text = `Hi, I'm ${runtime.config.name}. This is how I sound.`;
+      hearing?.setSpoken(text);
+      void speakAloud(event.id, text, event.voice, presence.connected ? toVoice : (e) => send(ws, e)).finally(() => hearing?.setSpoken(replyText || null));
     }
     else if (event.type === 'settings-get') send(ws, { type: 'settings', snapshot: await snapshot() });
     else if (event.type === 'settings-set') {

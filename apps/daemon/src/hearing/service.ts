@@ -379,7 +379,7 @@ export class Hearing {
     this.turn.text(text);
     this.events.transcript(text, false);
     // Talking over Nova stops it (once per turn).
-    if (this.spoken !== null && this.config?.bargeIn && !this.interrupted && isBargeIn(text, this.spoken)) {
+    if (this.spoken !== null && this.config?.bargeIn && !this.interrupted && isBargeIn(text, this.spoken, this.wakeWords)) {
       this.interrupted = true;
       this.events.bargeIn();
     }

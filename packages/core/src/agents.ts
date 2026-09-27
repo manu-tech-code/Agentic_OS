@@ -5,6 +5,8 @@ export interface AgentStep {
   kind: 'command' | 'edit' | 'read' | 'search' | 'message' | 'other';
   /** Short and human, e.g. "running npm test" or "editing App.tsx". */
   text: string;
+  /** The files an edit step changes, as the agent named them (absolute or relative to the project). */
+  files?: string[];
 }
 
 /** A step an agent wants permission for; Nova asks the user out loud. */

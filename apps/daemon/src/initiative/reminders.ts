@@ -46,7 +46,7 @@ const REPEAT_LATE_MS = 3_600_000;
 const RECENT_MS = 15 * 60_000;
 
 const newId = () => randomBytes(5).toString('hex');
-const plain = ({ created: _c, appleId: _a, appleOnly: _o, ...r }: Stored): Reminder => r;
+const plain = ({ created: _c, appleId: _a, ...r }: Stored): Reminder => r;
 const valid = (r: Stored) => typeof r?.id === 'string' && typeof r.text === 'string' && (r.due === null || Number.isFinite(r.due));
 
 export class ReminderStore implements ReminderService {

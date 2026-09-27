@@ -13,3 +13,7 @@ apps/daemon/native/*/.swiftpm/
 apps/daemon/native/*/.vendor/
 apps/desktop/macos/.build/
 apps/desktop/macos/.swiftpm/
+
+# Claude Code: agents' worktrees and personal settings stay local
+.claude/worktrees/
+.claude/settings.local.json

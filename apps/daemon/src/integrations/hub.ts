@@ -155,13 +155,14 @@ export class IntegrationHub implements IntegrationTools {
       const policy = this.policy(c, tool);
       if (policy === 'block') continue;
       const label = this.label(c);
-      const tier = policyTier(policy);
+      const tier = policyTier(policy, tool.name);
       const schema = (tool.inputSchema ?? {}) as Record<string, unknown>;
       const title = tool.title ?? tool.annotations?.title;
       out.push({
         name,
         label,
         tier,
+        readOnly: tool.annotations?.readOnlyHint === true,
         description: `${label}: ${(tool.description ?? title ?? tool.name).trim().slice(0, 1000)}${tier >= 2 ? ' The assistant asks the user out loud first.' : ''}`,
         parameters: {
           ...schema,

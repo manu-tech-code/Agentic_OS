@@ -41,7 +41,7 @@ export function describeTool(name: string, input: any): AgentStep {
     case 'MultiEdit':
     case 'Write':
     case 'NotebookEdit':
-      return { kind: 'edit', text: `editing ${base(input?.file_path ?? input?.notebook_path)}` };
+      return { kind: 'edit', text: `editing ${base(input?.file_path ?? input?.notebook_path)}`, files: [input?.file_path ?? input?.notebook_path].filter((f): f is string => typeof f === 'string' && f !== '') };
     case 'Read':
       return { kind: 'read', text: `reading ${base(input?.file_path)}` };
     case 'Glob':
@@ -193,7 +193,9 @@ function codexReader(): OutputReader {
         case 'command_execution':
           return started ? { kind: 'command', text: `running ${clip(unwrapShell(String(item.command ?? '')))}` } : null;
         case 'file_change':
-          return completed ? { kind: 'edit', text: `editing ${(item.changes ?? []).map((c: any) => base(c.path)).join(', ') || 'files'}` } : null;
+          return completed
+            ? { kind: 'edit', text: `editing ${(item.changes ?? []).map((c: any) => base(c.path)).join(', ') || 'files'}`, files: (item.changes ?? []).map((c: any) => c.path).filter((f: unknown): f is string => typeof f === 'string' && f !== '') }
+            : null;
         case 'web_search':
           return started ? { kind: 'search', text: 'searching the web' } : null;
         case 'mcp_tool_call':
@@ -227,7 +229,7 @@ function opencodeReader(): OutputReader {
         const input = part.state?.input ?? {};
         const tool = String(part.tool ?? 'a tool');
         if (tool === 'bash') return { kind: 'command', text: `running ${clip(String(input.command ?? ''))}` };
-        if (tool === 'edit' || tool === 'write') return { kind: 'edit', text: `editing ${base(input.filePath)}` };
+        if (tool === 'edit' || tool === 'write') return { kind: 'edit', text: `editing ${base(input.filePath)}`, files: typeof input.filePath === 'string' && input.filePath ? [input.filePath] : [] };
         return { kind: 'other', text: `using ${tool}` };
       }
       return null;

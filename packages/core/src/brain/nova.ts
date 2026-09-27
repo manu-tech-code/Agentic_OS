@@ -1,4 +1,4 @@
-import type { AgentHost, ApprovalRequest } from '../agents.ts';
+import type { AgentHost, AgentStep, ApprovalRequest } from '../agents.ts';
 import { topProbability } from '../decision/distribution.ts';
 import { aliasesFor, matchName, nameTokens } from '../decision/reflex/names.ts';
 import type { DecisionEngine } from '../decision/types.ts';
@@ -89,6 +89,8 @@ export interface NovaOptions {
   deliver?: (news: News) => void;
   /** Every change to an agent task, for the task board. */
   onTask?: (task: TaskRecord) => void;
+  /** Each step of an agent's task (the files an edit changes, for undoing exactly those). */
+  onTaskStep?: (task: TaskRecord, step: AgentStep) => void;
   /** Agent tasks that ended, newest first (the task board keeps them). */
   taskHistory?: () => TaskRecord[];
   /** The record of what Nova did, and taking things back. */
@@ -970,6 +972,7 @@ export class NovaBrain implements ToolHost {
             onStep: (step) => {
               show(step.text);
               update({ step: step.text });
+              this.opts.onTaskStep?.({ ...record }, step);
               if (step.kind === 'command' || step.kind === 'edit') this.activity(`${agent.label}: ${step.text}`, 'done', undefined, { by: agent.label });
             },
             approve: (request) => this.requestApproval(id, agent, project, request),
