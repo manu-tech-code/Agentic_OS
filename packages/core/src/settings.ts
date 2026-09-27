@@ -102,7 +102,6 @@ export type SettingsSection =
   | 'models'
   | 'agents'
   | 'projects'
-  | 'gateway'
   | 'privacy'
   | 'system';
 
@@ -149,7 +148,6 @@ export const SECTIONS: { id: SettingsSection; label: string; icon: string; blurb
   { id: 'models', label: 'Local models', icon: '▣', blurb: 'Model servers on this Mac: LM Studio, Ollama, oMLX and anything OpenAI-compatible.' },
   { id: 'agents', label: 'Agents', icon: '✳︎', blurb: 'Agents Nova hands questions and project tasks to. Each runs its own CLI, signed in with your account.' },
   { id: 'projects', label: 'Projects', icon: '▤', blurb: 'Folders agents may work in. Speech only ever picks one of these names.' },
-  { id: 'gateway', label: 'Cloud gateway', icon: '☁︎', blurb: 'An optional Vercel AI Gateway key, for Jev and cloud models.' },
   {
     id: 'privacy',
     label: 'Privacy & trust',
@@ -619,8 +617,8 @@ export const FIELDS: SettingField[] = [
       { value: 'auto', label: 'Automatic - Reflex when installed' },
       { value: 'reflex', label: "Reflex - Nova's own, on this Mac, in about a millisecond" },
       { value: 'heuristic', label: 'Keyword matcher - offline and instant' },
-      { value: 'llm', label: 'Language model' },
-      { value: 'jev', label: 'Jev - Vercel AI Gateway' },
+      { value: 'llm', label: 'Language model - on one of your model servers' },
+      { value: 'jev', label: "Jev - TypeSafe's System One model, in the cloud (needs NOVA_JEV_API_KEY)" },
     ],
   },
   {
@@ -630,7 +628,7 @@ export const FIELDS: SettingField[] = [
     help: 'When you say yes to "Quit Spotify?" or answer "Which app?", Reflex remembers what that request meant. Kept on this Mac.',
     type: 'toggle',
     default: true,
-    when: { key: 'decisions.engine', is: ['auto', 'reflex'] },
+    when: { key: 'decisions.engine', is: ['auto', 'reflex', 'jev'] },
   },
   {
     key: 'decisions.model',
@@ -647,15 +645,26 @@ export const FIELDS: SettingField[] = [
     section: 'decisions',
     label: 'When it fails or runs slow',
     type: 'select',
-    default: 'heuristic',
+    default: 'auto',
     options: [
+      { value: 'auto', label: 'Automatic - Reflex, or the keyword matcher without it' },
+      { value: 'reflex', label: 'Use Reflex' },
       { value: 'heuristic', label: 'Use the keyword matcher' },
       { value: 'llm', label: 'Use the decision model' },
       { value: 'none', label: 'Say it failed' },
     ],
   },
-  { key: 'decisions.timeoutMs', section: 'decisions', label: 'Time limit', help: 'Language-model decisions always get at least 6 seconds.', type: 'number', default: 1500, unit: 'ms', min: 200, max: 30000, step: 100 },
-  { key: 'decisions.jevModel', section: 'decisions', label: 'Jev model', type: 'text', default: 'typesafe-ai/jev', when: { key: 'decisions.engine', is: ['jev'] } },
+  { key: 'decisions.timeoutMs', section: 'decisions', label: 'Time limit', help: 'How long Nova waits for Jev before Reflex decides instead. A model on your own server always gets at least 6 seconds.', type: 'number', default: 1500, unit: 'ms', min: 200, max: 30000, step: 100 },
+  {
+    key: 'decisions.jevModel',
+    section: 'decisions',
+    label: 'Jev model',
+    help: 'jev-latest follows the current release; jev-preview tries the next one; a version (jev-1.13.0) stays put.',
+    type: 'text',
+    default: 'jev-latest',
+    placeholder: 'jev-latest',
+    when: { key: 'decisions.engine', is: ['jev'] },
+  },
 
   {
     key: 'answers.model',

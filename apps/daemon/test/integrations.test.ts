@@ -19,14 +19,14 @@ const until = async (check: () => boolean, ms = 10_000) => {
 
 describe('a local integration', () => {
   it('connects over stdio with a clean environment, and calls its tools', async () => {
-    const client = new McpClient(new StdioTransport(process.execPath, [FAKE], { NOTES: 'on' }, { PATH: process.env.PATH, HOME: '/tmp', AI_GATEWAY_API_KEY: 'secret' }));
+    const client = new McpClient(new StdioTransport(process.execPath, [FAKE], { NOTES: 'on' }, { PATH: process.env.PATH, HOME: '/tmp', NOVA_JEV_API_KEY: 'secret' }));
     await client.connect();
     expect(client.server.name).toBe('Notes');
     expect((await client.listTools()).map((t) => t.name)).toEqual(['list_notes', 'add_note', 'delete_note']);
     expect(await client.callTool('list_notes', {})).toBe('notes: milk, eggs');
     const { env } = await client.transport.request('env', {});
     expect(env.NOTES).toBe('on');
-    expect(env.AI_GATEWAY_API_KEY).toBeUndefined(); // Nova's own keys never reach a service
+    expect(env.NOVA_JEV_API_KEY).toBeUndefined(); // Nova's own keys never reach a service
     client.close();
   });
 
@@ -51,14 +51,14 @@ describe('a local integration', () => {
   });
 
   it("is never given Nova's own secrets", async () => {
-    const env = { ...process.env, AI_GATEWAY_API_KEY: 'gateway-secret', NOVA_OMLX_API_KEY: 'server-secret' };
+    const env = { ...process.env, NOVA_JEV_API_KEY: 'jev-secret', NOVA_OMLX_API_KEY: 'server-secret' };
     const hub = new IntegrationHub({ env, redirectUri: () => '', open: () => {}, changed: () => {}, signIns: new SignIns() });
     hub.configure({
-      local: { command: process.execPath, args: [FAKE], env: { KEY: '${AI_GATEWAY_API_KEY}' } },
+      local: { command: process.execPath, args: [FAKE], env: { KEY: '${NOVA_JEV_API_KEY}' } },
       hosted: { url: 'https://example.invalid/mcp', headers: { Authorization: 'Bearer ${NOVA_OMLX_API_KEY}' } },
     });
     await until(() => hub.status().every((s) => s.state === 'error'));
-    expect(hub.status().map((s) => s.message)).toEqual([expect.stringMatching(/AI_GATEWAY_API_KEY is Nova's own/), expect.stringMatching(/NOVA_OMLX_API_KEY is Nova's own/)]);
+    expect(hub.status().map((s) => s.message)).toEqual([expect.stringMatching(/NOVA_JEV_API_KEY is Nova's own/), expect.stringMatching(/NOVA_OMLX_API_KEY is Nova's own/)]);
     hub.close();
   });
 

@@ -6,6 +6,7 @@ import {
   agentSkills,
   buildQuestions,
   builtinSkills,
+  createDecisionEngine,
   handsSkills,
   HeuristicEvaluationModel,
   initiativeSkills,
@@ -17,7 +18,7 @@ import {
   topProbability,
   type EvaluationModelV4,
 } from '@nova/core';
-import { loadDotEnv } from '../config.ts';
+import { loadConfig, loadDotEnv, readSettings } from '../config.ts';
 import { EVAL_AGENTS, EVAL_APPS, EVAL_PROJECTS, REPLIES, SET_A, SET_B, SET_C, SET_D, SET_E } from './evalSet.ts';
 import { DEFAULT_REFLEX_MODEL, readModelFiles } from '../models/files.ts';
 
@@ -73,7 +74,31 @@ const pct = (n: number, d: number) => (d ? `${Math.round((n / d) * 100)}%`.padSt
 const chosen = (process.env.REFLEX_SETS ?? 'A,B,C,D,E').split(',');
 const sets = ([['A', SET_A], ['B', SET_B], ['C', SET_C], ['D', SET_D], ['E', SET_E]] as const).filter(([name]) => chosen.includes(name));
 const HELD_OUT = new Set(['C', 'E']);
-const models = [['keywords', keywords], ['examples', examplesOnly], ['reflex  ', reflex]] as const;
+// REFLEX_JEV=1 measures Jev too, on the same phrasings - through Nova's DecisionEngine, with no fallback,
+// so a failure counts as one. It needs NOVA_JEV_API_KEY, and each phrasing is a billed call to TypeSafe.
+const jev = process.env.REFLEX_JEV === '1' ? jevModel(loadConfig((await readSettings().catch(() => null)) ?? {}, process.env)) : null;
+const models = [['keywords', keywords], ['examples', examplesOnly], ['reflex  ', reflex], ...(jev ? ([['jev     ', jev]] as const) : [])] as const;
+
+function jevModel(config: ReturnType<typeof loadConfig>): EvaluationModelV4 {
+  if (!config.jevKey) throw new Error("REFLEX_JEV=1 needs Jev's key: NOVA_JEV_API_KEY=... in .env.");
+  const engine = createDecisionEngine({ engine: 'jev', fallback: 'none', jevApiKey: config.jevKey, jevModel: process.env.REFLEX_JEV_MODEL || config.jevModel, timeoutMs: 20_000 });
+  console.log(`Also measuring ${engine.name}: a call to TypeSafe for every phrasing.`);
+  return {
+    specificationVersion: 'v4',
+    provider: 'typesafe',
+    modelId: engine.name,
+    supportedQuestionTypes: ['choice', 'score', 'boolean'],
+    async doEvaluate({ state, questions }) {
+      // A failed call counts as a miss, not the end of the run.
+      const d = await engine.decide(state, questions).catch((e: Error) => {
+        console.log(`  jev failed: ${e.message}`);
+        return null;
+      });
+      const answers = d?.answers ?? Object.fromEntries(Object.entries(questions).map(([id, q]) => [id, q.type === 'choice' ? { type: 'choice', choice: 'none' } : q.type === 'boolean' ? { type: 'boolean', probability: 0 } : { type: 'score', score: 0 }]));
+      return { answers: answers as any, warnings: [] };
+    },
+  };
+}
 for (const [name, set] of sets) {
   for (const [label, model] of models) {
     let intent = 0;
@@ -120,7 +145,7 @@ for (const [name, set] of sets) {
       console.log(`  wrong action ${pct(wrongSkill, set.length)} (${wrongSkill}) · handed to the brain ${pct(toBrain, set.length)} (${toBrain})`);
       console.log(`  confidence → accuracy: ${buckets.map((b) => `≥${b.floor}: ${b.ok}/${b.n}`).join(' · ')}`);
       // Held-out misses stay hidden unless asked for, so nobody tunes to them by accident.
-      if (model === reflex && (!HELD_OUT.has(name) || process.env.REFLEX_SHOW_HELDOUT === '1')) console.log(`  misses: ${misses.join(' | ') || 'none'}`);
+      if ((model === reflex || model === jev) && (!HELD_OUT.has(name) || process.env.REFLEX_SHOW_HELDOUT === '1')) console.log(`  misses: ${misses.join(' | ') || 'none'}`);
     }
   }
   console.log('');
@@ -137,7 +162,7 @@ for (const [label, model] of models) {
     if (forNova === (c.intent !== 'other')) ok++;
     else wrong.push(`"${c.u}" (${answers.addressed.probability.toFixed(2)})`);
   }
-  const showWrong = model === reflex && (sets.every(([name]) => !HELD_OUT.has(name)) || process.env.REFLEX_SHOW_HELDOUT === '1');
+  const showWrong = (model === reflex || model === jev) && (sets.every(([name]) => !HELD_OUT.has(name)) || process.env.REFLEX_SHOW_HELDOUT === '1');
   console.log(`Addressee ${label} ${pct(ok, all.length)} (${ok}/${all.length})${showWrong ? ` · wrong: ${wrong.join(' | ')}` : ''}`);
 }
 
@@ -152,5 +177,5 @@ for (const [label, model] of models) {
     if (right) ok++;
     else wrong.push(`"${r.u}" → ${choice}`);
   }
-  console.log(`Replies   ${label} ${pct(ok, REPLIES.length)} (${ok}/${REPLIES.length})${model === reflex ? ` · wrong: ${wrong.join(' | ') || 'none'}` : ''}`);
+  console.log(`Replies   ${label} ${pct(ok, REPLIES.length)} (${ok}/${REPLIES.length})${model === reflex || model === jev ? ` · wrong: ${wrong.join(' | ') || 'none'}` : ''}`);
 }

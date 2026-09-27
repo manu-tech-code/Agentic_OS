@@ -10,6 +10,7 @@ import {
   ENTRY_COLLECTIONS,
   FIELDS,
   getPath,
+  JEV_DEFAULT_MODEL,
   LOCAL_SERVERS,
   serverKeyVar,
   setPath,
@@ -168,14 +169,15 @@ export function loadConfig(settings: Settings, env: Env) {
     name,
     // Constants and secrets, from .env or the environment.
     port: Number.isInteger(port) && port > 0 && port < 65536 ? port : 7878,
-    gatewayKey: env.AI_GATEWAY_API_KEY || env.VERCEL_OIDC_TOKEN || '',
+    /** Jev's key, from .env: a secret, sent only to TypeSafe with each decision when Jev decides. */
+    jevKey: env.NOVA_JEV_API_KEY || '',
     agentsFile: resolve(ROOT, expand(env.NOVA_AGENTS_FILE || 'nova.agents.json')),
     // Your settings.
     engine: text('decisions.engine') as EngineKind,
     fallback: text('decisions.fallback') as FallbackKind,
     timeoutMs: num('decisions.timeoutMs'),
     learn: values['decisions.learn'] as boolean,
-    jevModel: text('decisions.jevModel') || 'typesafe-ai/jev',
+    jevModel: jevModelId(text('decisions.jevModel')),
     decisionModel: text('decisions.model'),
     brainModel: text('answers.model'),
     localProviders,
@@ -273,6 +275,9 @@ const pairs = (v: string) =>
   );
 const flag = (v: string) => v !== 'false';
 const per = (unit: number) => (v: string) => Number(v) / unit;
+
+/** Jev's model on TypeSafe's own API: an id from the gateway days ("typesafe-ai/jev") means the current release. */
+export const jevModelId = (id: string) => (!id || id === 'jev' || id.startsWith('typesafe-ai/') ? JEV_DEFAULT_MODEL : id);
 
 /** The old flat keys and where each setting lives now. */
 const LEGACY: Record<string, [key: string, convert: (v: string) => unknown]> = {

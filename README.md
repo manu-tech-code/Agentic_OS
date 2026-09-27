@@ -2,7 +2,7 @@
 
 A voice-first, model-agnostic agentic OS layer. You talk; it acts.
 
-- **System 1 - fast decisions.** Every utterance gets one typed decision call (intent, target app, "was that meant for me?") through a swappable `DecisionEngine`. Default: **Jev** via Vercel AI Gateway. Fallbacks: any LLM with a schema, or an offline heuristic.
+- **System 1 - fast decisions.** Every utterance gets one typed decision call (intent, target app, "was that meant for me?") through a swappable `DecisionEngine`. Default: **Reflex**, Nova's own model, on your Mac in about a millisecond. Or **Jev**, TypeSafe's System One model, called directly with your own key. Also: a model on your own server, or an offline keyword matcher.
 - **System 2 - reasoning.** Open questions go to any model you plug in (Claude, GPT, Gemini, local).
 - **Paired agents.** Claude Code, Codex, OpenCode, Gemini CLI or any agent CLI answer questions and do project
   tasks in the background - narrated live, with risky steps asked out loud.
@@ -30,7 +30,7 @@ npm install
 npm run dev                   # daemon + UI
 ```
 
-No `.env` needed: it only holds constants such as an AI Gateway key (see `.env.example`). Everything else is a setting.
+No `.env` needed: it only holds constants, such as Jev's key if you use Jev (see `.env.example`). Everything else is a setting.
 
 Open **http://localhost:5173** in Safari, Chrome or Edge (any browser with the Web Speech API) and allow the
 microphone - Nova starts listening on its own. Then say:
@@ -73,7 +73,7 @@ Everything is configurable there and applies immediately, without a restart:
 - **Integrations** - services the brains can use through Nova (Notion, Linear, GitHub, ...): sign-in, and when Nova asks you first.
 - **Local models** - LM Studio, Ollama, oMLX, mlx_lm, llama.cpp and any server you add: whether it's running, which models it offers, keys.
 - **Agents** - which are paired, the default, and each one's model, extra arguments and CLI path, plus your own agent CLIs.
-- **Projects** - the folders agents may work in. **Cloud gateway** - whether the optional Vercel key is set.
+- **Projects** - the folders agents may work in.
 - **Privacy & trust** - what leaves the Mac and where it goes (a switch for each), what Nova may do without asking (revoke any), how long the record of actions is kept, and snapshots for undoing agents' changes.
 
 Your settings live in `~/.nova/settings.json`: plain JSON holding only what you've changed, so it's also fine to edit by
@@ -91,7 +91,7 @@ The keys, defaults and allowed values are defined in `packages/core/src/settings
 }
 ```
 
-`.env` holds only constants: API keys (`AI_GATEWAY_API_KEY`, `NOVA_<SERVER>_API_KEY`), the port (`NOVA_PORT`), the windows
+`.env` holds only constants: API keys (`NOVA_JEV_API_KEY`, `NOVA_<SERVER>_API_KEY`), the port (`NOVA_PORT`), the windows
 allowed to change settings (`NOVA_UI_ORIGINS`) and file locations (`NOVA_SETTINGS_FILE`, `NOVA_AGENTS_FILE`); changing it
 needs a restart. Settings shows whether each key is set, never its value, and only Nova's own window (or a program on your
 Mac) can change settings. Settings kept in `.env` by earlier versions (`NOVA_NAME`, `NOVA_BRAIN_MODEL`, ...) are moved into
@@ -368,16 +368,20 @@ time. On the older held-out set C: 93% right, 6% wrong. Sets A, B and D are for 
 never tune to them (`REFLEX_SHOW_HELDOUT=1` shows their misses). The model is downloaded from a pinned revision
 and checked against its checksums; it lives in `~/.nova/models` (`NOVA_MODELS_DIR` in `.env` moves it).
 
-## Turning on Jev (optional)
+## Using Jev instead of Reflex (optional)
 
-1. Vercel dashboard → AI Gateway → create an API key.
-2. Put it in `.env` as `AI_GATEWAY_API_KEY=...`
-3. `npm run jev:ping` - measures real Jev latency from your location (do this first).
-4. Restart `npm run dev`. The menu bar shows `System 1: jev`.
+[Jev](https://docs.typesafe.ai) is TypeSafe's System One model: it answers the same typed questions Reflex does, in the
+cloud. Nova calls it directly - `POST https://api.typesafe.ai/v1/systemone` with your key - never through a gateway.
 
-If Jev errors or runs past its time limit, Nova falls back automatically (Settings → Decisions). With the key, a cloud
-model such as `anthropic/claude-sonnet-5` can answer open questions (Settings → Answers). When the TypeSafe waitlist
-clears, a direct TypeSafe engine is one more `EngineSlot`.
+1. Create an API key with TypeSafe and put it in `.env` as `NOVA_JEV_API_KEY=...`, then restart Nova.
+2. `npm run jev:ping` - real decisions and their latency from where you are (each is a billed call).
+3. Settings → Decisions → Decision engine → **Jev**. The model is `jev-latest` unless you pin one (`jev-1.13.0`).
+
+What goes to TypeSafe with each thing you say: your last three exchanges with Nova and the choices it weighs (its skills,
+and your apps', agents' and projects' names) - Settings → Privacy & trust shows it while Jev decides. If Jev errors or
+runs past the time limit (1.5 s by default), Reflex decides on the Mac instead, and it keeps learning from what you
+confirm. Automatic never picks Jev: it only decides when you choose it. `REFLEX_JEV=1 npm run reflex:eval` measures Jev
+on the same phrasings as Reflex (a billed call per phrasing).
 
 ## Using a local model (LM Studio, Ollama, oMLX, mlx_lm, llama.cpp)
 
@@ -389,7 +393,7 @@ clears, a direct TypeSafe engine is one more `EngineSlot`.
 3. Decisions don't need a language model - Reflex handles them. If you want one anyway: Settings → Decisions →
    Language model, then pick the model (small, fast, non-thinking models work best). For a server that rejects
    JSON-schema replies, turn off its "JSON replies" in Settings → Local models.
-4. The menu bar shows `System 2: <server>/...` right away - no Vercel key needed, and nothing leaves your Mac.
+4. The menu bar shows `System 2: <server>/...` right away - no key needed, and nothing leaves your Mac.
 
 ## Pairing agents (Claude Code, Codex, OpenCode, Gemini CLI, ...)
 

@@ -36,13 +36,14 @@ export const withTime = (utterance: string, now = new Date()) =>
   `(It's ${now.toLocaleString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' })} here.)\n${utterance}`;
 
 /**
- * Any AI SDK language model - a local server model ("lmstudio/...") or a Gateway id like
- * "anthropic/claude-sonnet-5". With a tool host it can use Nova's tools, the same ones agents get.
+ * A model on one of the user's local model servers ("lmstudio/...", "ollama/..."). With a tool host
+ * it can use Nova's tools, the same ones agents get. Never a bare id: that would go to the AI SDK's
+ * default (cloud) provider.
  */
 export class LlmReasoningBrain implements ReasoningBrain {
   constructor(
-    private readonly model: LanguageModel,
-    readonly name: string = typeof model === 'string' ? model : 'custom',
+    private readonly model: Exclude<LanguageModel, string>,
+    readonly name: string = 'custom',
     /** The assistant's name, as it introduces itself. */
     private readonly assistant = 'Nova',
     private readonly tools?: ToolHost,

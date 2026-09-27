@@ -16,7 +16,7 @@ export function settingValues(settings: Settings, config: Config, env: Env) {
     'projects.folder': config.values['projects.folder'] || DEFAULT_PROJECTS_FOLDER,
   };
   const saved = Object.fromEntries(Object.keys(values).map((key) => [key, getPath(settings, key) !== undefined]));
-  const secrets: Record<string, boolean> = { AI_GATEWAY_API_KEY: Boolean(env.AI_GATEWAY_API_KEY), VERCEL_OIDC_TOKEN: Boolean(env.VERCEL_OIDC_TOKEN) };
+  const secrets: Record<string, boolean> = { NOVA_JEV_API_KEY: Boolean(env.NOVA_JEV_API_KEY) };
   for (const server of Object.keys(config.localProviders)) secrets[serverKeyVar(server)] = Boolean(env[serverKeyVar(server)]);
   return { values, saved, secrets };
 }
@@ -125,7 +125,7 @@ export async function buildSnapshot(
   const privacy = privacyFlows({
     config,
     reflex: Boolean(reflex.model),
-    hasGatewayKey: Boolean(config.gatewayKey),
+    hasJevKey: Boolean(config.jevKey),
     // The paired ones first (the default first), then the rest installed here.
     agents: [...trust.paired.map((a) => ({ ...a, paired: true })), ...installed.filter((a) => !pairedNames.has(a.name)).map((a) => ({ name: a.name, label: a.label, paired: false }))],
     brain: Boolean(trust.brain),

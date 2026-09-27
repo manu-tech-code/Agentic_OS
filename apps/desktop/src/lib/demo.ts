@@ -7,7 +7,7 @@ const intents = ['open_app', 'quit_app', 'tell_time', 'set_timer', 'cancel_timer
 const apps = ['none', 'Safari', 'Slack', 'Spotify', 'Figma', 'Visual Studio Code'];
 
 export const demoScript: Array<[number, ServerEvent]> = [
-  [0, { type: 'hello', name: 'Nova', engine: 'jev (typesafe-ai/jev) → heuristic', brain: 'anthropic/claude-sonnet-5', apps: 142, wakeWords: ['hey nova', 'nova'], requireWakeWord: true, agents: [{ name: 'claude', label: 'Claude' }, { name: 'codex', label: 'Codex' }], projects: ['Agentic_OS'], hearing: { engine: 'browser', state: 'ready' },
+  [0, { type: 'hello', name: 'Nova', engine: 'jev (jev-latest) → reflex (potion-base-8M)', brain: 'claude', apps: 142, wakeWords: ['hey nova', 'nova'], requireWakeWord: true, agents: [{ name: 'claude', label: 'Claude' }, { name: 'codex', label: 'Codex' }], projects: ['Agentic_OS'], hearing: { engine: 'browser', state: 'ready' },
       ui: { autoListen: false, rate: 1.05, lang: 'en-US', orb: { style: 'particles', colors: 'nova', motion: 'lively' } } }],
   [1200, { type: 'phase', phase: 'listening' }],
   [2400, { type: 'phase', phase: 'thinking' }],
@@ -15,7 +15,7 @@ export const demoScript: Array<[number, ServerEvent]> = [
     type: 'decision',
     trace: {
       utterance: 'open figma and set a timer for 25 minutes',
-      engine: 'jev (typesafe-ai/jev)',
+      engine: 'jev (jev-latest)',
       latencyMs: 212,
       fellBack: false,
       outcome: 'open_app → Figma (p=0.93)',

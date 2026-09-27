@@ -47,9 +47,15 @@ describe('config: the settings file, plus constants from .env', () => {
     expect(c.localProviders.lmstudio).toEqual({ url: 'http://localhost:1234/v1', apiKey: undefined, structuredOutputs: false });
   });
 
+  it("reads Jev's model as TypeSafe names it, whatever the gateway days left in the file", () => {
+    expect(loadConfig({}, {}).jevModel).toBe('jev-latest');
+    expect(loadConfig({ decisions: { jevModel: 'typesafe-ai/jev' } }, {}).jevModel).toBe('jev-latest');
+    expect(loadConfig({ decisions: { jevModel: 'jev-1.13.0' } }, {}).jevModel).toBe('jev-1.13.0');
+  });
+
   it('ignores settings left in .env - only constants and secrets come from there', () => {
-    const c = loadConfig({}, { NOVA_NAME: 'Jarvis', NOVA_BRAIN_MODEL: 'claude', NOVA_AGENTS: '', AI_GATEWAY_API_KEY: 'gw' });
-    expect(c).toMatchObject({ name: 'Nova', brainModel: '', agents: null, gatewayKey: 'gw' });
+    const c = loadConfig({}, { NOVA_NAME: 'Jarvis', NOVA_BRAIN_MODEL: 'claude', NOVA_AGENTS: '', NOVA_JEV_API_KEY: 'jk' });
+    expect(c).toMatchObject({ name: 'Nova', brainModel: '', agents: null, jevKey: 'jk' });
     expect(settingsInEnv({ NOVA_NAME: 'x', NOVA_CLAUDE_MODEL: 'y', NOVA_PORT: '1', NOVA_OMLX_API_KEY: 'z', PATH: '/bin' })).toEqual(['NOVA_CLAUDE_MODEL', 'NOVA_NAME']);
   });
 
@@ -123,8 +129,8 @@ describe('moving settings out of .env', () => {
 
   it('converts an early flat settings file, keeping a copy and leaving secrets out', async () => {
     const file = scratchFile();
-    writeFileSync(file, JSON.stringify({ NOVA_BRAIN_MODEL: 'claude', AI_GATEWAY_API_KEY: 'k' }));
-    expect(await migrateSettings({ NOVA_BRAIN_MODEL: 'codex', NOVA_NAME: 'Jarvis' }, file)).toMatchObject({ secrets: ['AI_GATEWAY_API_KEY'] });
+    writeFileSync(file, JSON.stringify({ NOVA_BRAIN_MODEL: 'claude', NOVA_JEV_API_KEY: 'k' }));
+    expect(await migrateSettings({ NOVA_BRAIN_MODEL: 'codex', NOVA_NAME: 'Jarvis' }, file)).toMatchObject({ secrets: ['NOVA_JEV_API_KEY'] });
     expect(await readSettings(file)).toEqual({ name: 'Jarvis', answers: { model: 'claude' } });
     expect(existsSync(`${file}.bak`)).toBe(true);
   });
@@ -141,17 +147,17 @@ describe('moving settings out of .env', () => {
 describe('settings snapshot and changes', () => {
   it('says which values are saved and never includes a secret', () => {
     const settings = { answers: { model: 'claude' } };
-    const env = { AI_GATEWAY_API_KEY: 'secret-one', NOVA_OMLX_API_KEY: 'secret-two' };
+    const env = { NOVA_JEV_API_KEY: 'secret-one', NOVA_OMLX_API_KEY: 'secret-two' };
     const { values, saved, secrets } = settingValues(settings, loadConfig(settings, env), env);
     expect(saved).toMatchObject({ 'answers.model': true, 'voice.rate': false });
     expect(values).toMatchObject({ 'answers.model': 'claude', 'voice.wakeWords': ['hey nova', 'okay nova', 'nova'], 'voice.followUpSeconds': 30 });
-    expect(secrets).toMatchObject({ AI_GATEWAY_API_KEY: true, NOVA_OMLX_API_KEY: true, NOVA_OLLAMA_API_KEY: false });
+    expect(secrets).toMatchObject({ NOVA_JEV_API_KEY: true, NOVA_OMLX_API_KEY: true, NOVA_OLLAMA_API_KEY: false });
     expect(JSON.stringify({ values, saved, secrets })).not.toContain('secret-');
   });
 
   it('rejects changes it cannot accept', () => {
     expect(() => validateChanges({ PATH: '/tmp' })).toThrow(/can't be changed/);
-    expect(() => validateChanges({ AI_GATEWAY_API_KEY: 'k' })).toThrow(/can't be changed/);
+    expect(() => validateChanges({ NOVA_JEV_API_KEY: 'k' })).toThrow(/can't be changed/);
     expect(() => validateChanges({ toString: 1 })).toThrow(/can't be changed/);
     expect(() => validateChanges(JSON.parse('{"__proto__": {"x": 1}}'))).toThrow(/can't be changed/);
     expect(() => validateChanges({ 'voice.rate': '1.1' })).toThrow(/should be a number/);

@@ -39,12 +39,12 @@ const connectionPart = (e: IntegrationEntry) => JSON.stringify([e.url, e.command
 
 /**
  * Nova's own secrets and constants in .env, which no integration is ever given - so an entry in the
- * settings file can't send them anywhere: the AI Gateway's key, the local model servers' keys
- * (NOVA_<SERVER>_API_KEY) and Nova's settings. A service's own secret gets a name of its own, such
- * as NOVA_GITHUB_TOKEN or NOVA_STRIPE_KEY.
+ * settings file can't send them anywhere: Jev's key (NOVA_JEV_API_KEY), the local model servers'
+ * keys (NOVA_<SERVER>_API_KEY) and Nova's settings. A service's own secret gets a name of its own,
+ * such as NOVA_GITHUB_TOKEN or NOVA_STRIPE_KEY.
  */
 export const NOVA_OWN_SECRET =
-  /^(?:AI_GATEWAY_API_KEY|VERCEL_OIDC_TOKEN|NOVA_[A-Z0-9_]*_API_KEY|NOVA_(?:PORT|UI_ORIGINS|SETTINGS_FILE|AGENTS_FILE|MODELS_DIR|BUNDLED_MODELS|SIGN_IDENTITY|DRY_RUN|HEARING_DEBUG|BRIDGE_URL|TOOLS_TOKEN|APPROVAL_TOKEN))$/;
+  /^(?:NOVA_[A-Z0-9_]*_API_KEY|NOVA_(?:PORT|UI_ORIGINS|SETTINGS_FILE|AGENTS_FILE|MODELS_DIR|BUNDLED_MODELS|SIGN_IDENTITY|DRY_RUN|HEARING_DEBUG|BRIDGE_URL|TOOLS_TOKEN|APPROVAL_TOKEN))$/;
 
 /** Two addresses of one server (a trailing slash aside). */
 function sameServer(a: string | undefined, b: string | undefined) {

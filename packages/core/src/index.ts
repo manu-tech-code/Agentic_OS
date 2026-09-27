@@ -13,7 +13,9 @@ export { aliasesFor, matchName, nameTokens } from './decision/reflex/names.ts';
 export { REFLEX_PHRASES } from './decision/reflex/phrases.ts';
 export { REFLEX_GRAMMAR, expand, grammarPhrases } from './decision/reflex/grammar.ts';
 export { HEAD_VERSION, ReflexHead, fingerprint, trainHead, type HeadData, type TrainOptions } from './decision/reflex/head.ts';
-export { EvaluationDecisionEngine, createDecisionEngine, type EngineConfig, type EngineKind, type FallbackKind } from './decision/engine.ts';
+export { EvaluationDecisionEngine, createDecisionEngine, type EngineConfig, type EngineKind, type FallbackKind, type LocalLanguageModel } from './decision/engine.ts';
+// Jev is reached only through the DecisionEngine: its model id default and error, never the model itself.
+export { JEV_DEFAULT_MODEL, JevError } from './decision/jev.ts';
 export { isCompound, NovaBrain, type NovaOptions, type NovaSettings } from './brain/nova.ts';
 export { LlmReasoningBrain, voiceSystemPrompt, withTime, type ReasoningBrain, type Turn } from './brain/reasoning.ts';
 export { outputText, skillTool, type IntegrationTool, type IntegrationTools, type ToolHost, type ToolOutput, type ToolSpec } from './skills/tools.ts';

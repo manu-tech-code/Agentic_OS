@@ -206,10 +206,10 @@ describe('an agent kept running as the brain', () => {
 describe('what agents are given', () => {
   it('an environment without keys, but with what finds their own sign-in', () => {
     const saved = { ...process.env };
-    Object.assign(process.env, { OPENAI_API_KEY: 'k', CODEX_API_KEY: 'k', GEMINI_API_KEY: 'k', ANTHROPIC_API_KEY: 'k', NOVA_GITHUB_TOKEN: 't', AI_GATEWAY_API_KEY: 'g', CLAUDECODE: '1', CODEX_HOME: '/c', XDG_CONFIG_HOME: '/x' });
+    Object.assign(process.env, { OPENAI_API_KEY: 'k', CODEX_API_KEY: 'k', GEMINI_API_KEY: 'k', ANTHROPIC_API_KEY: 'k', NOVA_GITHUB_TOKEN: 't', NOVA_JEV_API_KEY: 'j', CLAUDECODE: '1', CODEX_HOME: '/c', XDG_CONFIG_HOME: '/x' });
     try {
       const env = agentEnv(undefined, { OPENCODE_CONFIG: '/o.json' });
-      for (const key of ['OPENAI_API_KEY', 'CODEX_API_KEY', 'GEMINI_API_KEY', 'ANTHROPIC_API_KEY', 'NOVA_GITHUB_TOKEN', 'AI_GATEWAY_API_KEY', 'CLAUDECODE']) expect(env[key], key).toBeUndefined();
+      for (const key of ['OPENAI_API_KEY', 'CODEX_API_KEY', 'GEMINI_API_KEY', 'ANTHROPIC_API_KEY', 'NOVA_GITHUB_TOKEN', 'NOVA_JEV_API_KEY', 'CLAUDECODE']) expect(env[key], key).toBeUndefined();
       expect(env).toMatchObject({ PATH: process.env.PATH, HOME: process.env.HOME, CODEX_HOME: '/c', XDG_CONFIG_HOME: '/x', OPENCODE_CONFIG: '/o.json' });
     } finally {
       process.env = saved;

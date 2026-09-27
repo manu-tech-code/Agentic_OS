@@ -1,14 +1,16 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import { extractReasoningMiddleware, wrapLanguageModel, type LanguageModel } from 'ai';
+import { extractReasoningMiddleware, wrapLanguageModel } from 'ai';
+import type { LocalLanguageModel } from '@nova/core';
 import type { Config } from './config.ts';
 
 /**
  * Model ids are "<provider>/<model>". Local providers (LM Studio, Ollama, oMLX, mlx_lm,
  * llama.cpp, or any added in Settings) all speak the OpenAI-compatible API, so one client
- * covers them and nothing leaves the machine. Any other id is a Vercel AI Gateway id.
+ * covers them and nothing leaves the machine. Any other id resolves to nothing: there is no
+ * cloud gateway, so an id is never handed to a provider behind Nova's back.
  */
 export function modelResolver(servers: Config['localProviders']) {
-  /** "ollama/gemma3:4b" -> the configured "ollama" server and model "gemma3:4b"; null for gateway ids. */
+  /** "ollama/gemma3:4b" -> the configured "ollama" server and model "gemma3:4b"; null for any other id. */
   const localTarget = (id: string) => {
     const slash = id.indexOf('/');
     const name = id.slice(0, Math.max(slash, 0)).toLowerCase();
@@ -18,9 +20,9 @@ export function modelResolver(servers: Config['localProviders']) {
 
   return {
     isLocal: (id: string) => localTarget(id) !== null,
-    resolve(id: string): LanguageModel {
+    resolve(id: string): LocalLanguageModel | null {
       const local = localTarget(id);
-      if (!local) return id;
+      if (!local) return null;
       const provider = createOpenAICompatible({
         name: local.name,
         baseURL: local.url,
