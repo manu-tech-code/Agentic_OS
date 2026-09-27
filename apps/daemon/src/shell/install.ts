@@ -7,7 +7,7 @@
  */
 import { execFile, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { copyFile, mkdir, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir, platform } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,6 +20,8 @@ const ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
 const PACKAGE = join(ROOT, 'apps', 'desktop', 'macos');
 const ICON = join(ROOT, 'apps', 'desktop', 'src-tauri', 'icons', 'icon.icns');
 export const APP = join(homedir(), 'Applications', 'Nova.app');
+/** Where the new build goes while it's still being put together - see swapIn(). */
+const STAGING = `${APP}.new`;
 const execute = promisify(execFile);
 
 function run(command: string, args: string[], cwd = ROOT) {
@@ -58,6 +60,20 @@ function alive(pid: number) {
   }
 }
 
+/**
+ * Puts a finished build at `target`, replacing whatever's there. `staging` is already complete, so
+ * this is never more than two renames (near-instant, same volume) - unlike deleting `target` first
+ * and building into it over however long that takes, a build that fails or is interrupted here
+ * leaves at worst the previous build in place, never `target` missing or half-written.
+ */
+export async function swapIn(target: string, staging: string) {
+  const previous = `${target}.old`;
+  await rm(previous, { recursive: true, force: true }); // a leftover from a swap interrupted before
+  if (existsSync(target)) await rename(target, previous);
+  await rename(staging, target);
+  await rm(previous, { recursive: true, force: true });
+}
+
 async function main() {
   if (platform() !== 'darwin') throw new Error('Nova.app is for macOS.');
   loadDotEnv();
@@ -75,9 +91,11 @@ async function main() {
     const { stdout } = await execute('defaults', ['read', join(APP, 'Contents', 'Info'), 'CFBundleIdentifier']).catch(() => ({ stdout: '' }));
     if (stdout.trim() !== 'dev.nova.app') throw new Error(`${APP} is another app (${stdout.trim() || 'unknown'}) - move it, then run this again.`);
   }
-  const wasRunning = await quitRunning();
-  const contents = join(APP, 'Contents');
-  await rm(APP, { recursive: true, force: true });
+
+  // Built beside whatever's running, and only swapped in once it's complete and signed - so a build
+  // that fails, or is interrupted, never leaves Nova.app missing or half-written.
+  await rm(STAGING, { recursive: true, force: true }); // a leftover from a build that didn't finish
+  const contents = join(STAGING, 'Contents');
   await mkdir(join(contents, 'MacOS'), { recursive: true });
   await mkdir(join(contents, 'Resources'), { recursive: true });
   await copyFile(join(PACKAGE, 'Info.plist'), join(contents, 'Info.plist'));
@@ -98,14 +116,19 @@ async function main() {
     path: process.env.PATH ?? '/usr/bin:/bin',
     port: config.port,
     settings: settingsFile(),
-    devUi: 'http://localhost:5173/',
+    // Only for an explicit dev install: Nova.app then also trusts whatever answers on this port
+    // enough to check it's Nova's own dev server - never worth the risk for the app most people run.
+    devUi: process.argv.includes('--dev-ui') ? 'http://localhost:5173/' : undefined,
   };
   await writeFile(join(contents, 'Resources', 'shell.json'), `${JSON.stringify(shell, null, 2)}\n`);
   // Signed here: one identity for macOS to remember. NOVA_SIGN_IDENTITY (in .env) can name a
   // certificate of yours, so the microphone permission survives rebuilds; otherwise it's signed for
   // this Mac alone, and macOS asks again after each rebuild.
   const identity = process.env.NOVA_SIGN_IDENTITY || '-';
-  await run('codesign', ['--force', '--sign', identity, '--identifier', 'dev.nova.app', APP]);
+  await run('codesign', ['--force', '--sign', identity, '--identifier', 'dev.nova.app', STAGING]);
+
+  const wasRunning = await quitRunning();
+  await swapIn(APP, STAGING);
 
   console.log(`
   Nova.app is in ${APP}, with Kokoro - Nova's voice - inside.
@@ -117,7 +140,11 @@ async function main() {
   else if (wasRunning) console.log('  It was running and has been closed; open it again when you like.');
 }
 
-main().catch((e) => {
-  console.error(`\n  ${(e as Error).message}`);
-  process.exit(1);
-});
+// Only when this file is run directly (npm run app) - never as a side effect of another module
+// importing it (swapIn, for a test), which must never rebuild or replace the installed app.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((e) => {
+    console.error(`\n  ${(e as Error).message}`);
+    process.exit(1);
+  });
+}
