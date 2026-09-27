@@ -7,8 +7,13 @@ import { seeded } from './grammar.ts';
  * trains in a couple of seconds and answers in microseconds.
  */
 
-/** Bump when the inputs or the training change, so saved classifiers get retrained. */
-export const HEAD_VERSION = 1;
+/**
+ * Bump when the inputs or the training change in a way `ReflexEvaluationModel.trainingKey()`
+ * can't already tell apart on its own (e.g. this file's feature extraction or training math),
+ * so saved classifiers get retrained. A changed embedding model or `DEFAULT_TRAIN_OPTIONS`
+ * doesn't need a bump: the key already covers those.
+ */
+export const HEAD_VERSION = 2;
 
 export interface HeadData {
   version: number;
@@ -29,6 +34,9 @@ export interface TrainOptions {
   /** Awaited now and then, so a server stays responsive while it trains. */
   pause?: () => Promise<void>;
 }
+
+/** `trainHead`'s defaults, named so a cache key can include them (see `ReflexEvaluationModel.trainingKey`). */
+export const DEFAULT_TRAIN_OPTIONS: Required<Omit<TrainOptions, 'pause'>> = { epochs: 12, batch: 32, rate: 0.02, l2: 1e-5, seed: 7 };
 
 export class ReflexHead {
   readonly classes: string[];
@@ -76,7 +84,7 @@ export class ReflexHead {
  * Adam. Deterministic for a given seed.
  */
 export async function trainHead(inputs: Float32Array[], labels: number[], classes: string[], opts: TrainOptions = {}): Promise<HeadData> {
-  const { epochs = 12, batch = 32, rate = 0.02, l2 = 1e-5, seed = 7, pause } = opts;
+  const { epochs, batch, rate, l2, seed, pause } = { ...DEFAULT_TRAIN_OPTIONS, ...opts };
   const n = inputs.length;
   const dim = inputs[0]?.length ?? 0;
   const k = classes.length;

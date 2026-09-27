@@ -3,6 +3,8 @@ import { constants, createReadStream, createWriteStream } from 'node:fs';
 import { copyFile, mkdir, readFile, rename, rm, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 
 interface FileCheck {
   size: number;
@@ -163,6 +165,9 @@ export async function bundleModel(name: string, from: string, dir: string) {
   }
 }
 
+/** No bytes at all for this long fails a download - not a cap on the whole transfer, which can take a while for a big model on a slow (but steady) connection. */
+const IDLE_TIMEOUT_MS = 60_000;
+
 /** Download a model from its pinned revision, checking every file before it's saved. */
 export async function downloadModel(name: string, opts: { dir?: string; onProgress?: (file: string, received: number, total: number) => void } = {}) {
   const spec = MODELS[name];
@@ -173,31 +178,47 @@ export async function downloadModel(name: string, opts: { dir?: string; onProgre
     const path = join(target, file);
     await mkdir(dirname(path), { recursive: true });
     if (await fileMatches(path, check)) continue;
-    const res = await fetch(`https://huggingface.co/${spec.repo}/resolve/${spec.revision}/${file}`, { signal: AbortSignal.timeout(900_000) });
-    if (!res.ok || !res.body) throw new Error(`Couldn't download ${file} (HTTP ${res.status}).`);
-    // Straight to disk, checking as it goes: big models never sit in memory.
-    const part = `${path}.part`;
-    const out = createWriteStream(part);
-    const hash = hasher(check);
-    let received = 0;
+
+    const controller = new AbortController();
+    const stalled = () => controller.abort(new Error(`${file} stalled: no data for ${IDLE_TIMEOUT_MS / 1000}s.`));
+    let idleTimer = setTimeout(stalled, IDLE_TIMEOUT_MS);
+    const resetIdle = () => {
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(stalled, IDLE_TIMEOUT_MS);
+    };
     try {
-      for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
-        hash.update(chunk);
-        received += chunk.length;
-        if (!out.write(chunk)) await new Promise<void>((resolve) => out.once('drain', () => resolve()));
-        opts.onProgress?.(file, received, check.size);
+      const res = await fetch(`https://huggingface.co/${spec.repo}/resolve/${spec.revision}/${file}`, { signal: controller.signal });
+      if (!res.ok || !res.body) throw new Error(`Couldn't download ${file} (HTTP ${res.status}).`);
+      // Straight to disk, checking (and capping at the expected size) as it goes: big models never sit in memory.
+      const part = `${path}.part`;
+      const hash = hasher(check);
+      let received = 0;
+      const track = new Transform({
+        transform(chunk: Buffer, _encoding, callback) {
+          resetIdle();
+          received += chunk.length;
+          if (received > check.size) return callback(new Error(`${file} is bigger than expected (${check.size} bytes) - stopped downloading it.`));
+          hash.update(chunk);
+          opts.onProgress?.(file, received, check.size);
+          callback(null, chunk);
+        },
+      });
+      try {
+        // `pipeline` turns every stream's 'error' event (a full disk, denied permissions, ...) into
+        // a rejection here, instead of an unhandled event that would crash the whole daemon.
+        await pipeline(res.body as unknown as AsyncIterable<Uint8Array>, track, createWriteStream(part), { signal: controller.signal });
+      } catch (e) {
+        await rm(part, { force: true });
+        throw e;
       }
-      await new Promise<void>((resolve, reject) => out.end((e?: Error | null) => (e ? reject(e) : resolve())));
-    } catch (e) {
-      out.destroy();
-      await rm(part, { force: true });
-      throw e;
+      if (received !== check.size || hash.digest('hex') !== expected(check)) {
+        await rm(part, { force: true });
+        throw new Error(`${file} didn't match its checksum, so it wasn't saved.`);
+      }
+      await rename(part, path);
+    } finally {
+      clearTimeout(idleTimer);
     }
-    if (received !== check.size || hash.digest('hex') !== expected(check)) {
-      await rm(part, { force: true });
-      throw new Error(`${file} didn't match its checksum, so it wasn't saved.`);
-    }
-    await rename(part, path);
   }
   return target;
 }

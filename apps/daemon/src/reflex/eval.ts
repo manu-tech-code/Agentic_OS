@@ -28,9 +28,12 @@ console.log(`Loaded ${DEFAULT_REFLEX_MODEL} in ${Math.round(performance.now() - 
 const tuning = process.env.REFLEX_TUNING ? JSON.parse(process.env.REFLEX_TUNING) : undefined;
 // Every test phrasing is held out of what these copies of Reflex learn from (bar one- and two-word replies like
 // "yes" or "stop", which any system knows): Nova itself learns from all of it, but a test only counts what's new.
+// A short phrasing for some OTHER intent ("time", "settings") still needs holding out - it's not a universal reply.
+const REPLY_INTENTS = new Set(['confirm_yes', 'confirm_no', 'stop']);
+const short = (u: string) => u.split(/\s+/).length <= 2;
 const allCases = [...SET_A, ...SET_B, ...SET_C, ...SET_D, ...SET_E];
 const holdOut = {
-  texts: [...allCases.map((c) => c.u), ...REPLIES.map((r) => r.u)].filter((u) => u.split(/\s+/).length > 2),
+  texts: [...allCases.filter((c) => !short(c.u) || !REPLY_INTENTS.has(c.intent)).map((c) => c.u), ...REPLIES.map((r) => r.u).filter((u) => !short(u))],
   names: [...EVAL_APPS, ...EVAL_AGENTS.map((a) => a.name), ...EVAL_PROJECTS],
 };
 // Examples only: the closest-example search on its own, as Reflex was before its classifier.
@@ -77,6 +80,8 @@ for (const [name, set] of sets) {
     let toBrain = 0;
     const brainy = (i: string) => i === 'chat' || i === 'other';
     const slots = { app: [0, 0], agent: [0, 0], project: [0, 0] };
+    // Cases that name no app/agent/project: whether the model wrongly named one anyway.
+    const slotFP = { app: [0, 0], agent: [0, 0], project: [0, 0] };
     const misses: string[] = [];
     const times: number[] = [];
     const buckets = [0.9, 0.75, 0.5, 0].map((floor) => ({ floor, n: 0, ok: 0 }));
@@ -93,7 +98,11 @@ for (const [name, set] of sets) {
       b.n++;
       if (ok) b.ok++;
       for (const slot of ['app', 'agent', 'project'] as const) {
-        if (!c[slot]) continue;
+        if (!c[slot]) {
+          slotFP[slot][1]!++;
+          if (picked(answers[slot])) slotFP[slot][0]!++;
+          continue;
+        }
         slots[slot][1]!++;
         if (picked(answers[slot]) === c[slot]) slots[slot][0]!++;
       }
@@ -102,6 +111,9 @@ for (const [name, set] of sets) {
     const t = (q: number) => times[Math.min(times.length - 1, Math.floor(q * times.length))]!.toFixed(2);
     console.log(
       `Set ${name} ${label} intent ${pct(intent, set.length)} (${intent}/${set.length}) · app ${pct(...(slots.app as [number, number]))} · agent ${pct(...(slots.agent as [number, number]))} · project ${pct(...(slots.project as [number, number]))} · ${t(0.5)} ms p50, ${t(0.9)} ms p90`,
+    );
+    console.log(
+      `  slot false positives (named one when none was said) · app ${pct(...(slotFP.app as [number, number]))} (${slotFP.app[0]}/${slotFP.app[1]}) · agent ${pct(...(slotFP.agent as [number, number]))} (${slotFP.agent[0]}/${slotFP.agent[1]}) · project ${pct(...(slotFP.project as [number, number]))} (${slotFP.project[0]}/${slotFP.project[1]})`,
     );
     if (model !== keywords) {
       console.log(`  wrong action ${pct(wrongSkill, set.length)} (${wrongSkill}) · handed to the brain ${pct(toBrain, set.length)} (${toBrain})`);

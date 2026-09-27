@@ -29,6 +29,15 @@ const KNOWN_ALIASES: Record<string, string[]> = {
   'system settings': ['system preferences'],
 };
 
+/** Words too common to count as naming something on their own. */
+export const COMMON = new Set('a an the my me to of for and or in on at it is this that please app apps application new open do does did'.split(' '));
+
+/** Score of "no name mentioned" in a choice among names: a match must beat this to count as one. */
+export const NONE_SCORE = 0.6;
+/** The near-miss (speech-recognition) branch's minimum accepted similarity, and its ceiling score. */
+const FUZZY_FLOOR = 0.8;
+const FUZZY_CEILING = 0.9;
+
 /** The ways a name might be said: in full, without a vendor or a suffix, and known nicknames. */
 export function aliasesFor(name: string, label?: string | null): string[][] {
   const out = new Map<string, string[]>();
@@ -39,7 +48,8 @@ export function aliasesFor(name: string, label?: string | null): string[][] {
     let trimmed = full.filter((t) => !/^(19|20)\d\d$/.test(t) && !/^v?\d+(\.\d+)*$/.test(t)); // "Photoshop 2025", "App 2.1"
     while (trimmed.length > 1 && VENDORS.has(trimmed[0]!)) trimmed = trimmed.slice(1);
     while (trimmed.length > 1 && SUFFIXES.has(trimmed.at(-1)!)) trimmed = trimmed.slice(0, -1);
-    add(trimmed);
+    // Stripping a vendor can leave nothing but function words ("Microsoft To Do" -> "to do"): not a usable alias on its own.
+    if (!trimmed.every((t) => COMMON.has(t))) add(trimmed);
     for (const alias of KNOWN_ALIASES[full.join(' ')] ?? []) add(nameTokens(alias));
   }
   return [...out.values()];
@@ -55,9 +65,6 @@ function levenshtein(a: string, b: string): number {
   }
   return prev[b.length]!;
 }
-
-/** Words too common to count as naming something on their own. */
-const COMMON = new Set('a an the my me to of for and or in on at it is this that please app apps application new open'.split(' '));
 
 /** How well one alias matches the utterance's words, and where. */
 function matchAlias(words: string[], alias: string[]): NameMatch | null {
@@ -75,7 +82,13 @@ function matchAlias(words: string[], alias: string[]): NameMatch | null {
       else if (spanJoined === joined && joined.length >= 3) consider(0.97, start, start + len);
       else if (joined.length >= 5 && Math.abs(spanJoined.length - joined.length) <= 2 && !span.every((w) => COMMON.has(w))) {
         const similarity = 1 - levenshtein(spanJoined, joined) / Math.max(spanJoined.length, joined.length);
-        if (similarity >= 0.8) consider(0.9 * similarity, start, start + len);
+        // Calibrated against NONE_SCORE: a match that only just clears the floor is barely more likely
+        // than no name at all (not the near-certainty a flat `0.9 * similarity` gave it), while a
+        // strong near-miss ("spotfy" for Spotify) still scores close to what it always has.
+        if (similarity >= FUZZY_FLOOR) {
+          const t = Math.sqrt((similarity - FUZZY_FLOOR) / (1 - FUZZY_FLOOR));
+          consider(NONE_SCORE + (FUZZY_CEILING - NONE_SCORE) * t, start, start + len);
+        }
       }
     }
   }
