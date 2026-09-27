@@ -6,6 +6,7 @@ import { previewVoice } from '../voice/voice';
 import { ListInput, NumberInput, Reset, Switch, TextInput, type Save } from './settings/Controls';
 import { AgentsPanel, GatewayPanel, HearingPanel, OrbPreview, ProjectsPanel, ReflexPanel, ServersPanel, SystemPanel, VoicePanel } from './settings/Panels';
 import { IntegrationsPanel } from './settings/Integrations';
+import { HandsPanel } from './settings/Hands';
 import { MemoryPanel, ScreenPanel } from './settings/Memory';
 import { PresencePanel, ShortcutInput } from './settings/Presence';
 import { InitiativePanel } from './settings/Initiative';
@@ -174,6 +175,7 @@ function SectionBody({
       {section === 'integrations' && <IntegrationsPanel snapshot={snapshot} name={name} onSave={onSave} onAction={onAction} />}
       {section === 'memory' && <MemoryPanel snapshot={snapshot} name={name} onAction={onAction} />}
       {section === 'screen' && <ScreenPanel snapshot={snapshot} name={name} onAction={onAction} preview={screenPreview} />}
+      {section === 'hands' && <HandsPanel snapshot={snapshot} name={name} onSave={onSave} onAction={onAction} />}
       {section === 'models' && <ServersPanel snapshot={snapshot} onSave={onSave} />}
       {section === 'agents' && <AgentsPanel snapshot={snapshot} onSave={onSave} />}
       {fields.length > 0 && (

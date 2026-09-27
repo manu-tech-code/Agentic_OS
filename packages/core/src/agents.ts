@@ -1,4 +1,5 @@
 import type { ReasoningBrain, Turn } from './brain/reasoning.ts';
+import type { ToolHost } from './skills/tools.ts';
 
 /** Something an agent is doing, for narration and its live task card. */
 export interface AgentStep {
@@ -22,6 +23,11 @@ export interface TaskCallbacks {
   onStep(step: AgentStep): void;
   /** Resolves true on the user's spoken yes. Used by agents that hand permission prompts to Nova. */
   approve(request: ApprovalRequest): Promise<boolean>;
+  /**
+   * Nova's tools for the agent while it works on the task - by the same rules as for anyone, with
+   * the user having said nothing: whatever changes something is asked about first.
+   */
+  tools?: ToolHost;
 }
 
 /**

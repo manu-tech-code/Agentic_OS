@@ -44,6 +44,10 @@ export interface ToolHost {
 }
 
 export function skillTool(skill: Skill): ToolSpec {
+  const what = skill.summary ?? `For requests like: ${skill.examples.slice(0, 3).join('; ')}.`;
+  const asked = skill.tier >= 2 ? `${what} The assistant asks the user out loud first.` : what;
+  // Tools with their own arguments (the computer's element, x and y) say them; the rest take a request.
+  if (skill.parameters) return { name: skill.id, description: asked, parameters: { type: 'object', properties: skill.parameters.properties, required: skill.parameters.required ?? [] } };
   const properties: Record<string, unknown> = {
     request: { type: 'string', description: 'What to do, in plain words - e.g. "10 minutes" for a timer, or the whole task for an agent.' },
   };
@@ -52,10 +56,5 @@ export function skillTool(skill: Skill): ToolSpec {
   if (skill.needsProject) (properties.project = { type: 'string', description: "The project folder's name." }), required.push('project');
   if (skill.needsAgents) properties.agent = { type: 'string', description: 'Which paired agent, e.g. "claude". Leave out for the default one.' };
   else if (skill.namesAgent) properties.agent = { type: 'string', description: 'Whose doing it is about, e.g. "claude". Leave out for anyone\'s.' };
-  const what = skill.summary ?? `For requests like: ${skill.examples.slice(0, 3).join('; ')}.`;
-  return {
-    name: skill.id,
-    description: skill.tier >= 2 ? `${what} The assistant asks the user out loud first.` : what,
-    parameters: { type: 'object', properties, required },
-  };
+  return { name: skill.id, description: asked, parameters: { type: 'object', properties, required } };
 }

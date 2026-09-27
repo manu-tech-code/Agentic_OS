@@ -48,6 +48,8 @@ export interface NovaState {
   activity: ActivityItem[];
   /** What the last search of the whole record found. */
   found: { query: string; items: ActivityItem[]; at: number } | null;
+  /** Nova's hands on the computer right now: who is using it, in which app, and whether it's waiting for the user. */
+  computer: { caller?: string; app?: string; paused?: boolean; steps?: number; at: number } | null;
   decision: DecisionTrace | null;
   reply: string | null;
   error: string | null;
@@ -79,6 +81,7 @@ const initial: NovaState = {
   cards: [],
   activity: [],
   found: null,
+  computer: null,
   decision: null,
   reply: null,
   error: null,
@@ -91,7 +94,8 @@ function reducer(s: NovaState, a: Action): NovaState {
     case 'connected':
       // appVoice is left as it was: a daemon blip doesn't mean Nova.app quit - it says voice-owner
       // again the moment it reconnects, and that's what corrects this if it actually changed.
-      return { ...s, connected: a.value, phase: a.value ? s.phase : 'idle' };
+      // The "using the computer" indicator goes with the connection; the daemon says again if it still is.
+      return { ...s, connected: a.value, phase: a.value ? s.phase : 'idle', computer: a.value ? s.computer : null };
     case 'hello':
       return {
         ...s,
@@ -155,6 +159,8 @@ function reducer(s: NovaState, a: Action): NovaState {
     }
     case 'activity-found':
       return { ...s, found: { query: a.query, items: a.items, at: Date.now() } };
+    case 'computer':
+      return { ...s, computer: a.active ? { caller: a.caller, app: a.app, paused: a.paused, steps: a.steps, at: Date.now() } : null };
     case 'decision':
       return { ...s, decision: a.trace };
     case 'error':

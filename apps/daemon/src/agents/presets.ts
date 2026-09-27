@@ -41,7 +41,7 @@ export interface AgentPreset {
    * out, so the CLI isn't started for every question. Only for CLIs that can do it.
    */
   session?(opts: InvocationOptions): Invocation;
-  /** Work on a task in the current folder. */
+  /** Work on a task in the current folder - with Nova's tools when given (`tools`), and its permission prompts through Nova (`approvals`). */
   task(prompt: string, opts: InvocationOptions & { approvals?: ApprovalHookup }): Invocation;
   /** Can hand its permission prompts to Nova, so risky steps are asked out loud. */
   approvals?: boolean;
@@ -123,7 +123,7 @@ export const PRESETS: Record<string, AgentPreset> = {
         ...flag('--model', model),
       ],
     }),
-    task: (prompt, { model, approvals, assistant }) => ({
+    task: (prompt, { model, approvals, tools, assistant }) => ({
       args: [
         '-p', '--output-format', 'stream-json', '--verbose',
         '--append-system-prompt', taskNote(assistant),
@@ -132,10 +132,13 @@ export const PRESETS: Record<string, AgentPreset> = {
         // apiKeyHelper, or reroute Claude (ANTHROPIC_BASE_URL); nor user-level ones (an API gateway).
         '--setting-sources', 'local',
         '--permission-mode', 'acceptEdits',
-        '--allowedTools', CLAUDE_SAFE_TOOLS,
+        // Nova's tools need no second yes from Claude: Nova's own gate asks the user by each tool's tier.
+        '--allowedTools', [CLAUDE_SAFE_TOOLS, ...(tools ? [`mcp__${tools.name}`] : [])].join(','),
         '--strict-mcp-config',
+        // One Nova server carries both its tools and the permission prompts.
+        ...(tools ? ['--mcp-config', claudeMcpConfig(tools)] : approvals ? ['--mcp-config', approvals.mcpConfig] : []),
         // Everything else Claude wants to do (shell commands, web) is asked out loud through Nova.
-        ...(approvals ? ['--mcp-config', approvals.mcpConfig, '--permission-prompt-tool', approvals.tool] : ['--permission-prompts', 'none']),
+        ...(approvals ? ['--permission-prompt-tool', approvals.tool] : ['--permission-prompts', 'none']),
         ...flag('--model', model),
       ],
       stdin: prompt,
@@ -150,8 +153,8 @@ export const PRESETS: Record<string, AgentPreset> = {
       stdin: `${voiceSystemPrompt(assistant)}\n\n${prompt}`,
     }),
     // Non-interactive Codex can't hand approvals over; its workspace sandbox keeps writes inside the project.
-    task: (prompt, { model, assistant }) => ({
-      args: ['exec', '--json', '--skip-git-repo-check', '--sandbox', 'workspace-write', '--color', 'never', ...flag('-m', model)],
+    task: (prompt, { model, assistant, tools }) => ({
+      args: ['exec', '--json', '--skip-git-repo-check', '--sandbox', 'workspace-write', '--color', 'never', ...codexTools(tools), ...flag('-m', model)],
       stdin: `${prompt}\n\n${taskNote(assistant)}`,
     }),
   },
@@ -164,7 +167,7 @@ export const PRESETS: Record<string, AgentPreset> = {
       trailing: `${voiceSystemPrompt(assistant)}\n\n${prompt}`,
       env: opencodeTools(tools),
     }),
-    task: (prompt, { model, assistant }) => ({ args: ['run', '--format', 'json', ...flag('-m', model)], trailing: `${prompt}\n\n${taskNote(assistant)}` }),
+    task: (prompt, { model, assistant, tools }) => ({ args: ['run', '--format', 'json', ...flag('-m', model)], trailing: `${prompt}\n\n${taskNote(assistant)}`, env: opencodeTools(tools) }),
   },
   gemini: {
     label: 'Gemini',
@@ -183,7 +186,7 @@ export interface CustomAgentSpec {
   ask: string[];
   task: string[];
   output?: OutputFormat;
-  /** Arguments that give it Nova's tools, when its CLI takes an MCP config: "{mcpConfig}" becomes Claude-style MCP JSON. */
+  /** Arguments that give it Nova's tools (for questions and tasks), when its CLI takes an MCP config: "{mcpConfig}" becomes Claude-style MCP JSON. */
   mcp?: string[];
 }
 
@@ -201,6 +204,10 @@ export function customPreset(name: string, spec: CustomAgentSpec): AgentPreset {
       if (tools && spec.mcp) invocation.args = [...spec.mcp.map((a) => a.replaceAll('{mcpConfig}', claudeMcpConfig(tools))), ...invocation.args];
       return invocation;
     },
-    task: (prompt, { model, assistant }) => fill(spec.task, `${prompt}\n\n${taskNote(assistant)}`, model),
+    task: (prompt, { model, assistant, tools }) => {
+      const invocation = fill(spec.task, `${prompt}\n\n${taskNote(assistant)}`, model);
+      if (tools && spec.mcp) invocation.args = [...spec.mcp.map((a) => a.replaceAll('{mcpConfig}', claudeMcpConfig(tools))), ...invocation.args];
+      return invocation;
+    },
   };
 }

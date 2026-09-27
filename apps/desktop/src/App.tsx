@@ -472,6 +472,22 @@ export default function App() {
         </div>
       </header>
 
+      {/* Nova's hands on the computer: who, where, and how to stop them. */}
+      <AnimatePresence>
+        {state.computer && (
+          <motion.div key="computer" className={`computer-bar ${state.computer.paused ? 'is-paused' : ''}`} role="status" initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }}>
+            <span className="computer-bar__dot" aria-hidden />
+            <span className="computer-bar__text">
+              {state.computer.paused ? 'Waiting while you use the Mac' : `${state.computer.caller ?? state.name} is using the computer`}
+              {state.computer.app ? ` · ${state.computer.app}` : ''}
+            </span>
+            <button type="button" className="computer-bar__stop" onClick={stopEverything}>
+              Stop · ⌃⌥⌘.
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <div className="pill-wrap">
         <LivePill
           phase={shownPhase}

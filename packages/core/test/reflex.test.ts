@@ -9,6 +9,7 @@ import {
   expand,
   HeuristicEvaluationModel,
   matchName,
+  handsSkills,
   initiativeSkills,
   memorySkills,
   trustSkills,
@@ -39,7 +40,7 @@ class BagEmbedder implements Embedder {
   }
 }
 
-const skills = [...builtinSkills, ...agentSkills, ...memorySkills.filter((m) => !m.toolOnly), ...initiativeSkills, ...trustSkills];
+const skills = [...builtinSkills, ...agentSkills, ...memorySkills.filter((m) => !m.toolOnly), ...initiativeSkills, ...trustSkills, ...handsSkills];
 const APPS = ['Notes', 'Spotify', 'Figma', 'Visual Studio Code', 'Google Chrome', 'zoom.us', 'Weather', 'FindMy'];
 const host = { agents: [{ name: 'claude', label: 'Claude' }, { name: 'codex', label: 'Codex' }], projects: ['website'] } as never;
 

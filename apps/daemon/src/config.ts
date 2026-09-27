@@ -18,6 +18,7 @@ import {
   type EngineKind,
   type FallbackKind,
   type IntegrationEntry,
+  type LayoutWindow,
   type PresenceConfig,
   type SettingValue,
   type UiPrefs,
@@ -200,6 +201,16 @@ export function loadConfig(settings: Settings, env: Env) {
       keepDays: text('memory.keepConversations') === 'forever' ? null : Number(text('memory.keepConversations')) || 90,
     },
     screen: { context: values['screen.context'] as boolean, images: values['screen.images'] as boolean },
+    /** Nova's hands (Settings → Hands): using the computer, and saved window layouts. */
+    hands: {
+      computerUse: values['hands.computerUse'] as boolean,
+      showTarget: values['hands.showTarget'] as boolean,
+      pauseOnInput: values['hands.pauseOnInput'] as boolean,
+      maxSteps: num('hands.maxSteps'),
+      shortcutTimeoutMs: num('hands.shortcutSeconds') * 1000,
+      player: text('media.player') as 'auto' | 'Music' | 'Spotify',
+      layouts: values['windows.layouts'] as Record<string, LayoutWindow[]>,
+    },
     /** When Nova speaks up by itself (Settings → Reminders & routines). */
     initiative: {
       speak: text('initiative.speak') as 'free' | 'show' | 'always',

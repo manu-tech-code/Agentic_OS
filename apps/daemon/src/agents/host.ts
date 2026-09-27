@@ -5,7 +5,7 @@ import { homedir, tmpdir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { withTime, type AgentHost, type ReasoningBrain, type TaskCallbacks, type Turn } from '@nova/core';
-import type { Bridge } from './bridge.ts';
+import type { Approver, Bridge } from './bridge.ts';
 import { approvalDetail, describeAction, outputReader, tooLongToSay } from './parsers.ts';
 import { customPreset, PRESETS, type AgentPreset, type CustomAgentSpec, type Invocation } from './presets.ts';
 import { AgentSession } from './session.ts';
@@ -202,21 +202,23 @@ export async function createAgentHost(opts: AgentHostOptions): Promise<NovaAgent
       const agent = find(name);
       const cwd = projects.get(project);
       if (!cwd) throw new Error(`${project} isn't a known project.`);
-      const hookup =
-        agent.preset.approvals && opts.bridge
-          ? opts.bridge.hookup(async (p) => {
-              // What's said is exactly what's allowed: a command too long to say is sent back, not summarized.
-              const unsayable = tooLongToSay(p.tool_name, p.input);
-              if (unsayable) return { deny: unsayable };
-              return callbacks.approve({ action: describeAction(p.tool_name, p.input, cwd), tool: p.tool_name, detail: approvalDetail(p.tool_name, p.input) });
-            })
-          : undefined;
+      // Claude's permission prompts go to the user's voice; every agent gets Nova's tools while it works (by tier, as if the user said nothing).
+      const approve: Approver | undefined = agent.preset.approvals
+        ? async (p) => {
+            // What's said is exactly what's allowed: a command too long to say is sent back, not summarized.
+            const unsayable = tooLongToSay(p.tool_name, p.input);
+            if (unsayable) return { deny: unsayable };
+            return callbacks.approve({ action: describeAction(p.tool_name, p.input, cwd), tool: p.tool_name, detail: approvalDetail(p.tool_name, p.input) });
+          }
+        : undefined;
+      const hookup = opts.bridge && (approve || callbacks.tools) ? opts.bridge.task({ caller: agent.preset.label, approve, host: callbacks.tools }) : undefined;
       try {
-        return await run(agent, agent.preset.task(task, { model: agent.model, approvals: hookup, assistant: opts.assistant }), {
+        const invocation = agent.preset.task(task, { model: agent.model, approvals: hookup?.approvals, tools: callbacks.tools ? hookup?.server : undefined, assistant: opts.assistant });
+        return await run(agent, invocation, {
           cwd,
           signal: AbortSignal.any([signal, AbortSignal.timeout(opts.taskTimeoutMs)]),
           onStep: callbacks.onStep,
-          // A spoken yes can take a while; don't let the permission tool call time out first.
+          // A spoken yes can take a while; don't let the permission tool (or a tool that asks first) time out first.
           env: hookup ? { MCP_TOOL_TIMEOUT: '600000' } : undefined,
         });
       } finally {

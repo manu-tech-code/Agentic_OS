@@ -85,6 +85,7 @@ export async function buildSnapshot(
   integrations: SettingsSnapshot['integrations'],
   memory: SettingsSnapshot['memory'],
   screen: SettingsSnapshot['screen'],
+  hands: SettingsSnapshot['hands'],
   presence: SettingsSnapshot['presence'],
   initiative: SettingsSnapshot['initiative'],
   trust: TrustSnapshotInput,
@@ -119,6 +120,7 @@ export async function buildSnapshot(
     brain: trust.brain,
     projects: await Promise.all(projectList.map(async (p) => ({ name: p.name, git: await inGit(p.path) }))),
     screen,
+    hands,
   });
   const privacy = privacyFlows({
     config,
@@ -148,6 +150,7 @@ export async function buildSnapshot(
     integrations,
     memory,
     screen,
+    hands,
     presence,
     initiative,
     setup: { onboarded: trust.onboarded, steps: setup },

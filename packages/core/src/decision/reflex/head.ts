@@ -36,7 +36,8 @@ export interface TrainOptions {
 }
 
 /** `trainHead`'s defaults, named so a cache key can include them (see `ReflexEvaluationModel.trainingKey`). */
-export const DEFAULT_TRAIN_OPTIONS: Required<Omit<TrainOptions, 'pause'>> = { epochs: 12, batch: 32, rate: 0.02, l2: 1e-5, seed: 7 };
+// 24 epochs: with Hands' eight intents, 12 left short replies it was trained on ("never mind", "okay") to the classes around them.
+export const DEFAULT_TRAIN_OPTIONS: Required<Omit<TrainOptions, 'pause'>> = { epochs: 24, batch: 32, rate: 0.02, l2: 1e-5, seed: 7 };
 
 export class ReflexHead {
   readonly classes: string[];

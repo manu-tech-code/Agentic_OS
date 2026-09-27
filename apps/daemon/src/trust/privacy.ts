@@ -137,6 +137,24 @@ export function privacyFlows(input: PrivacyInput): PrivacyFlow[] {
     toggle: toggle('screen.images'),
   });
   flows.push({
+    id: 'computer-use',
+    what: "A picture of your screen and what's on it, while a brain uses the computer for you",
+    where: toBrain.where,
+    detail: 'Only while it does something you asked for; each click and each thing it types is asked about first, unless you say "go ahead with all of it".',
+    leaves: toBrain.leaves,
+    on: Boolean(brain) && config.hands.computerUse,
+    toggle: toggle('hands.computerUse'),
+  });
+  flows.push({
+    id: 'files-read',
+    what: 'Files a brain reads for you ("summarize the contract"), and what is on your clipboard when it asks',
+    where: toBrain.where,
+    detail: 'Only when you asked for it in so many words - otherwise Nova asks you first, naming the file.',
+    leaves: toBrain.leaves,
+    on: Boolean(brain),
+    section: 'hands',
+  });
+  flows.push({
     id: 'memories',
     what: 'Memories related to each open question',
     where: toBrain.where,

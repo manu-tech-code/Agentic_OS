@@ -23,6 +23,8 @@ const TRY: [string, string][] = [
   ['remind me to call mum at 5', 'reminders - repeating ones too'],
   ['brief me', 'your day: calendar, weather, reminders, agents'],
   ['ask Claude to fix the failing test in Agentic_OS', 'an agent works; you approve each step out loud'],
+  ['Safari on the left and Slack on the right', 'your windows, volume, music, files and Shortcuts'],
+  ['use the computer to book a table', 'a brain looks at the screen and clicks, asking before each step'],
   ['yes, always', 'to one of Nova’s questions: it won’t ask about exactly that again'],
   ['undo that', 'takes back the last thing - even an agent’s file changes'],
   ['what did you do today?', 'the record of actions, with who asked'],

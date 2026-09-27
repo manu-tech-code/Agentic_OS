@@ -97,6 +97,7 @@ export type SettingsSection =
   | 'initiative'
   | 'memory'
   | 'screen'
+  | 'hands'
   | 'integrations'
   | 'models'
   | 'agents'
@@ -132,6 +133,12 @@ export const SECTIONS: { id: SettingsSection; label: string; icon: string; blurb
     label: 'Screen',
     icon: '◧',
     blurb: "What Nova can see: what you're working in, with each question - and your screen, when you ask it to look.",
+  },
+  {
+    id: 'hands',
+    label: 'Hands',
+    icon: '☝︎',
+    blurb: 'What Nova can do on your Mac: its settings, your music, windows, files, the clipboard, your Shortcuts - and using the computer for you, one step at a time, with your yes.',
   },
   {
     id: 'integrations',
@@ -387,6 +394,67 @@ export const FIELDS: SettingField[] = [
   },
 
   {
+    key: 'hands.computerUse',
+    section: 'hands',
+    label: 'Let brains use the computer',
+    help: 'Whoever answers can look at your screen and click, type and scroll for you - asking before each step, or once when you say "go ahead with all of it". Off: only your own commands, like "click send".',
+    type: 'toggle',
+    default: true,
+  },
+  {
+    key: 'hands.showTarget',
+    section: 'hands',
+    label: "Show what's about to be clicked",
+    help: 'While Nova asks, a frame around the button or field it means, so you can see what your yes is for.',
+    type: 'toggle',
+    default: true,
+  },
+  {
+    key: 'hands.pauseOnInput',
+    section: 'hands',
+    label: 'Wait while you use the mouse or keyboard',
+    help: "While a brain uses the computer, Nova holds off whenever you're using the mouse or keyboard, so it never fights you for them.",
+    type: 'toggle',
+    default: true,
+  },
+  {
+    key: 'hands.maxSteps',
+    section: 'hands',
+    label: 'Most steps for one request',
+    help: 'Clicks, typing, keys and scrolls a brain may take for one thing you ask, before it stops and tells you what is left.',
+    type: 'number',
+    default: 60,
+    min: 5,
+    max: 300,
+    step: 5,
+  },
+  {
+    key: 'hands.shortcutSeconds',
+    section: 'hands',
+    label: 'Longest a shortcut may run',
+    help: 'Your Shortcuts, run by name ("run my log water shortcut"). One still running after this is stopped.',
+    type: 'number',
+    default: 60,
+    unit: 's',
+    min: 5,
+    max: 600,
+    step: 5,
+  },
+  {
+    key: 'media.player',
+    section: 'hands',
+    label: 'Music player',
+    help: '"Play", "pause" and "next song" go to the one playing. This one plays when nothing is, and searches your library for "play some jazz" (the Music app only).',
+    type: 'select',
+    default: 'auto',
+    options: [
+      { value: 'auto', label: 'Automatic - whichever is playing, else the Music app' },
+      { value: 'Music', label: 'The Music app' },
+      { value: 'Spotify', label: 'Spotify' },
+    ],
+  },
+
+  {
     key: 'hearing.engine',
     section: 'hearing',
     label: 'Speech recognition',
@@ -598,7 +666,18 @@ export const FIELDS: SettingField[] = [
     default: '',
     placeholder: 'automatic',
   },
-  { key: 'answers.timeoutSeconds', section: 'answers', label: 'Time limit', type: 'number', default: 60, unit: 's', min: 5, max: 600, step: 5 },
+  {
+    key: 'answers.timeoutSeconds',
+    section: 'answers',
+    label: 'Time limit',
+    help: "How long whoever answers may think without getting anywhere. Time in Nova's tools - using the computer, waiting for your yes - doesn't count.",
+    type: 'number',
+    default: 60,
+    unit: 's',
+    min: 5,
+    max: 600,
+    step: 5,
+  },
 
   { key: 'agents.taskTimeoutMinutes', section: 'agents', label: 'Longest a task may run', type: 'number', default: 30, unit: 'min', min: 1, max: 240, step: 1 },
 
@@ -633,10 +712,27 @@ export const COLLECTIONS: Record<string, SettingValue> = {
   routines: {},
   /** What the user said "yes, always" (or "for today") to, by id: { key, label, until? }. */
   'trust.rules': {},
+  /** Window layouts by name ("save this layout as work"): each window's app, title and place on its display. */
+  'windows.layouts': {},
 };
 
 /** Collections whose entries can be saved one at a time, e.g. "projects.named.site". */
-export const ENTRY_COLLECTIONS = ['models.servers', 'agents.options', 'agents.custom', 'projects.named', 'integrations.servers', 'routines', 'trust.rules'];
+export const ENTRY_COLLECTIONS = ['models.servers', 'agents.options', 'agents.custom', 'projects.named', 'integrations.servers', 'routines', 'trust.rules', 'windows.layouts'];
+
+/**
+ * One window of a saved layout: which app (and window, by title), and where on its display - as
+ * fractions of the display's usable area (0-1), so it fits a display of any size.
+ */
+export interface LayoutWindow {
+  app: string;
+  title?: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** Which display, counted from the main one (0). */
+  display?: number;
+}
 
 /** Local servers that speak the OpenAI-compatible API, addressed as "<name>/<model>". */
 export const LOCAL_SERVERS: Record<string, string> = {
@@ -757,8 +853,25 @@ function ruleProblem(name: string, v: unknown): string | null {
   return v.until === undefined || (typeof v.until === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v.until)) ? null : 'needs until to be a day like 2026-09-27';
 }
 
+/** A saved window layout: a list of windows, each with an app and a place given as fractions of its display. */
+function layoutProblem(name: string, v: unknown): string | null {
+  if (!isEntryName(name)) return 'needs a name of letters, digits, spaces, - and _';
+  const shape = 'should be a list like [{ "app": "Safari", "x": 0, "y": 0, "w": 0.5, "h": 1 }]';
+  if (!Array.isArray(v) || !v.length || v.length > 50) return shape;
+  for (const w of v) {
+    if (!isObject(w) || typeof w.app !== 'string' || !w.app.trim()) return shape;
+    const place = [w.x, w.y, w.w, w.h];
+    if (!place.every((n) => typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1)) return `has a window of ${w.app} whose x, y, w and h aren't fractions from 0 to 1`;
+    if ((w.w as number) <= 0 || (w.h as number) <= 0 || (w.x as number) + (w.w as number) > 1.001 || (w.y as number) + (w.h as number) > 1.001) return `has a window of ${w.app} that doesn't fit its display`;
+    if (w.title !== undefined && (typeof w.title !== 'string' || w.title.length > 300)) return 'needs each title to be text';
+    if (w.display !== undefined && !(Number.isInteger(w.display) && (w.display as number) >= 0 && (w.display as number) < 16)) return 'needs display to be a number from 0';
+  }
+  return null;
+}
+
 function entryProblem(collection: string, name: string, v: unknown): string | null {
   if (collection === 'integrations.servers') return integrationProblem(name, v);
+  if (collection === 'windows.layouts') return layoutProblem(name, v);
   if (collection === 'trust.rules') return ruleProblem(name, v);
   if (collection === 'routines') return routineProblem(name, v);
   if (collection === 'models.servers') {
@@ -890,6 +1003,18 @@ export interface SettingsSnapshot {
   };
   /** Nova Eyes: whether it runs, what macOS lets it do, and why not. */
   screen: { available: boolean; running: boolean; permissions: { accessibility: boolean; screen: boolean } | null; message?: string };
+  /** Nova's hands: what they can reach, the user's Shortcuts (and which turn Focus on and off), and saved window layouts. */
+  hands: {
+    available: boolean;
+    /** Null until Nova Eyes has said. */
+    permissions: { accessibility: boolean; screen: boolean } | null;
+    shortcuts: string[] | null;
+    focus: { on?: string; off?: string; toggle?: string; status?: string };
+    layouts: { name: string; windows: number; apps: string[] }[];
+    /** Nova's hands are on the computer right now. */
+    active: boolean;
+    message?: string;
+  };
   /** How Nova hears: the engine in use, and the models and helper it needs. */
   hearing: {
     status: HearingStatus;

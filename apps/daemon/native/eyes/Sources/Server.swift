@@ -84,6 +84,57 @@ func handle(_ request: [String: Any]) async -> [String: Any] {
     return await Look.capture(scope: request["scope"] as? String ?? "window", maxSize: request["maxSize"] as? Int ?? 1568, image: request["image"] as? Bool ?? true, skipTitles: skip)
   case "permissions":
     return await MainActor.run { Permissions.request(request["request"] as? [String] ?? []) }
+
+  // Nova's hands: seeing and using the front window.
+  case "ui.snapshot":
+    return await UISnapshots.take(scope: request["scope"] as? String ?? "screen", maxSize: request["maxSize"] as? Int ?? 1440, withImage: request["image"] as? Bool ?? true, skipTitles: skip)
+  case "ui.act":
+    return await UIActions.perform(request)
+  case "ui.idle":
+    return UIActions.idle()
+  case "ui.highlight":
+    return await MainActor.run { Highlight.show(request) }
+  case "ui.unhighlight":
+    await MainActor.run { Highlight.hide() }
+    return ["ok": true]
+
+  // Windows and apps.
+  case "windows.list":
+    return await Windows.list()
+  case "windows.set":
+    return await Windows.set(request)
+  case "app.hide":
+    return await Windows.app(request, "hide")
+  case "app.unhide":
+    return await Windows.app(request, "unhide")
+  case "app.activate":
+    return await Windows.app(request, "activate")
+  case "app.unhideAll":
+    return await Windows.app(request, "unhideAll")
+
+  // The Mac's own controls.
+  case "system.brightness":
+    return SystemControls.brightness(request)
+  case "system.bluetooth":
+    return SystemControls.bluetooth(request)
+  case "system.lock":
+    return SystemControls.lock()
+  case "media.key":
+    let key = request["key"] as? String ?? ""
+    return await MainActor.run { SystemControls.mediaKey(key) }
+
+  // The clipboard and files.
+  case "clipboard.read":
+    return Clipboard.read(max: request["max"] as? Int ?? 20_000)
+  case "clipboard.write":
+    return Clipboard.write(request["text"] as? String ?? "")
+  case "files.trash":
+    return FileOps.trash(request["path"] as? String ?? "")
+  case "files.untrash":
+    return FileOps.untrash(request["trashed"] as? String ?? "", to: request["original"] as? String ?? "")
+  case "files.text":
+    return FileOps.pdfText(request["path"] as? String ?? "", max: request["max"] as? Int ?? 20_000)
+
   case "quit":
     exit(0)
   default:

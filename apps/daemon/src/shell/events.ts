@@ -42,6 +42,7 @@ const SHAPES: { [T in ClientEvent['type']]: Shape } = {
   'screen-permission': { kind: ['accessibility', 'screen'] },
   'screen-restart': {},
   'screen-preview': {},
+  'hands-refresh': {},
   'integration-sign-in': { name: 'string' },
   'integration-sign-out': { name: 'string' },
   'integration-retry': { name: 'string' },

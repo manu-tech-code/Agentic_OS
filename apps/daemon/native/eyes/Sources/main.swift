@@ -23,6 +23,11 @@ if args.contains("--permissions") {
   printJSON(Permissions.status())
   exit(0)
 }
+if args.contains("--hands-selftest") {
+  let result = HandsSelfTest.run()
+  printJSON(result)
+  exit(result["ok"] as? Bool == true ? 0 : 1)
+}
 
 guard let socket = option("--socket"), let parent = option("--parent").flatMap({ Int32($0) }) else {
   FileHandle.standardError.write(Data("usage: nova-eyes --socket <path> --parent <pid>\n".utf8))

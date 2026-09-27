@@ -3,7 +3,7 @@ import { chmod, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { agentSkills, buildQuestions, builtinSkills, initiativeSkills, memorySkills, ReflexEvaluationModel, StaticEmbedder, trustSkills } from '@nova/core';
+import { agentSkills, buildQuestions, builtinSkills, handsSkills, initiativeSkills, memorySkills, ReflexEvaluationModel, StaticEmbedder, trustSkills } from '@nova/core';
 import { EVAL_AGENTS, EVAL_APPS, EVAL_PROJECTS, REPLIES, SET_A, SET_B, SET_C, SET_D, SET_E } from '../src/reflex/evalSet.ts';
 import { DEFAULT_REFLEX_MODEL, downloadModel, isInstalled, modelsDir, readModelFiles, REFLEX_MODELS } from '../src/models/files.ts';
 
@@ -97,7 +97,7 @@ describe.skipIf(!installed)('Reflex with its model', () => {
     await reflex.train();
     const host = { agents: EVAL_AGENTS, projects: EVAL_PROJECTS } as never;
     const decide = async (u: string, state: Record<string, unknown> = {}) =>
-      (await reflex.doEvaluate({ state: { utterance: u, wakeWordUsed: true, canThink: true, ...state }, questions: buildQuestions([...builtinSkills, ...agentSkills, ...memorySkills, ...initiativeSkills, ...trustSkills], EVAL_APPS, u, host) } as never))
+      (await reflex.doEvaluate({ state: { utterance: u, wakeWordUsed: true, canThink: true, ...state }, questions: buildQuestions([...builtinSkills, ...agentSkills, ...memorySkills, ...initiativeSkills, ...trustSkills, ...handsSkills], EVAL_APPS, u, host) } as never))
         .answers as Record<string, any>;
 
     // The held-out sets: C, and E (written by an agent that never saw Reflex's data).
