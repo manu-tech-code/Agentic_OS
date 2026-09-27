@@ -72,16 +72,21 @@ const b = (source: string) => new RegExp(`(?:^|\\b)(?:${source})(?=\\b|$)`, 'i')
 /** "a few minutes" is "few minutes", "a couple of hours" is "couple hours": NUMBER knows those. */
 const plainly = (text: string) => text.replace(/\ba\s+few\b/gi, 'few').replace(/\b(?:a\s+)?couple\s+of\b/gi, 'couple');
 
-/** "20 minutes", "an hour and a half", "half an hour", "2 hours 30 minutes": ms, or null. */
+const UNIT = '(second|sec|minute|min|hour|hr|day|week)';
+
+/** "20 minutes", "an hour and a half", "two and a half hours", "half an hour", "2 hours 30 minutes": ms, or null. */
 export function durationMs(text: string): number | null {
   let t = ` ${plainly(text).toLowerCase()} `;
   let total = 0;
-  const half = /\b(?:an?\s+)?(hour|day|minute)\s+and\s+a\s+half\b/;
-  let m = half.exec(t);
-  if (m) {
-    total += 1.5 * UNIT_MS[m[1]!]!;
+  // A half after the unit ("2 hours and a half", "an hour and a half") or before it ("two and a half hours").
+  for (const half of [new RegExp(`\\b(?:(${NUM})\\s*)?${UNIT}s?\\s+and\\s+a\\s+half\\b`, 'g'), new RegExp(`\\b(${NUM})\\s+and\\s+a\\s+half\\s+${UNIT}s?\\b`, 'g')]) {
+    for (const m of t.matchAll(half)) {
+      const n = m[1] ? num(m[1]) : 1;
+      if (Number.isFinite(n)) total += (n + 0.5) * UNIT_MS[m[2]!]!;
+    }
     t = t.replace(half, ' ');
   }
+  let m: RegExpExecArray | RegExpMatchArray | null;
   if (/\bhalf\s+an?\s+hour\b/.test(t)) {
     total += 30 * 60_000;
     t = t.replace(/\bhalf\s+an?\s+hour\b/g, ' ');
@@ -90,7 +95,7 @@ export function durationMs(text: string): number | null {
     total += 15 * 60_000;
     t = t.replace(/\ba\s+quarter\s+of\s+an?\s+hour\b/g, ' ');
   }
-  const re = new RegExp(`(${NUM})\\s*(?:more\\s+)?(second|sec|minute|min|hour|hr|day|week)s?\\b`, 'g');
+  const re = new RegExp(`(${NUM})\\s*(?:more\\s+)?${UNIT}s?\\b`, 'g');
   for (m of t.matchAll(re)) {
     const n = num(m[1]!);
     if (Number.isFinite(n)) total += n * UNIT_MS[m[2]!]!;
@@ -98,7 +103,10 @@ export function durationMs(text: string): number | null {
   return total > 0 ? Math.round(total) : null;
 }
 
-const DURATION = `(?:(?:an?\\s+)?(?:hour|day|minute)\\s+and\\s+a\\s+half|half\\s+an?\\s+hour|a\\s+quarter\\s+of\\s+an?\\s+hour|${NUM}\\s*(?:second|sec|minute|min|hour|hr|day|week)s?)(?:\\s*(?:,|and)?\\s*(?:${NUM}\\s*(?:second|sec|minute|min|hour|hr)s?|a\\s+half))*`;
+const DURATION = `(?:${NUM}\\s+and\\s+a\\s+half\\s+(?:second|sec|minute|min|hour|hr|day|week)s?|(?:an?\\s+)?(?:hour|day|minute)\\s+and\\s+a\\s+half|half\\s+an?\\s+hour|a\\s+quarter\\s+of\\s+an?\\s+hour|${NUM}\\s*(?:second|sec|minute|min|hour|hr|day|week)s?)(?:\\s*(?:,|and)?\\s*(?:${NUM}\\s*(?:second|sec|minute|min|hour|hr)s?|a\\s+half))*`;
+
+/** "3 days", "2 weeks": whole days away, which are a day on the calendar (at the time said) rather than a countdown. */
+const onlyDays = (duration: string) => /\b(?:day|week)s?\b/i.test(duration) && !/\b(?:second|sec|minute|min|hour|hr)s?\b|\bhalf\b|\bquarter\b/i.test(duration);
 
 /** Understand when, or null if no time was said. `now` is the user's own clock. */
 export function parseWhen(text: string, now: Date): When | null {
@@ -115,9 +123,11 @@ export function parseWhen(text: string, now: Date): When | null {
     }
   }
 
-  // A countdown: "in 20 minutes", "20 minutes from now", "after an hour".
-  const countdown = w.take(b(`(?:in|after|within)\\s+(?:about\\s+|around\\s+|another\\s+)?(${DURATION})`)) ?? w.take(b(`(${DURATION})\\s+from\\s+now`));
-  if (countdown) {
+  // A countdown: "in 20 minutes", "20 minutes from now", "after an hour". Whole days ("in 2 days at 5pm") are a day, below.
+  const countdownRe = [b(`(?:in|after|within)\\s+(?:about\\s+|around\\s+|another\\s+)?(${DURATION})`), b(`(${DURATION})\\s+from\\s+now`)];
+  const found = countdownRe.find((re) => re.test(w.text));
+  if (found && !onlyDays(found.exec(w.text)![1]!)) {
+    const countdown = w.take(found)!;
     const ms = durationMs(countdown[1]!);
     if (ms) return { at: new Date(now.getTime() + ms), inMs: ms, rest: tidy(w.text), timeGiven: false };
   }
@@ -126,6 +136,8 @@ export function parseWhen(text: string, now: Date): When | null {
   const day = repeat ? null : takeDay(w, now);
   const time = takeTime(w);
   const part = time ? null : takePart(w);
+  // "Tomorrow evening at 8", "at 7 tonight": the part of the day said with the day settles am or pm (12 stays noon).
+  if (time && !time.meridiem && time.hour >= 1 && time.hour <= 11 && day?.part !== undefined) time.meridiem = day.part < 12 ? 'am' : 'pm';
 
   if (repeat) {
     const hour = time ? pickHour(time, null, now) : part ? PART_HOUR[part]! : repeat.every === 'weekend' ? 10 : 9;
@@ -134,10 +146,12 @@ export function parseWhen(text: string, now: Date): When | null {
   }
   if (day) {
     const base = new Date(day.year, day.month, day.date);
-    const hour = time ? pickHour(time, base, now) : part ? PART_HOUR[part]! : (day.part ?? 9);
-    let at = new Date(day.year, day.month, day.date, hour, time?.minute ?? 0);
-    if (at <= now && day.weekday !== undefined) at = new Date(day.year, day.month, day.date + 7, hour, time?.minute ?? 0);
-    if (at <= now && day.nextYearIfPast) at = new Date(day.year + 1, day.month, day.date, hour, time?.minute ?? 0);
+    const partHour = part ? PART_HOUR[part] : day.part;
+    // No time and no part of the day: 9 AM - or, for "in 3 days", this time of day.
+    const [hour, minute] = time ? [pickHour(time, base, now), time.minute] : partHour !== undefined ? [partHour, 0] : day.sameTime ? [now.getHours(), now.getMinutes()] : [9, 0];
+    let at = new Date(day.year, day.month, day.date, hour, minute);
+    if (at <= now && day.weekday !== undefined) at = new Date(day.year, day.month, day.date + 7, hour, minute);
+    if (at <= now && day.nextYearIfPast) at = new Date(day.year + 1, day.month, day.date, hour, minute);
     return { at, rest: tidy(w.text), timeGiven: Boolean(time) };
   }
   if (time) {
@@ -172,8 +186,8 @@ function takeTime(w: Words): Clock | null {
   // 5pm, 5:30 pm, at 9 a.m.
   m = w.take(b(`(?:at\\s+)?(${HOUR})(?:[:.](\\d{2}))?\\s*(am|pm|a\\.m\\.?|p\\.m\\.?)`));
   if (m) return { hour: hourOf(m[1]!), minute: Number(m[2] ?? 0), meridiem: m[3]!.toLowerCase().startsWith('a') ? 'am' : 'pm' };
-  // 17:30, 9:15 - a colon makes it a time.
-  m = w.take(b(`(?:at\\s+)?([01]?\\d|2[0-3])[:.]([0-5]\\d)`));
+  // 17:30, 9:15 - a colon makes it a time; a dot only after "at" ("the 12.50 bill" is a price).
+  m = w.take(b(`(?:at\\s+)?([01]?\\d|2[0-3]):([0-5]\\d)`)) ?? w.take(b(`at\\s+([01]?\\d|2[0-3])\\.([0-5]\\d)`));
   if (m) {
     const hour = Number(m[1]);
     return { hour, minute: Number(m[2]), meridiem: hour >= 13 || hour === 0 ? (hour >= 12 ? 'pm' : 'am') : meridiemAfter(w) };
@@ -209,6 +223,8 @@ interface Day {
   nextYearIfPast?: boolean;
   /** A day part said with the day ("tomorrow morning"). */
   part?: number;
+  /** Days from now ("in 3 days"): with no time said, at this time of day. */
+  sameTime?: boolean;
 }
 
 function takeDay(w: Words, now: Date): Day | null {
@@ -227,8 +243,9 @@ function takeDay(w: Words, now: Date): Day | null {
   if (m) return { year: y, month: mo, date: d, part: 20 };
   m = w.take(b('today'));
   if (m) return { year: y, month: mo, date: d, part: partAfter() };
-  m = w.take(b(`in\\s+(${NUM})\\s+days?`)) ?? w.take(b(`(${NUM})\\s+days?\\s+from\\s+now`));
-  if (m) return { year: y, month: mo, date: d + num(m[1]!) };
+  // in 3 days, in 2 weeks, a week from now - at the time said with it, if one is
+  m = w.take(b(`(?:in|after|within)\\s+(?:about\\s+|around\\s+|another\\s+)?(${NUM})\\s+(day|week)s?`)) ?? w.take(b(`(${NUM})\\s+(day|week)s?\\s+from\\s+now`));
+  if (m && Number.isFinite(num(m[1]!))) return { year: y, month: mo, date: d + num(m[1]!) * (m[2]!.toLowerCase() === 'week' ? 7 : 1), part: partAfter(), sameTime: true };
   m = w.take(b('next\\s+week'));
   if (m) return { year: y, month: mo, date: d + ((8 - now.getDay()) % 7 || 7) }; // next Monday
   // on Friday, this Friday, next Friday, Friday morning
