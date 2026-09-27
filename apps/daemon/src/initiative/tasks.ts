@@ -1,6 +1,6 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { readFile } from 'node:fs/promises';
 import type { TaskRecord } from '@nova/core';
+import { setAside, writeDurably } from './durable.ts';
 
 const KEEP = 100;
 
@@ -13,6 +13,8 @@ export class TaskStore {
   private tasks: TaskRecord[] = [];
   private saving: Promise<unknown> = Promise.resolve();
   private pending: ReturnType<typeof setTimeout> | undefined;
+  /** The file couldn't be read, nor kept aside: nothing is saved over it. */
+  private broken = false;
 
   constructor(
     private readonly file: string,
@@ -20,11 +22,27 @@ export class TaskStore {
   ) {}
 
   async load() {
+    let raw: string | null = null;
     try {
-      const parsed = JSON.parse(await readFile(this.file, 'utf8')) as { tasks?: TaskRecord[] };
-      this.tasks = (parsed.tasks ?? []).filter((t) => typeof t?.id === 'string' && typeof t.task === 'string');
-    } catch {
-      this.tasks = [];
+      raw = await readFile(this.file, 'utf8');
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') this.broken = true; // there, but not readable: left as it is
+    }
+    this.tasks = [];
+    if (raw !== null) {
+      let parsed: { tasks?: unknown } | null = null;
+      try {
+        parsed = JSON.parse(raw) as { tasks?: unknown };
+      } catch {
+        // below
+      }
+      if (parsed && typeof parsed === 'object' && Array.isArray(parsed.tasks)) {
+        this.tasks = (parsed.tasks as TaskRecord[]).filter((t) => typeof t?.id === 'string' && typeof t.task === 'string');
+      } else {
+        const kept = await setAside(this.file); // unreadable: kept beside, never written over
+        this.broken = !kept;
+        console.warn(`  [tasks] ${this.file} couldn't be read${kept ? `, so it's kept as ${kept}` : " - it's left as it is"}`);
+      }
     }
     for (const t of this.tasks) {
       if (t.status !== 'running') continue;
@@ -62,14 +80,9 @@ export class TaskStore {
   }
 
   private save() {
+    if (this.broken) return this.saving;
     const data = `${JSON.stringify({ tasks: this.tasks }, null, 2)}\n`;
-    this.saving = this.saving
-      .then(async () => {
-        await mkdir(dirname(this.file), { recursive: true });
-        await writeFile(`${this.file}.tmp`, data, { mode: 0o600 });
-        await rename(`${this.file}.tmp`, this.file);
-      })
-      .catch((e) => console.warn(`  [tasks] can't save: ${(e as Error).message}`));
+    this.saving = this.saving.then(() => writeDurably(this.file, data)).catch((e) => console.warn(`  [tasks] can't save: ${(e as Error).message}`));
     return this.saving;
   }
 }

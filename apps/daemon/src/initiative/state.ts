@@ -1,6 +1,6 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { readFile } from 'node:fs/promises';
 import type { ProjectService } from '@nova/core';
+import { setAside, writeDurably } from './durable.ts';
 
 /** How long a project the user named wins over what's on screen. */
 const SAID_WINS_MS = 4 * 3_600_000;
@@ -16,6 +16,8 @@ export class InitiativeState implements ProjectService {
   /** The first-run walkthrough was done (or skipped). Nova that ran before it existed counts as set up. */
   onboarded = false;
   private saving: Promise<unknown> = Promise.resolve();
+  /** The file couldn't be read, nor kept aside: nothing is saved over it. */
+  private broken = false;
 
   constructor(
     private readonly file: string,
@@ -23,13 +25,24 @@ export class InitiativeState implements ProjectService {
   ) {}
 
   async load() {
+    let raw: string;
     try {
-      const parsed = JSON.parse(await readFile(this.file, 'utf8')) as { project?: InitiativeState['project']; briefedOn?: string; onboarded?: boolean };
+      raw = await readFile(this.file, 'utf8');
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') this.broken = true; // there, but not readable: left as it is
+      return this; // nothing kept yet
+    }
+    try {
+      const parsed = JSON.parse(raw) as { project?: InitiativeState['project']; briefedOn?: string; onboarded?: boolean };
+      if (!parsed || typeof parsed !== 'object') throw new Error('not an object');
       if (parsed.project && typeof parsed.project.name === 'string') this.project = parsed.project;
       if (typeof parsed.briefedOn === 'string') this.briefedOn = parsed.briefedOn;
       this.onboarded = parsed.onboarded ?? true;
     } catch {
-      // nothing kept yet
+      // Unreadable: kept beside, never written over.
+      const kept = await setAside(this.file);
+      this.broken = !kept;
+      console.warn(`  [state] ${this.file} couldn't be read${kept ? `, so it's kept as ${kept}` : " - it's left as it is"}`);
     }
     return this;
   }
@@ -68,14 +81,9 @@ export class InitiativeState implements ProjectService {
 
   private save() {
     this.changed();
+    if (this.broken) return this.saving;
     const data = `${JSON.stringify({ project: this.project, briefedOn: this.briefedOn, onboarded: this.onboarded }, null, 2)}\n`;
-    this.saving = this.saving
-      .then(async () => {
-        await mkdir(dirname(this.file), { recursive: true });
-        await writeFile(`${this.file}.tmp`, data, { mode: 0o600 });
-        await rename(`${this.file}.tmp`, this.file);
-      })
-      .catch((e) => console.warn(`  [state] can't save: ${(e as Error).message}`));
+    this.saving = this.saving.then(() => writeDurably(this.file, data)).catch((e) => console.warn(`  [state] can't save: ${(e as Error).message}`));
     return this.saving;
   }
 

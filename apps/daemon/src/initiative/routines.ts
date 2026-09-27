@@ -1,13 +1,16 @@
 import { nextTime, parseWhen, type Routine, type RoutineService } from '@nova/core';
+import { atTime, type Waiting } from './clock.ts';
 
-const MAX_WAIT_MS = 6 * 3_600_000;
+/** A run more than this late (the Mac was asleep, or Nova off) is skipped: it waits for its next time. */
+export const LATE_RUN_MS = 3_600_000;
 
 /**
  * The user's routines, from Settings (routines.<name>): run by their phrase (NovaBrain matches it)
- * or by their schedule, here. A scheduled one due while the user is away runs when they're back.
+ * or by their schedule, here - timed by the wall clock, so the Mac sleeping never moves them. A
+ * scheduled one due while the user is away runs when they're back.
  */
 export class Routines implements RoutineService {
-  private timers: ReturnType<typeof setTimeout>[] = [];
+  private readonly timers = new Map<string, Waiting>();
   private waiting = new Set<string>();
 
   constructor(
@@ -31,10 +34,9 @@ export class Routines implements RoutineService {
     return this.opts.save(routine);
   }
 
-  /** Settings changed: time the scheduled ones afresh. */
+  /** Settings changed (or the clock did): time the scheduled ones afresh. */
   configure() {
-    for (const t of this.timers) clearTimeout(t);
-    this.timers = [];
+    this.close();
     for (const routine of this.list()) {
       if (!routine.schedule) continue;
       const schedule = parseWhen(routine.schedule, new Date(this.now()))?.schedule;
@@ -52,8 +54,8 @@ export class Routines implements RoutineService {
   }
 
   close() {
-    for (const t of this.timers) clearTimeout(t);
-    this.timers = [];
+    for (const t of this.timers.values()) t.cancel();
+    this.timers.clear();
   }
 
   private now() {
@@ -62,12 +64,19 @@ export class Routines implements RoutineService {
 
   private arm(routine: Routine, schedule: NonNullable<ReturnType<typeof parseWhen>>['schedule'] & object) {
     const due = nextTime(schedule, new Date(this.now())).getTime();
-    const timer = setTimeout(() => {
-      if (this.now() + 1000 < due) return this.arm(routine, schedule); // woke early (a long wait is split up)
-      if (this.opts.away()) this.waiting.add(routine.name);
-      else this.opts.run(routine);
-      this.arm(routine, schedule);
-    }, Math.min(Math.max(0, due - this.now()), MAX_WAIT_MS));
-    this.timers.push(timer);
+    this.timers.get(routine.name)?.cancel();
+    this.timers.set(
+      routine.name,
+      atTime(
+        due,
+        (late) => {
+          if (late > LATE_RUN_MS) console.log(`  [routines] "${routine.name}" was due ${Math.round(late / 60_000)} minutes ago - the Mac was asleep, or Nova off - so it waits for next time`);
+          else if (this.opts.away()) this.waiting.add(routine.name);
+          else this.opts.run(routine);
+          this.arm(routine, schedule);
+        },
+        () => this.now(),
+      ),
+    );
   }
 }
