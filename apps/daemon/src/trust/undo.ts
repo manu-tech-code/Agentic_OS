@@ -59,9 +59,14 @@ export class Undoer {
       case 'batch': {
         const results: UndoResult[] = [];
         for (const s of step.steps) results.push(await this.run(s, action).catch((e: Error) => ({ ok: false, message: e.message })));
-        const done = results.filter((r) => r.ok).length;
+        const done = results.filter((r) => r.ok && !r.rest).length;
         if (done === results.length) return { ok: true, message: results.length === 1 ? results[0]!.message : `Okay, all ${results.length} are back.` };
-        return { ok: done > 0, message: done ? `I put back ${done} of the ${results.length}; ${results.find((r) => !r.ok)!.message.replace(/^./, (c) => c.toLowerCase())}` : results[0]!.message };
+        // Part of it: what's left - the steps that failed, or the part of one that did - stays to be undone.
+        const left = step.steps.flatMap((s, i) => (results[i]!.ok ? (results[i]!.rest ? [results[i]!.rest!] : []) : [s]));
+        const rest: UndoStep = left.length === 1 ? left[0]! : { kind: 'batch', steps: left };
+        const failed = results.find((r) => !r.ok) ?? results.find((r) => r.rest)!;
+        if (!results.some((r) => r.ok)) return { ok: false, message: results[0]!.message };
+        return { ok: true, rest, message: `I put back ${done} of the ${results.length}; ${failed.message.replace(/^./, (c) => c.toLowerCase())}` };
       }
     }
   }

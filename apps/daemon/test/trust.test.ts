@@ -91,6 +91,41 @@ describe('the record of actions', () => {
     expect(third.log.stats()).toEqual({ days: 30, kept: 2 });
   });
 
+  it('keeps what is left of an undo that worked in part, undoable - after a restart too', async () => {
+    const dir = await temp();
+    const rest: UndoStep = { kind: 'reminder-cancel', id: 'r2' };
+    const partly = vi.fn(async () => ({ ok: true, message: 'I put back 1 of the 2; …', rest }));
+    const { log: actions, changed } = log(dir, partly);
+    await actions.load();
+    const a = actions.add(item('Set two reminders'), { kind: 'batch', steps: [{ kind: 'reminder-cancel', id: 'r1' }, rest] });
+    expect((await actions.undo(a.id)).ok).toBe(true);
+    expect(changed).not.toHaveBeenCalled();
+    expect(actions.lastUndoable()?.id).toBe(a.id); // not undone: the rest still can be
+    await actions.flushed();
+
+    const again = log(dir);
+    await again.log.load();
+    expect(again.log.lastUndoable()?.id).toBe(a.id);
+    await again.log.undo(a.id);
+    expect(again.undo).toHaveBeenCalledWith(rest, expect.objectContaining({ id: a.id })); // only what was left
+    expect(again.log.lastUndoable()).toBeNull();
+  });
+
+  it('is on disk as undone before it is undone, so stopping halfway never lets it be undone twice', async () => {
+    const dir = await temp();
+    let during: ActionLog | null = null;
+    const undo = vi.fn(async () => {
+      // Nova stops here, mid-undo: what the record says on disk.
+      during = await new ActionLog({ dir, keepDays: () => 30, undo: async () => ({ ok: true, message: '' }) }).load();
+      return { ok: true, message: 'Okay.' };
+    });
+    const { log: actions } = log(dir, undo);
+    await actions.load();
+    const a = actions.add(item('Quit Spotify'), { kind: 'app-open', app: 'Spotify' });
+    await actions.undo(a.id);
+    expect(during!.lastUndoable()).toBeNull();
+  });
+
   it('keeps as many days as Settings says, and searches all of them', async () => {
     const dir = await temp();
     const old = (days: number, label: string) => JSON.stringify({ id: `old${days}`, at: NOW - days * DAY, label, status: 'done', by: days > 20 ? 'Codex' : 'you' });
@@ -196,10 +231,16 @@ describe('undoing', () => {
     expect((await d.undoer.run(past, action)).ok).toBe(false);
   });
 
-  it('says how much of a batch came back', async () => {
+  it('says how much of a batch came back, and keeps what is left to undo', async () => {
     const d = deps();
-    const batch: UndoStep = { kind: 'batch', steps: [{ kind: 'reminder-cancel', id: 'r1' }, { kind: 'reminder-cancel', id: 'nope' }] };
-    expect(await d.undoer.run(batch, action)).toEqual({ ok: true, message: "I put back 1 of the 2; that reminder isn't there any more - it may have gone off already." });
+    const batch: UndoStep = { kind: 'batch', steps: [{ kind: 'reminder-cancel', id: 'r1' }, { kind: 'reminder-cancel', id: 'nope' }, { kind: 'app-quit', app: 'Slack' }] };
+    expect(await d.undoer.run(batch, action)).toEqual({
+      ok: true,
+      message: "I put back 2 of the 3; that reminder isn't there any more - it may have gone off already.",
+      rest: { kind: 'reminder-cancel', id: 'nope' },
+    });
+    const none: UndoStep = { kind: 'batch', steps: [{ kind: 'reminder-cancel', id: 'nope' }] };
+    expect(await d.undoer.run(none, action)).toEqual({ ok: false, message: "That reminder isn't there any more - it may have gone off already." });
   });
 });
 
