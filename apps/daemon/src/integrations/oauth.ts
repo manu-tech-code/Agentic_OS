@@ -21,6 +21,8 @@ export interface SignIn {
   authServer: AuthServer;
   /** The server the tokens are for (the `resource` of every request). */
   resource: string;
+  /** The integration's address when it was signed in to: its tokens go there and nowhere else. */
+  server?: string;
   scope?: string;
   client: { client_id: string; client_secret?: string; redirect_uri: string };
   tokens?: { access_token: string; refresh_token?: string; expires_at?: number; token_type?: string; scope?: string };
@@ -92,6 +94,34 @@ async function firstJson(urls: string[]) {
   return null;
 }
 
+/**
+ * Whether tokens for `resource` may go to `server`: the same site, and the server at or below the
+ * resource's path - how MCP clients check RFC 9728 §3.3 (a server may describe itself or its whole site).
+ */
+export function resourceCovers(resource: string, server: string): boolean {
+  let r: URL;
+  let s: URL;
+  try {
+    r = new URL(resource);
+    s = new URL(server);
+  } catch {
+    return false;
+  }
+  const dir = (path: string) => (path.endsWith('/') ? path : `${path}/`);
+  return r.origin === s.origin && dir(s.pathname).startsWith(dir(r.pathname));
+}
+
+/** An address a sign-in may use: https, or plain http to this Mac (a server running here). */
+export function secureAddress(url: unknown): url is string {
+  if (typeof url !== 'string') return false;
+  try {
+    const { protocol, hostname } = new URL(url);
+    return protocol === 'https:' || (protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(hostname));
+  } catch {
+    return false;
+  }
+}
+
 /** Where and how to sign in for an MCP server. */
 export async function discover(serverUrl: string, resourceMetadata?: string): Promise<Pick<SignIn, 'authServer' | 'resource' | 'scope'>> {
   const server = new URL(serverUrl);
@@ -99,7 +129,12 @@ export async function discover(serverUrl: string, resourceMetadata?: string): Pr
   const resource = await firstJson(
     resourceMetadata ? [resourceMetadata] : [`${server.origin}/.well-known/oauth-protected-resource${path}`, `${server.origin}/.well-known/oauth-protected-resource`],
   );
+  // What the server says about itself only counts if it's about this server (RFC 9728 §3.3).
+  if (resource && !(typeof resource.resource === 'string' && resourceCovers(resource.resource, serverUrl))) {
+    throw new Error(`Its sign-in description is for ${typeof resource.resource === 'string' ? resource.resource : 'no address'}, not ${serverUrl}, so Nova didn't use it.`);
+  }
   const issuer = new URL(resource?.authorization_servers?.[0] ?? server.origin);
+  if (!secureAddress(issuer.href)) throw new Error(`Its sign-in server (${issuer.origin}) isn't a secure address.`);
   const issuerPath = issuer.pathname.replace(/\/$/, '');
   const auth = await firstJson([
     `${issuer.origin}/.well-known/oauth-authorization-server${issuerPath}`,
@@ -107,9 +142,13 @@ export async function discover(serverUrl: string, resourceMetadata?: string): Pr
     ...(issuerPath ? [`${issuer.origin}${issuerPath}/.well-known/openid-configuration`] : []),
   ]);
   if (!auth?.authorization_endpoint || !auth?.token_endpoint) throw new Error("It doesn't describe how to sign in.");
+  // The sign-in page is opened on this Mac, and codes and tokens are sent to the others: web addresses only, encrypted.
+  for (const key of ['authorization_endpoint', 'token_endpoint', 'registration_endpoint'] as const) {
+    if (auth[key] !== undefined && !secureAddress(auth[key])) throw new Error(`Its sign-in server gave an address Nova won't use for ${key.replace(/_/g, ' ')}: ${String(auth[key]).slice(0, 100)}`);
+  }
   return {
     authServer: auth,
-    resource: typeof resource?.resource === 'string' ? resource.resource : serverUrl,
+    resource: resource ? resource.resource : serverUrl,
     scope: Array.isArray(resource?.scopes_supported) && resource.scopes_supported.length ? resource.scopes_supported.join(' ') : undefined,
   };
 }
@@ -140,8 +179,9 @@ export function pkce() {
   return { verifier, challenge: createHash('sha256').update(verifier).digest('base64url') };
 }
 
-/** The sign-in page to open in the browser. */
+/** The sign-in page to open in the browser - only ever a web page (never a file, or another app's address). */
 export function authorizeUrl(signIn: SignIn, state: string, challenge: string) {
+  if (!secureAddress(signIn.authServer.authorization_endpoint)) throw new Error("Its sign-in page isn't a secure web address, so Nova won't open it.");
   const url = new URL(signIn.authServer.authorization_endpoint);
   const params: Record<string, string> = {
     response_type: 'code',
