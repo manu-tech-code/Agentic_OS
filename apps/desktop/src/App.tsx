@@ -401,6 +401,8 @@ export default function App() {
   }, [send, openSettings, stopEverything, showCommand, showSettings, showWelcome]);
 
   const engineShort = state.engine?.split(' ')[0] ?? 'offline';
+  // Reflex or Jev deciding as chosen; amber for the keyword matcher, or anything standing in ("no Jev key").
+  const engineOk = /^(?:reflex|jev)$/.test(engineShort) && !/\((?:no |not installed|[^)]* isn't )[^)]*\)$/.test(state.engine?.split(' → ')[0] ?? '');
   // While the Mac app hears for Nova, "listening" is whatever it says (muted, locked, ...).
   const appListening = inApp ? app?.listening : state.settings?.presence.app?.listening;
   const heardByApp = !['muted', 'no-mic', 'locked'].includes(appListening ?? 'wake-word');
@@ -439,7 +441,7 @@ export default function App() {
     },
     { id: 'type', label: 'Type (⌘K)', glyph: '⌘', onClick: () => setShowCommand(true) },
     { id: '|', label: '', glyph: '', onClick: () => {} },
-    { id: 's1', label: `System 1 · ${state.engine ?? 'offline'}`, glyph: '⚡︎', status: state.connected ? (engineShort === 'jev' ? 'on' : 'warn') : 'off', onClick: () => setShowInspector(true) },
+    { id: 's1', label: `System 1 · ${state.engine ?? 'offline'}`, glyph: '⚡︎', status: state.connected ? (engineOk ? 'on' : 'warn') : 'off', onClick: () => setShowInspector(true) },
     { id: 's2', label: `System 2 · ${state.brain ?? 'not connected'}`, glyph: '✦', status: state.brain ? 'on' : 'off', onClick: () => setShowCommand(true) },
     ...(agentItems.length ? [{ id: '|', label: '', glyph: '', onClick: () => {} }, ...agentItems] : []),
     { id: '|', label: '', glyph: '', onClick: () => {} },

@@ -463,7 +463,7 @@ describe('snapshots of agents’ projects', () => {
 });
 
 describe('the privacy page', () => {
-  const base = { reflex: true, hasGatewayKey: false, brain: true, integrations: [], hearing: { engine: 'apple' as const, state: 'ready' as const }, voiceInstalled: true, isLocal: (id: string) => id.startsWith('lmstudio/') };
+  const base = { reflex: true, hasJevKey: false, brain: true, integrations: [], hearing: { engine: 'apple' as const, state: 'ready' as const }, voiceInstalled: true, isLocal: (id: string) => id.startsWith('lmstudio/') };
 
   it("says where each thing goes, with the brain's destination for what goes with questions", () => {
     const flows = privacyFlows({ ...base, config: loadConfig({}, {}), agents: [{ name: 'claude', label: 'Claude', paired: true }, { name: 'codex', label: 'Codex', paired: false }] });
@@ -475,6 +475,19 @@ describe('the privacy page', () => {
     expect(by['agent-claude']).toMatchObject({ on: true, toggle: { key: 'agents.enabled', on: ['claude'], off: [] } });
     expect(by['agent-codex']).toMatchObject({ on: false, toggle: { key: 'agents.enabled', on: ['claude', 'codex'], off: ['claude'] } });
     expect(by.weather).toMatchObject({ on: false }); // no town set
+  });
+
+  it('sends what is said to TypeSafe only when Jev decides - chosen, and with its key', () => {
+    const jev = loadConfig({ decisions: { engine: 'jev' } }, {});
+    const decisions = (input: Partial<typeof base>, config = jev) => privacyFlows({ ...base, ...input, config, agents: [] }).find((f) => f.id === 'decisions');
+    expect(decisions({})).toMatchObject({ leaves: false, where: 'this Mac (Reflex)' }); // no key: Reflex decides
+    expect(decisions({ hasJevKey: true })).toMatchObject({ leaves: true, where: 'TypeSafe (Jev, jev-latest), at api.typesafe.ai' });
+    expect(decisions({ hasJevKey: true })?.detail).toMatch(/last three exchanges.*Reflex decides on this Mac/);
+    expect(decisions({ hasJevKey: true }, loadConfig({ decisions: { engine: 'jev', fallback: 'heuristic' } }, {}))?.detail).toMatch(/the keyword matcher decides on this Mac/);
+    expect(decisions({ hasJevKey: true }, loadConfig({ decisions: { engine: 'jev', fallback: 'none' } }, {}))?.detail).toMatch(/Nova says it failed/);
+    expect(decisions({ hasJevKey: true }, loadConfig({}, {}))).toMatchObject({ leaves: false }); // automatic stays here
+    // A decision model that isn't on the user's servers can't be reached: nothing leaves.
+    expect(decisions({}, loadConfig({ decisions: { engine: 'llm', model: 'anthropic/claude-haiku-4.5' } }, {}))).toMatchObject({ leaves: false, where: 'this Mac (Reflex)' });
   });
 
   it('keeps it on this Mac with a local model', () => {

@@ -4,7 +4,7 @@ import type { ClientEvent } from '@nova/core/protocol';
 import { FIELDS, personalize, SECTIONS, type SettingField, type SettingsSection, type SettingsSnapshot, type SettingValue } from '@nova/core/settings';
 import { previewVoice } from '../voice/voice';
 import { ListInput, NumberInput, Reset, Switch, TextInput, type Save } from './settings/Controls';
-import { AgentsPanel, GatewayPanel, HearingPanel, OrbPreview, ProjectsPanel, ReflexPanel, ServersPanel, SystemPanel, VoicePanel } from './settings/Panels';
+import { AgentsPanel, HearingPanel, JevPanel, OrbPreview, ProjectsPanel, ReflexPanel, ServersPanel, SystemPanel, VoicePanel } from './settings/Panels';
 import { IntegrationsPanel } from './settings/Integrations';
 import { HandsPanel } from './settings/Hands';
 import { MemoryPanel, ScreenPanel } from './settings/Memory';
@@ -172,6 +172,7 @@ function SectionBody({
       {section === 'initiative' && <InitiativePanel snapshot={snapshot} name={name} onSave={onSave} onAction={onAction} />}
       {section === 'appearance' && <OrbPreview snapshot={snapshot} />}
       {section === 'decisions' && <ReflexPanel snapshot={snapshot} name={name} result={result} onAction={onAction} />}
+      {section === 'decisions' && snapshot.values['decisions.engine'] === 'jev' && <JevPanel snapshot={snapshot} />}
       {section === 'integrations' && <IntegrationsPanel snapshot={snapshot} name={name} onSave={onSave} onAction={onAction} />}
       {section === 'memory' && <MemoryPanel snapshot={snapshot} name={name} onAction={onAction} />}
       {section === 'screen' && <ScreenPanel snapshot={snapshot} name={name} onAction={onAction} preview={screenPreview} />}
@@ -186,7 +187,6 @@ function SectionBody({
         </div>
       )}
       {section === 'projects' && <ProjectsPanel snapshot={snapshot} onSave={onSave} />}
-      {section === 'gateway' && <GatewayPanel snapshot={snapshot} />}
       {section === 'system' && <SystemPanel snapshot={snapshot} />}
     </>
   );

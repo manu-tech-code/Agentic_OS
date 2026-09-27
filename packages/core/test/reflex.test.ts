@@ -231,7 +231,8 @@ describe('Reflex in the engine and the brain', () => {
     engine.learn?.({ utterance: 'banish spotify', question: 'intent', choice: 'quit_app' });
     expect(reflex.learned).toHaveLength(1);
     expect(createDecisionEngine({ engine: 'reflex', fallback: 'none' }).name).toBe('heuristic (Reflex not installed)');
-    expect(createDecisionEngine({ engine: 'auto', hasGatewayKey: true }).name).toMatch(/^jev/);
+    // Automatic never sends what's said anywhere, key or not: Jev decides only when it's chosen.
+    expect(createDecisionEngine({ engine: 'auto', jevApiKey: 'k' }).name).toBe('heuristic');
   });
 
   it('teaches the engine when the user confirms an action', async () => {

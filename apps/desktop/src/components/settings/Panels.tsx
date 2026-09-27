@@ -455,18 +455,25 @@ export function ProjectsPanel({ snapshot, onSave }: { snapshot: SettingsSnapshot
   );
 }
 
-export function GatewayPanel({ snapshot }: { snapshot: SettingsSnapshot }) {
-  const oidc = !snapshot.secrets.AI_GATEWAY_API_KEY && snapshot.secrets.VERCEL_OIDC_TOKEN;
+/** Jev's key: whether it's set (never its value), and where it goes. */
+export function JevPanel({ snapshot }: { snapshot: SettingsSnapshot }) {
+  const set = Boolean(snapshot.secrets.NOVA_JEV_API_KEY);
   return (
     <div className="tile">
       <div className="tile__head">
-        <strong>API key</strong>
-        {oidc ? <SecretStatus name="VERCEL_OIDC_TOKEN" set /> : <SecretStatus name="AI_GATEWAY_API_KEY" set={Boolean(snapshot.secrets.AI_GATEWAY_API_KEY)} />}
+        <span className={`dot ${set ? 'dot--on' : ''}`} />
+        <strong>Jev</strong>
+        <SecretStatus name="NOVA_JEV_API_KEY" set={set} />
       </div>
       <span className="muted">
-        Keys are secrets, so they stay out of the settings file. Create one in the Vercel dashboard → AI Gateway → API Keys, add{' '}
-        <code>AI_GATEWAY_API_KEY=...</code> to <code>{snapshot.constants.envFile}</code>, and restart Nova. Without a key, decisions run offline and
-        answers come from an agent or a local model.
+        {set
+          ? "Each thing you say goes to TypeSafe's Jev to be decided, with your last few exchanges and the choices Nova weighs. When it can't answer in time, the fallback below decides on this Mac."
+          : 'Keys are secrets, so they stay out of the settings file.'}{' '}
+        {!set && (
+          <>
+            Create one at TypeSafe, add <code>NOVA_JEV_API_KEY=...</code> to <code>{snapshot.constants.envFile}</code>, and restart Nova. Until then, Reflex decides.
+          </>
+        )}
       </span>
     </div>
   );

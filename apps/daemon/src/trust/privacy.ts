@@ -10,7 +10,8 @@ export interface PrivacyInput {
   config: Config;
   /** Reflex is installed and deciding. */
   reflex: boolean;
-  hasGatewayKey: boolean;
+  /** NOVA_JEV_API_KEY is set, so Jev decides when it's chosen. */
+  hasJevKey: boolean;
   /** Agents installed on this Mac, the paired ones first (default first); a switched-off one isn't paired. */
   agents: { name: string; label: string; paired: boolean }[];
   /** Whether open questions have someone to answer them now. */
@@ -22,17 +23,6 @@ export interface PrivacyInput {
 }
 
 const VENDORS: Record<string, string> = { claude: 'Anthropic', codex: 'OpenAI', gemini: 'Google' };
-const PROVIDERS: Record<string, string> = {
-  anthropic: 'Anthropic',
-  openai: 'OpenAI',
-  google: 'Google',
-  xai: 'xAI',
-  mistral: 'Mistral',
-  meta: 'Meta',
-  deepseek: 'DeepSeek',
-  'typesafe-ai': 'Typesafe AI',
-  vercel: 'Vercel',
-};
 const THIS_MAC = 'this Mac';
 
 /** Where a brain or agent sends what it's given. */
@@ -46,8 +36,8 @@ function destination(id: string, input: PrivacyInput): { where: string; leaves: 
     return vendor ? { where: `${vendor}, through ${agent.label} - on your own plan`, leaves: true } : { where: `wherever ${agent.label} sends it`, leaves: true };
   }
   if (input.isLocal(id)) return { where: `${THIS_MAC} (${id})`, leaves: false };
-  const provider = PROVIDERS[id.split('/')[0] ?? ''] ?? id.split('/')[0];
-  return { where: `Vercel AI Gateway, then ${provider} (${id})`, leaves: true };
+  // Not one of the user's servers: Nova has no way to reach it, so nothing is sent anywhere.
+  return { where: `nowhere - ${id} isn't a model on one of your servers`, leaves: false };
 }
 
 const hostOf = (where: string) => {
@@ -84,24 +74,27 @@ export function privacyFlows(input: PrivacyInput): PrivacyFlow[] {
   });
 
   // System 1: what each thing said means.
-  const primary = config.engine === 'auto' ? (input.reflex ? 'reflex' : input.hasGatewayKey ? 'jev' : 'heuristic') : config.engine;
-  const decisionModel = config.decisionModel || 'anthropic/claude-haiku-4.5';
-  const decides = (kind: string) =>
-    kind === 'reflex'
-      ? { where: `${THIS_MAC} (Reflex)`, leaves: false }
-      : kind === 'heuristic'
-        ? { where: `${THIS_MAC} (the keyword matcher)`, leaves: false }
-        : kind === 'jev'
-          ? { where: `Vercel AI Gateway (Jev, ${config.jevModel})`, leaves: true }
-          : destination(decisionModel, input);
-  const first = decides(primary);
-  const fallback = config.fallback === 'llm' && primary !== 'llm' ? destination(decisionModel, input) : null;
+  // As the engine decides it: Jev only when chosen and its key is set; a language model only on the user's own servers.
+  const onMac = input.reflex ? `${THIS_MAC} (Reflex)` : `${THIS_MAC} (the keyword matcher)`;
+  const jev = config.engine === 'jev' && input.hasJevKey;
+  const local = config.engine === 'llm' && config.decisionModel && input.isLocal(config.decisionModel) ? `${THIS_MAC} (${config.decisionModel})` : null;
+  // Who decides when Jev can't in time - always here: Reflex, the keyword matcher, or a model on the user's server.
+  const backup =
+    config.fallback === 'none'
+      ? 'Nova says it failed'
+      : config.fallback === 'llm' && config.decisionModel && input.isLocal(config.decisionModel)
+        ? `${config.decisionModel} decides on this Mac`
+        : input.reflex && config.fallback !== 'heuristic'
+          ? 'Reflex decides on this Mac'
+          : 'the keyword matcher decides on this Mac';
   flows.push({
     id: 'decisions',
     what: 'Each thing you say, to decide what it means',
-    where: first.where,
-    detail: fallback?.leaves ? `When ${primary === 'reflex' ? 'Reflex' : 'it'} can't decide in time: ${fallback.where}.` : 'Nothing else goes with it.',
-    leaves: first.leaves || Boolean(fallback?.leaves),
+    where: jev ? `TypeSafe (Jev, ${config.jevModel}), at api.typesafe.ai` : config.engine === 'heuristic' ? `${THIS_MAC} (the keyword matcher)` : (local ?? onMac),
+    detail: jev
+      ? `With it go your last three exchanges with Nova and the choices it weighs - its skills and your apps', agents' and projects' names. TypeSafe says it doesn't train Jev on requests. When Jev can't answer in time, ${backup}.`
+      : 'Nothing else goes with it.',
+    leaves: jev,
     on: true,
     section: 'decisions',
   });

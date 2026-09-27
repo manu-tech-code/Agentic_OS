@@ -4,10 +4,9 @@ import { answerFromWeights } from './distribution.ts';
 import type { CallOptions, EvaluationModelV4, Question, RawAnswer, RawResult } from './types.ts';
 
 /**
- * Makes any chat LLM (Claude, GPT, Gemini, a local model) behave like a
- * System One model: typed answers only, schema-constrained. Slower and pricier
- * than Jev and its probabilities are self-reported, but it always works - the
- * fallback while waiting on Jev access, and a baseline to compare Jev against.
+ * Makes a chat model on one of the user's local servers behave like a System One model: typed
+ * answers only, schema-constrained. Slower than Reflex or Jev and its probabilities are
+ * self-reported, but it keeps everything on the Mac - and it's a baseline to compare them against.
  */
 export class LlmEvaluationModel implements EvaluationModelV4 {
   readonly specificationVersion = 'v4' as const;
@@ -15,8 +14,8 @@ export class LlmEvaluationModel implements EvaluationModelV4 {
   readonly supportedQuestionTypes = ['choice', 'score', 'boolean'] as const;
 
   constructor(
-    private readonly model: LanguageModel,
-    readonly modelId: string = typeof model === 'string' ? model : 'custom-llm',
+    private readonly model: Exclude<LanguageModel, string>,
+    readonly modelId: string = 'custom-llm',
   ) {}
 
   async doEvaluate({ state, questions, abortSignal }: CallOptions): Promise<RawResult> {

@@ -1,12 +1,17 @@
-import { experimental_evaluate as evaluate, type Experimental_EvaluationModel as EvaluationModel, type LanguageModel } from 'ai';
+import { experimental_evaluate as evaluate, type LanguageModel } from 'ai';
 import { HeuristicEvaluationModel } from './heuristicModel.ts';
+import { JEV_DEFAULT_MODEL, JevEvaluationModel } from './jev.ts';
 import { LlmEvaluationModel } from './llmEvaluationModel.ts';
-import type { Decision, DecisionEngine, DecisionExample, Questions, StateInput } from './types.ts';
+import type { Decision, DecisionEngine, DecisionExample, EvaluationModelV4, Questions, StateInput } from './types.ts';
 
+/** A model object, never a bare id: nothing is resolved behind Nova's back (no gateway, no default provider). */
 export interface EngineSlot {
   name: string;
-  model: EvaluationModel;
+  model: EvaluationModelV4;
 }
+
+/** A language model Nova made itself (a local server's): an id string would go to the AI SDK's default provider. */
+export type LocalLanguageModel = Exclude<LanguageModel, string>;
 
 /**
  * Runs typed questions through a primary evaluation model with a hard latency
@@ -18,7 +23,6 @@ export class EvaluationDecisionEngine implements DecisionEngine {
     private readonly primary: EngineSlot,
     private readonly fallback: EngineSlot | null = null,
     private readonly timeoutMs = 1500,
-    private readonly gatewayOptions: Record<string, unknown> = { zeroDataRetention: true },
   ) {}
 
   get name() {
@@ -52,7 +56,6 @@ export class EvaluationDecisionEngine implements DecisionEngine {
       questions,
       maxRetries: 0,
       abortSignal: AbortSignal.timeout(this.timeoutMs),
-      providerOptions: typeof slot.model === 'string' ? { gateway: this.gatewayOptions as any } : undefined,
     });
     const confidence = (result.providerMetadata as any)?.typesafe?.confidence as Record<string, number> | undefined;
     return {
@@ -66,52 +69,56 @@ export class EvaluationDecisionEngine implements DecisionEngine {
 }
 
 export type EngineKind = 'auto' | 'reflex' | 'jev' | 'llm' | 'heuristic';
-export type FallbackKind = 'llm' | 'heuristic' | 'none';
+/** `auto`: Reflex when it's installed and isn't already deciding, otherwise the keyword matcher. */
+export type FallbackKind = 'auto' | 'reflex' | 'llm' | 'heuristic' | 'none';
 
 export interface EngineConfig {
   engine?: EngineKind;
   fallback?: FallbackKind;
   timeoutMs?: number;
+  /** Jev's key (NOVA_JEV_API_KEY): without one, Jev isn't used - Reflex decides, or the keyword matcher. */
+  jevApiKey?: string;
+  /** jev-latest, jev-preview, or a pinned version (jev-1.13.0). */
   jevModel?: string;
-  /** Model id used when an LLM makes the decisions (as primary or fallback). */
+  /** For tests: where Jev's requests go. */
+  jevFetch?: typeof fetch;
+  /** A local model server's model ("lmstudio/...") when a language model makes the decisions. */
   llmModel?: string;
-  /** Turns a model id into an AI SDK model. Defaults to reading it as a Vercel AI Gateway id. */
-  resolveModel?: (id: string) => LanguageModel;
-  hasGatewayKey?: boolean;
+  /** Turns a local model id into a model; null for anything that isn't one of the user's servers. */
+  resolveModel?: (id: string) => LocalLanguageModel | null;
   /** Reflex, Nova's own local decision model, when its embedding model is installed. */
-  reflex?: EvaluationModel;
+  reflex?: EvaluationModelV4;
 }
 
 export function createDecisionEngine(config: EngineConfig = {}): DecisionEngine {
-  const {
-    engine = 'auto',
-    fallback = 'heuristic',
-    timeoutMs = 1500,
-    jevModel = 'typesafe-ai/jev',
-    llmModel = 'anthropic/claude-haiku-4.5',
-    resolveModel = (id: string): LanguageModel => id,
-    hasGatewayKey = false,
-    reflex,
-  } = config;
+  const { engine = 'auto', fallback = 'auto', timeoutMs = 1500, jevApiKey = '', jevModel = JEV_DEFAULT_MODEL, jevFetch, llmModel = '', resolveModel, reflex } = config;
+  const heuristic = (why = ''): EngineSlot => ({ name: `heuristic${why ? ` (${why})` : ''}`, model: new HeuristicEvaluationModel() });
+  // What stands in when the chosen one can't run: Reflex if it's there, else the keyword matcher - and why.
+  const instead = (why: string): EngineSlot => (reflex ? { name: `${reflex.modelId} (${why})`, model: reflex } : heuristic(why));
+  const local = llmModel ? (resolveModel?.(llmModel) ?? null) : null;
 
   const slot = (kind: Exclude<EngineKind, 'auto'>): EngineSlot => {
     switch (kind) {
       case 'reflex':
-        if (reflex) return { name: typeof reflex === 'string' ? reflex : (reflex as { modelId: string }).modelId, model: reflex };
-        return { name: 'heuristic (Reflex not installed)', model: new HeuristicEvaluationModel() };
+        return reflex ? { name: reflex.modelId, model: reflex } : heuristic('Reflex not installed');
       case 'jev':
-        return { name: `jev (${jevModel})`, model: jevModel };
+        return jevApiKey ? { name: `jev (${jevModel})`, model: new JevEvaluationModel({ apiKey: jevApiKey, model: jevModel, fetch: jevFetch }) } : instead('no Jev key');
       case 'llm':
-        return { name: `llm (${llmModel})`, model: new LlmEvaluationModel(resolveModel(llmModel), llmModel) };
+        if (!local) return instead(llmModel ? `${llmModel} isn't a local model server` : 'no decision model');
+        return { name: `llm (${llmModel})`, model: new LlmEvaluationModel(local, llmModel) };
       case 'heuristic':
-        return { name: 'heuristic', model: new HeuristicEvaluationModel() };
+        return heuristic();
     }
   };
 
-  // Automatic: Reflex on this machine; Jev with a gateway key; otherwise keywords.
-  const primaryKind: Exclude<EngineKind, 'auto'> = engine === 'auto' ? (reflex ? 'reflex' : hasGatewayKey ? 'jev' : 'heuristic') : engine;
-  const fallbackSlot = fallback === 'none' || fallback === primaryKind ? null : slot(fallback);
+  // Automatic: Reflex on this machine, otherwise the keyword matcher. Jev decides only when it's chosen.
+  const primaryKind: Exclude<EngineKind, 'auto'> = engine === 'auto' ? (reflex ? 'reflex' : 'heuristic') : engine;
+  const primary = slot(primaryKind);
+  const fallbackKind: Exclude<FallbackKind, 'auto'> = fallback === 'auto' ? (reflex && primary.model !== reflex ? 'reflex' : 'heuristic') : fallback;
+  // No fallback that is the primary again (Reflex standing in for a missing Jev key needs no Reflex behind it).
+  const second = fallbackKind === 'none' ? null : slot(fallbackKind);
+  const fallbackSlot = second && second.model !== primary.model && !(second.model instanceof HeuristicEvaluationModel && primary.model instanceof HeuristicEvaluationModel) ? second : null;
   // LLM decisions are slower; give them room.
-  const budget = primaryKind === 'llm' ? Math.max(timeoutMs, 6000) : timeoutMs;
-  return new EvaluationDecisionEngine(slot(primaryKind), fallbackSlot, budget);
+  const budget = primary.model instanceof LlmEvaluationModel ? Math.max(timeoutMs, 6000) : timeoutMs;
+  return new EvaluationDecisionEngine(primary, fallbackSlot, budget);
 }

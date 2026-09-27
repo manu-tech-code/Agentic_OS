@@ -139,18 +139,21 @@ async function buildRuntime(previous?: Runtime): Promise<Runtime> {
 
 async function finishRuntime(settings: Settings, fileError: string | undefined, config: Config, custom: Record<string, CustomAgentSpec>, agents: NovaAgentHost | null, agentsKey: string): Promise<Runtime> {
   const models = modelResolver(config.localProviders);
-  const hasKey = Boolean(config.gatewayKey);
 
-  // Who answers open questions: a paired agent (claude, codex, ...), a local model (lmstudio/...)
-  // or an AI Gateway id (needs the key). Automatic (empty) means the default paired agent.
-  // Every one of them gets Nova's tools.
+  // Who answers open questions: a paired agent (claude, codex, ...) or a model on one of the user's
+  // local servers (lmstudio/...). Automatic (empty) means the default paired agent. Every one of them
+  // gets Nova's tools.
   const id = config.brainModel === 'off' ? '' : config.brainModel || agents?.agents[0]?.name || '';
   let reasoning: ReasoningBrain | null = null;
   if (id && agents?.agents.some((a) => a.name === id)) {
     const brain = agents.brain(id);
     brain.warm?.(); // start it now, so the first question doesn't wait for it
     reasoning = brain;
-  } else if (id && (hasKey || models.isLocal(id))) reasoning = new LlmReasoningBrain(models.resolve(id), id, config.name, tools);
+  } else if (id) {
+    const local = models.resolve(id);
+    if (local) reasoning = new LlmReasoningBrain(local, id, config.name, tools);
+    else console.warn(`  [answers] ${id} is neither a paired agent nor a model on one of your servers - nobody answers open questions.`);
+  }
 
   const reflex = await loadReflex({ learn: config.learn });
   const voiceAt = await whereInstalled(KOKORO_MODEL);
@@ -161,10 +164,10 @@ async function finishRuntime(settings: Settings, fileError: string | undefined, 
     engine: config.engine,
     fallback: config.fallback,
     timeoutMs: config.timeoutMs,
+    jevApiKey: config.jevKey,
     jevModel: config.jevModel,
     llmModel: config.decisionModel || undefined,
     resolveModel: models.resolve,
-    hasGatewayKey: hasKey,
     reflex: reflex.model ?? undefined,
   });
 
