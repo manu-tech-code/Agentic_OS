@@ -1,4 +1,5 @@
 import { mkdtempSync, readFileSync } from 'node:fs';
+import { chmod, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -45,13 +46,53 @@ describe('downloading a model', () => {
     expect(await isInstalled(DEFAULT_REFLEX_MODEL, dir)).toBe(true);
     expect(urls.every((u) => u.includes(`/resolve/${REFLEX_MODELS[DEFAULT_REFLEX_MODEL]!.revision}/`))).toBe(true);
   });
+
+  it('stops downloading (and rejects) if the server sends more bytes than expected, rather than writing it all anyway', async () => {
+    const fakeName = '__oversized_test_model__';
+    (REFLEX_MODELS as Record<string, (typeof REFLEX_MODELS)[string]>)[fakeName] = {
+      label: 'test',
+      repo: 'test/test',
+      revision: '0'.repeat(40),
+      license: 'MIT',
+      files: { 'file.bin': { size: 100, sha256: '0'.repeat(64) } },
+    };
+    try {
+      serve(() => new Uint8Array(500)); // far more than the declared 100 bytes
+      const dir = mkdtempSync(join(tmpdir(), 'nova-models-'));
+      await expect(downloadModel(fakeName, { dir })).rejects.toThrow(/bigger than expected/);
+      expect(await isInstalled(fakeName, dir)).toBe(false); // nothing left half-written behind
+    } finally {
+      delete (REFLEX_MODELS as Record<string, unknown>)[fakeName];
+    }
+  });
+
+  // Root ignores the permission bits this test relies on to force a write error.
+  it.skipIf(process.getuid?.() === 0)("doesn't crash on a disk-write error (no listener for the write stream's 'error' event used to be fatal) - it just rejects", async () => {
+    serve(() => new Uint8Array(202));
+    const dir = mkdtempSync(join(tmpdir(), 'nova-models-'));
+    const target = join(dir, DEFAULT_REFLEX_MODEL);
+    await mkdir(target, { recursive: true });
+    await chmod(target, 0o500); // read + execute only: creating a file inside it fails (EACCES)
+    try {
+      await expect(downloadModel(DEFAULT_REFLEX_MODEL, { dir })).rejects.toThrow();
+    } finally {
+      await chmod(target, 0o700); // restore, so the temp dir can be cleaned up
+    }
+  });
 });
 
 describe.skipIf(!installed)('Reflex with its model', () => {
   it('decides intents, names and replies accurately in about a millisecond, on phrasings it never learned from', async () => {
     const all = [...SET_A, ...SET_B, ...SET_C, ...SET_D, ...SET_E];
-    // The test phrasings are held out of everything it learns from, as in `npm run reflex:eval`.
-    const holdOut = { texts: all.map((c) => c.u).filter((u) => u.split(/\s+/).length > 2), names: [...EVAL_APPS, ...EVAL_AGENTS.map((a) => a.name), ...EVAL_PROJECTS] };
+    // The test phrasings are held out of everything it learns from, as in `npm run reflex:eval` -
+    // bar one- and two-word replies like "yes" or "stop" (any system knows those), but not a
+    // short phrasing for some other intent ("time", "settings"), which still needs holding out.
+    const replyIntents = new Set(['confirm_yes', 'confirm_no', 'stop']);
+    const short = (u: string) => u.split(/\s+/).length <= 2;
+    const holdOut = {
+      texts: [...all.filter((c) => !short(c.u) || !replyIntents.has(c.intent)).map((c) => c.u), ...REPLIES.map((r) => r.u).filter((u) => !short(u))],
+      names: [...EVAL_APPS, ...EVAL_AGENTS.map((a) => a.name), ...EVAL_PROJECTS],
+    };
     const reflex = new ReflexEvaluationModel({ embedder: StaticEmbedder.fromFiles(DEFAULT_REFLEX_MODEL, await readModelFiles(DEFAULT_REFLEX_MODEL)), learn: false, holdOut });
     await reflex.train();
     const host = { agents: EVAL_AGENTS, projects: EVAL_PROJECTS } as never;
@@ -84,7 +125,10 @@ describe.skipIf(!installed)('Reflex with its model', () => {
       if (r.yes ? choice === 'confirm_yes' : choice === 'confirm_no' || choice === 'stop') replies++;
     }
     times.sort((a, b) => a - b);
-    expect(right / cases.length).toBeGreaterThan(0.84);
+    // Honest numbers, now that holdout also catches near-copies (filler words) and short non-reply
+    // phrasings (see model.ts's heldOutCheck and this file's holdOut above): lower than the 0.84 this
+    // used to require, when some of what it measured against wasn't fully held out after all.
+    expect(right / cases.length).toBeGreaterThan(0.8);
     expect(wrongAction / cases.length).toBeLessThan(0.05);
     expect(addressed / cases.length).toBeGreaterThan(0.9);
     expect(apps / withApp.length).toBeGreaterThan(0.95);
@@ -104,4 +148,38 @@ describe.skipIf(!installed)('Reflex with its model', () => {
     const again = await loadReflex({ learn: false });
     expect(await again.classifier).toBe(true); // the same training, not a second one
   }, 60_000);
+
+  it('drops learned examples with a malformed \'masked\' field instead of leaving the classifier permanently untrained', async () => {
+    const settingsDir = mkdtempSync(join(tmpdir(), 'nova-settings-'));
+    process.env.NOVA_SETTINGS_FILE = join(settingsDir, 'settings.json');
+    vi.resetModules(); // runtime.ts caches `learned` and the trained classifier at module scope, keyed by nothing but this env var
+    const { learnedFile, loadReflex } = await import('../src/reflex/runtime.ts');
+    const { writeFile } = await import('node:fs/promises');
+    const good = { utterance: 'abracadabra', question: 'intent', choice: 'tell_time', masked: ['abracadabra'] };
+    const badString = { utterance: 'x', question: 'intent', choice: 'chat', masked: 'not an array' }; // would spread into characters
+    const badNumber = { utterance: 'y', question: 'intent', choice: 'chat', masked: 42 }; // would throw spreading it
+    const noMasked = { utterance: 'z', question: 'intent', choice: 'chat' }; // masked is optional - this is fine
+    await writeFile(learnedFile(), JSON.stringify([good, badString, badNumber, noMasked]));
+    const { model, status, classifier } = await loadReflex({ learn: true });
+    expect(status.learned).toBe(2); // only `good` and `noMasked` are valid
+    expect(model?.learned.map((e) => e.utterance).sort()).toEqual(['abracadabra', 'z']);
+    expect(await classifier).toBe(true); // training didn't throw on the bad entries and silently fail
+  }, 60_000);
+
+  it('drops the classifier immediately when forgetting, and retrains it in the background', async () => {
+    process.env.NOVA_SETTINGS_FILE = join(mkdtempSync(join(tmpdir(), 'nova-settings-')), 'settings.json');
+    vi.resetModules(); // a fresh module: an earlier test's in-memory classifier cache mustn't bleed in here
+    const { forgetLearned, loadReflex } = await import('../src/reflex/runtime.ts');
+    const first = await loadReflex({ learn: true });
+    await first.classifier;
+    expect(first.model?.trained).toBe(true);
+    first.model!.learn({ utterance: 'abracadabra', question: 'intent', choice: 'tell_time' });
+    await forgetLearned(first.model);
+    // (`ReflexEvaluationModel.forget()` dropping the head synchronously, so it's never left deciding
+    // from a classifier trained on what was just forgotten, is unit-tested directly in packages/core.)
+    // Retrains in the background rather than being left permanently without a classifier.
+    const start = Date.now();
+    while (!first.model?.trained && Date.now() - start < 20_000) await new Promise((r) => setTimeout(r, 200));
+    expect(first.model?.trained).toBe(true);
+  }, 40_000);
 });
