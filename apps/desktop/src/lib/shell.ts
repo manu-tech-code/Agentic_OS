@@ -16,12 +16,32 @@ export const view: 'hud' | 'app' = params.get('view') === 'hud' ? 'hud' : 'app';
 /** A panel to open once the page loads: Settings ("open settings" said while the window was closed), or the walkthrough. */
 export const openOnLoad = params.get('panel') === 'settings' ? 'settings' : params.get('panel') === 'welcome' ? 'welcome' : null;
 
-/** The daemon to talk to: the app says where (only ever this Mac), or the daemon served the page. */
+/**
+ * The daemon's connection secret, which shows it this is Nova's own window: the page that served
+ * this window (the daemon itself, or Nova's dev server) put it in a meta tag. Empty elsewhere.
+ */
+export function daemonToken(): string {
+  return document.querySelector<HTMLMetaElement>('meta[name="nova-token"]')?.content.trim() ?? '';
+}
+
+/** The daemon to talk to: the app says where (only ever this Mac), or the daemon served the page - with the secret. */
 export function daemonUrl(fallback: string) {
   const asked = params.get('daemon');
-  if (asked && /^ws:\/\/(127\.0\.0\.1|localhost):\d{2,5}$/.test(asked)) return asked;
-  if (document.querySelector('meta[name="nova-daemon"]')) return `ws://${location.host}`;
-  return fallback;
+  const base =
+    asked && /^ws:\/\/(127\.0\.0\.1|localhost):\d{2,5}$/.test(asked)
+      ? asked
+      : document.querySelector('meta[name="nova-daemon"]')
+        ? `ws://${location.host}`
+        : fallback;
+  const token = daemonToken();
+  if (!token) return base;
+  try {
+    const url = new URL(base);
+    url.searchParams.set('token', token);
+    return url.toString();
+  } catch {
+    return base; // not an address (a mistyped VITE_NOVA_URL): it won't connect either way
+  }
 }
 
 /** What the page tells the app. */
