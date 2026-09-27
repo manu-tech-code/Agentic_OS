@@ -47,10 +47,11 @@ export function skillTool(skill: Skill): ToolSpec {
   const properties: Record<string, unknown> = {
     request: { type: 'string', description: 'What to do, in plain words - e.g. "10 minutes" for a timer, or the whole task for an agent.' },
   };
-  const required: string[] = [];
+  const required: string[] = skill.needsRequest ? ['request'] : [];
   if (skill.needsApp) (properties.app = { type: 'string', description: 'The app, e.g. "Spotify".' }), required.push('app');
   if (skill.needsProject) (properties.project = { type: 'string', description: "The project folder's name." }), required.push('project');
   if (skill.needsAgents) properties.agent = { type: 'string', description: 'Which paired agent, e.g. "claude". Leave out for the default one.' };
+  else if (skill.namesAgent) properties.agent = { type: 'string', description: 'Whose doing it is about, e.g. "claude". Leave out for anyone\'s.' };
   const what = skill.summary ?? `For requests like: ${skill.examples.slice(0, 3).join('; ')}.`;
   return {
     name: skill.id,

@@ -220,6 +220,7 @@ export const initiativeSkills: Skill[] = [
   {
     id: 'remind',
     wholeUtterance: true,
+    needsRequest: true,
     summary:
       'Remind the user at a time: once ("at 5", "tomorrow at 9", "on Friday") or repeating ("every weekday at 8:30"). Put what and when in request, as said. "In my Reminders" also puts it in the Reminders app.',
     tier: 1,
@@ -284,6 +285,7 @@ export const initiativeSkills: Skill[] = [
     summary: 'Cancel a reminder the user names (by what it is about, or its time). Cancelling all of them at once needs the user to tap on screen. Put which one in request.',
     tier: 2,
     tierFor: (ctx) => cancelTier(ctx),
+    needsRequest: true,
     examples: ['cancel the reminder to call mum', 'delete my reminder about the dentist', 'remove the 5pm reminder', 'cancel all my reminders'],
     confirmPrompt: (ctx) => cancelPrompt(ctx),
     tapPrompt: (ctx) => cancelOnScreen(ctx),

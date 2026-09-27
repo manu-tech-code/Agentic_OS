@@ -64,6 +64,7 @@ export const builtinSkills: Skill[] = [
     id: 'set_timer',
     summary: 'Start a countdown timer. Put the duration in request, e.g. "10 minutes".',
     tier: 1,
+    needsRequest: true,
     examples: ['set a timer for 5 minutes', 'timer 30 seconds', 'remind me in 10 minutes', 'start a countdown'],
     async run(ctx) {
       const { utterance, timers, reminders } = ctx;

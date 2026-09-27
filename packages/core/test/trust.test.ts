@@ -245,6 +245,27 @@ describe('undo', () => {
     await nova.handle('yes');
     expect(record.undone).toEqual(['task']);
   });
+
+  it('takes back what it asked about, even when something newer lands before the yes', async () => {
+    const { nova, record, said } = await setup();
+    record.items.push({ id: 'task', at: Date.now(), label: 'Claude finished in site', by: 'Claude', status: 'done', undoable: true, files: ['a.css', 'b.html'], undo: { kind: 'agent-files', project: 'site', before: 'b', after: 'a', agent: 'Claude', files: ['a.css', 'b.html'] } });
+    await nova.handle('nova undo that');
+    expect(said().at(-1)).toBe('Put back the 2 files as they were before "Claude finished in site"?');
+    record.items.push({ id: 'later', at: Date.now(), label: 'Reminder at 5 PM', by: 'you', status: 'done', undoable: true, undo: { kind: 'reminder-cancel', id: 'r1' } });
+    await nova.handle('yes');
+    expect(record.undone).toEqual(['task']);
+  });
+
+  it("lets a brain name whose doing to take back - never the user's own instead", async () => {
+    const { nova, record } = await setup({ agents: { agents: [{ name: 'claude', label: 'Claude' }], projects: ['site'], ask: async () => '', run: async () => '' } });
+    record.items.push({ id: 'claude', at: Date.now() - 60_000, label: 'Opened Slack', by: 'Claude', status: 'done', undoable: true, undo: { kind: 'app-quit', app: 'Slack' } });
+    record.items.push({ id: 'mine', at: Date.now(), label: 'Opened Spotify', by: 'you', status: 'done', undoable: true, undo: { kind: 'app-quit', app: 'Spotify' } });
+    expect(nova.specs().find((s) => s.name === 'undo')!.parameters.properties).toHaveProperty('agent');
+    await nova.call('undo', { request: 'undo what claude did', agent: 'claude' }, 'Brain');
+    expect(record.undone).toEqual(['claude']);
+    expect(await nova.call('undo', { agent: 'gemini' }, 'Brain')).toMatch(/No paired agent is called "gemini"/);
+    expect(record.undone).toEqual(['claude']);
+  });
 });
 
 describe("an agent's task", () => {

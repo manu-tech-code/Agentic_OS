@@ -117,23 +117,34 @@ interface Resolved {
 interface Approval {
   /** The agent task asking, if one is (tool calls from an answering brain have none). */
   taskId?: string;
+  /** The answer being written that asked (a brain's tool call): the question goes when that answer ends. */
+  thinking?: AbortController;
   prompt: string;
   /** e.g. 'Claude to run "npm test"', for the activity log. */
   summary: string;
   /** What "yes, always" would remember, when it may. */
   remember?: { key: string; label: string };
   resolve: (ok: boolean) => void;
+  /** Refused when it runs out - counted from when it was asked, even while it waits behind another question. */
+  deadline: number;
+  timer?: ReturnType<typeof setTimeout>;
 }
 
-type Pending =
-  | { kind: 'confirm'; skill: Skill; resolved: Resolved; utterance: string; cardId: string; by: string }
-  | { kind: 'slot'; slot: 'app' | 'project' | 'when'; skill: Skill; resolved: Resolved; utterance: string; by: string }
-  | { kind: 'approval'; approval: Approval; cardId: string; timer: ReturnType<typeof setTimeout> };
+/** A question of Nova's own: it runs out, like an agent's. */
+type Question =
+  | { kind: 'confirm'; id: string; prompt: string; skill: Skill; resolved: Resolved; utterance: string; by: string; prepared?: unknown; timer?: ReturnType<typeof setTimeout> }
+  | { kind: 'slot'; id: string; prompt: string; slot: 'app' | 'project' | 'when'; skill: Skill; resolved: Resolved; utterance: string; by: string; timer?: ReturnType<typeof setTimeout> };
+
+type Pending = Question | { kind: 'approval'; id: string; approval: Approval };
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 
 /** An agent that asks for permission and gets no answer is told no. */
 const APPROVAL_TIMEOUT_MS = 120_000;
+/** However long an approval waited behind others, the user has this long to answer it once it's asked. */
+const ANSWER_MIN_MS = 30_000;
+/** A question of Nova's own ("Quit Spotify?", "Which app?") nobody answers is dropped - a "yes" from the TV later means nothing. */
+const QUESTION_TIMEOUT_MS = 60_000;
 
 /** A choice answer's pick when it is confident and not "none". */
 const picked = (answer: any): string | undefined =>
@@ -290,7 +301,7 @@ export class NovaBrain implements ToolHost {
     } finally {
       // A routine waiting on an answer goes on; an agent kept waiting gets its question.
       if (!this.pending && this.routineRest) await this.continueRoutine();
-      else if (!this.pending) this.nextApproval();
+      this.nextApproval();
     }
   }
 
@@ -320,6 +331,7 @@ export class NovaBrain implements ToolHost {
       if (!this.routineRest.steps.length) this.routineRest = null;
       await this.process(step, 'routine', by);
     }
+    this.nextApproval(); // an agent kept waiting through the routine gets its question
   }
 
   speechFinished() {
@@ -344,15 +356,23 @@ export class NovaBrain implements ToolHost {
    * listen. Unlike cancel(), a question Nova asked ("Quit Spotify?") is still waiting for its answer.
    */
   interrupt() {
-    this.thinking?.abort();
+    // Talking over a question the brain waits on is answering it: that answer carries on.
+    const answering = this.pending?.kind === 'approval' && this.thinking !== null && this.pending.approval.thinking === this.thinking;
+    if (!answering) this.stopThinking();
     this.openWindow();
   }
 
   cancel() {
-    this.thinking?.abort();
+    this.stopThinking();
     if (this.pending?.kind === 'approval') this.settleApproval(false);
+    else if (this.pending) {
+      this.activity(`Cancelled: ${this.pending.prompt}`, 'cancelled', this.pending.skill, { by: this.pending.by });
+      this.settleQuestion(this.pending);
+    }
     this.pending = null;
+    this.routineRest = null; // a routine waiting on that answer ends here
     this.phase('idle');
+    this.nextApproval();
   }
 
   // --- Tools: Nova's skills, for the agents and models that answer open questions ---------
@@ -371,11 +391,13 @@ export class NovaBrain implements ToolHost {
     const call = { name, ok: false };
     this.lesson?.calls.push(call);
     const arg = (key: string) => (typeof args[key] === 'string' ? (args[key] as string).trim() : '');
-    const utterance = arg('request') || skill.examples[0] || name;
+    // What to do comes from the request itself - never an example standing in for one left out.
+    if (skill.needsRequest && !arg('request')) return `${name} needs "request": what to do, in plain words - like "${skill.examples[0]}". Nothing was done.`;
+    const utterance = arg('request') || name.replace(/_/g, ' ');
     const resolved: Resolved = {};
     if (skill.needsApp) {
-      resolved.app = this.findName(arg('app') || utterance, this.apps);
-      if (!resolved.app) return `No installed app matches "${arg('app')}".`;
+      resolved.app = this.findName(arg('app') || arg('request'), this.apps);
+      if (!resolved.app) return `No installed app matches "${arg('app') || arg('request')}".`;
     }
     if (skill.needsProject) {
       const projects = this.opts.agents?.projects ?? [];
@@ -383,16 +405,24 @@ export class NovaBrain implements ToolHost {
       if (!resolved.project) return `No project matches "${arg('project')}". The projects are: ${projects.join(', ')}.`;
     }
     if (skill.needsAgents) resolved.agent = this.agentRef(arg('agent')) ?? this.opts.agents?.agents[0];
+    else if (skill.namesAgent && arg('agent')) {
+      // "Undo what Claude did": Claude's - never the latest of anyone's instead.
+      const named = arg('agent').toLowerCase();
+      resolved.agent = this.opts.agents?.agents.find((a) => a.name.toLowerCase() === named || a.label.toLowerCase() === named);
+      if (!resolved.agent) return `No paired agent is called "${arg('agent')}". Nothing was done.`;
+    }
     // The user's words behind the call are what Nova heard while the brain answered; without a question in
     // flight (an agent working on its own) the user said nothing, and the request's own wording never counts.
     const context = this.context(utterance, resolved, this.answering ?? '');
+    context.prepared = skill.prepare?.(context);
     const gate = gateFor(skill.tierFor?.(context) ?? skill.tier);
     if (gate === 'tap') return `${skill.tapPrompt?.(context) ?? 'That needs a confirmation on screen.'} It was not done.`;
     if (gate === 'confirm') {
       const remember = skill.rememberAs?.(context);
       if (!(remember && this.opts.trust?.allows(remember.key))) {
         const prompt = skill.confirmPrompt?.(context) ?? `${caller} wants to ${name.replace(/_/g, ' ')}. Allow it?`;
-        if (!(await this.approve(prompt, `${caller}: ${name.replace(/_/g, ' ')}`, undefined, remember ?? undefined))) return 'The user said no, so it was not done.';
+        const allowed = await this.approve(prompt, `${caller}: ${name.replace(/_/g, ' ')}`, { remember: remember ?? undefined, thinking: this.thinking ?? undefined });
+        if (!allowed) return 'The user said no, so it was not done.';
       }
     }
     try {
@@ -424,7 +454,8 @@ export class NovaBrain implements ToolHost {
     const action = name.slice(name.indexOf('__') + 2).replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ').toLowerCase();
     const remember = mayRememberTool(tool) ? { key: `tool:${name}`, label: `Use ${tool.label} to ${action}` } : undefined;
     if (gate === 'confirm' && !(remember && this.opts.trust?.allows(remember.key))) {
-      if (!(await this.approve(`${caller} wants to use ${tool.summary(args)}. Allow it?`, `${caller}: ${tool.label}`, undefined, remember))) return 'The user said no, so it was not done.';
+      const allowed = await this.approve(`${caller} wants to use ${tool.summary(args)}. Allow it?`, `${caller}: ${tool.label}`, { remember, thinking: this.thinking ?? undefined });
+      if (!allowed) return 'The user said no, so it was not done.';
     }
     try {
       const text = await this.opts.integrations!.call(name, args, this.thinking?.signal);
@@ -454,7 +485,9 @@ export class NovaBrain implements ToolHost {
     const text = raw.trim();
     if (!text) return;
     const wake = this.stripWake(text);
-    const inWindow = !this.requireWakeWord || this.now() < this.followUpUntil || this.pending !== null;
+    // The question this may answer, as it stands now: an answer is only ever for it, though another may take its place while this is decided.
+    const asked = this.pending;
+    const inWindow = !this.requireWakeWord || this.now() < this.followUpUntil || asked !== null;
     const explicit = wake.found || source !== 'voice';
 
     if (!explicit && !inWindow) return; // not for us
@@ -464,23 +497,22 @@ export class NovaBrain implements ToolHost {
     }
     const utterance = wake.found ? wake.rest : text;
     // A routine's own phrase ("start work") starts it - matched in code, like a name. Steps never start routines.
-    const routine = source === 'routine' || this.pending ? null : this.routineFor(utterance);
+    const routine = source === 'routine' || asked ? null : this.routineFor(utterance);
     if (routine) return this.runRoutine(routine);
     this.phase('thinking');
 
-    const pendingSlot = this.pending?.kind === 'slot' ? this.pending : null;
+    const pendingSlot = asked?.kind === 'slot' ? asked : null;
     let decision;
     try {
       decision = await this.opts.engine.decide(
         {
           utterance,
           wakeWordUsed: explicit,
-          awaitingConfirmationFor:
-            this.pending?.kind === 'confirm' ? this.pending.skill.id : this.pending?.kind === 'approval' ? 'agent_step' : null,
+          awaitingConfirmationFor: asked?.kind === 'confirm' ? asked.skill.id : asked?.kind === 'approval' ? 'agent_step' : null,
           awaitingAppFor: pendingSlot?.slot === 'app' ? pendingSlot.skill.id : null,
           awaitingProjectFor: pendingSlot?.slot === 'project' ? pendingSlot.skill.id : null,
           activeTasks: this.tasks.size,
-          activeTimers: this.timers.size,
+          activeTimers: this.activeTimers(),
           canThink: Boolean(this.opts.reasoning),
           recentTurns: this.history.slice(-3),
         },
@@ -513,26 +545,36 @@ export class NovaBrain implements ToolHost {
       return;
     }
 
-    const pending = this.pending;
+    // The question changed while this was decided (withdrawn, run out, another in its place): a yes or no is never
+    // applied to one it wasn't said to - the one waiting now is asked again.
+    const answer = intent === 'confirm_yes' || intent === 'confirm_no' || intent === 'stop';
+    if (this.pending !== asked && answer) {
+      trace('the question changed while deciding');
+      const now = this.pending;
+      const gone = asked ? 'Sorry, that question went away just as you answered.' : '';
+      const again = now ? (now.kind === 'approval' ? now.approval.prompt : now.prompt) : '';
+      return this.say(utterance, [gone, again].filter(Boolean).join(' ') || 'Okay.');
+    }
+    const pending = this.pending === asked ? asked : null;
     if (pending?.kind === 'approval') {
       // An agent is waiting on a yes or no. Anything else is handled normally while it keeps waiting.
-      if (intent === 'confirm_yes' || intent === 'confirm_no' || intent === 'stop') {
+      if (answer) {
         const ok = intent === 'confirm_yes';
         trace(ok ? 'allowed agent step' : 'refused agent step');
         const remembered = ok ? this.rememberYes(pending.approval.remember, utterance) : '';
         this.settleApproval(ok);
         return this.say(utterance, ok ? `Okay, go ahead.${remembered}` : 'Okay, I told it no.');
       }
-    } else {
-      // Resolve anything Nova asked about last turn.
-      this.pending = null;
-      if (pending?.kind === 'confirm') {
-        this.emit({ type: 'dismiss', id: pending.cardId });
+    } else if (pending) {
+      // Resolve what Nova asked about last turn.
+      this.settleQuestion(pending);
+      if (pending.kind === 'confirm') {
         if (intent === 'confirm_yes') {
           trace(`confirmed ${pending.skill.id}`);
           this.opts.engine.learn?.({ utterance: pending.utterance, question: 'intent', choice: pending.skill.id, source: 'confirmed' });
-          const remembered = this.rememberYes(pending.skill.rememberAs?.(this.context(pending.utterance, pending.resolved)), utterance);
-          return this.execute(pending.skill, pending.utterance, pending.resolved, utterance, pending.by, remembered);
+          const ctx = { ...this.context(pending.utterance, pending.resolved), prepared: pending.prepared };
+          const remembered = this.rememberYes(pending.skill.rememberAs?.(ctx), utterance);
+          return this.execute(pending.skill, pending.utterance, pending.resolved, utterance, pending.by, remembered, pending.prepared);
         }
         if (intent === 'confirm_no' || intent === 'stop') {
           trace(`declined ${pending.skill.id}`);
@@ -540,13 +582,13 @@ export class NovaBrain implements ToolHost {
           return this.say(utterance, 'Okay, I left it.');
         }
       }
-      if (pending?.kind === 'slot' && pending.slot === 'when' && intent !== 'stop') {
+      if (pending.kind === 'slot' && pending.slot === 'when' && intent !== 'stop') {
         // "When should I remind you?" - "at 5": the first request, with its time.
         if (parseWhen(utterance, new Date(this.now()))) {
           trace(`${pending.skill.id} → ${utterance}`);
           return this.route(pending.skill, `${pending.utterance} ${utterance}`, pending.resolved, 1, pending.by);
         }
-      } else if (pending?.kind === 'slot' && intent !== 'stop') {
+      } else if (pending.kind === 'slot' && intent !== 'stop') {
         const value = pending.slot === 'app' ? app : project;
         if (value) {
           trace(`${pending.skill.id} → ${value}`);
@@ -592,53 +634,53 @@ export class NovaBrain implements ToolHost {
   }
 
   private async route(skill: Skill, utterance: string, resolved: Resolved, p: number, by = 'you') {
-    const tier = skill.tierFor?.(this.context(utterance, resolved)) ?? skill.tier;
+    const ctx = this.context(utterance, resolved);
+    // What the request is about, settled now: a yes to "Undo …?" takes back that, whatever came in since.
+    ctx.prepared = skill.prepare?.(ctx);
+    const tier = skill.tierFor?.(ctx) ?? skill.tier;
     // A tap on screen, never a spoken yes (cancelling all the reminders): nothing is done, so saying where to do it
     // needs only a fair idea of what was meant.
     if (gateFor(tier) === 'tap' && p >= MIN_CONFIDENCE[1]) {
-      return this.say(utterance, skill.tapPrompt?.(this.context(utterance, resolved)) ?? 'That needs a confirmation on screen.');
+      return this.say(utterance, skill.tapPrompt?.(ctx) ?? 'That needs a confirmation on screen.');
     }
     if (p < MIN_CONFIDENCE[tier]) {
       return this.say(utterance, "Sorry, I'm not sure what you meant. Could you say that again?");
     }
     if (skill.needsApp && !resolved.app) {
-      this.ask({ kind: 'slot', slot: 'app', skill, resolved, utterance, by });
+      this.ask({ kind: 'slot', id: uid(), prompt: 'Which app?', slot: 'app', skill, resolved, utterance, by });
       return this.say(utterance, 'Which app?');
     }
     if (skill.needsProject && !resolved.project) {
-      this.ask({ kind: 'slot', slot: 'project', skill, resolved, utterance, by });
+      this.ask({ kind: 'slot', id: uid(), prompt: 'Which project?', slot: 'project', skill, resolved, utterance, by });
       return this.say(utterance, 'Which project?');
     }
-    const gate = gateFor(tier);
-    if (gate === 'tap') {
-      return this.say(utterance, 'That needs a confirmation on screen.');
-    }
-    if (gate === 'confirm') {
+    if (gateFor(tier) === 'confirm') {
       // Something the user said "yes, always" to: no need to ask.
-      const remember = skill.rememberAs?.(this.context(utterance, resolved));
-      if (remember && this.opts.trust?.allows(remember.key)) return this.execute(skill, utterance, resolved, utterance, by);
-      const prompt = skill.confirmPrompt?.(this.context(utterance, resolved)) ?? 'Are you sure?';
-      const cardId = uid();
-      this.ask({ kind: 'confirm', skill, resolved, utterance, cardId, by });
-      this.card({ id: cardId, kind: 'confirm', title: prompt, body: remember ? 'Say "yes", "yes, always" or "no"' : 'Say "yes" or "no"' });
+      const remember = skill.rememberAs?.(ctx);
+      if (remember && this.opts.trust?.allows(remember.key)) return this.execute(skill, utterance, resolved, utterance, by, '', ctx.prepared);
+      const prompt = skill.confirmPrompt?.(ctx) ?? 'Are you sure?';
+      const id = uid();
+      this.ask({ kind: 'confirm', id, prompt, skill, resolved, utterance, by, prepared: ctx.prepared });
+      this.card({ id, kind: 'confirm', title: prompt, body: remember ? 'Say "yes", "yes, always" or "no"' : 'Say "yes" or "no"' });
       this.activity(prompt, 'pending', skill, { by });
       return this.say(utterance, prompt);
     }
-    return this.execute(skill, utterance, resolved, utterance, by);
+    return this.execute(skill, utterance, resolved, utterance, by, '', ctx.prepared);
   }
 
   /**
    * Run a skill for what was asked; `said` is this turn's words when they differ (the "yes" to
-   * "Quit Spotify?"), `by` who asked, and `also` anything to add to what Nova says.
+   * "Quit Spotify?"), `by` who asked, `also` anything to add to what Nova says, and `prepared`
+   * what the skill settled when the request came in.
    */
-  private async execute(skill: Skill, utterance: string, resolved: Resolved, said = utterance, by = 'you', also = '') {
+  private async execute(skill: Skill, utterance: string, resolved: Resolved, said = utterance, by = 'you', also = '', prepared?: unknown) {
     this.phase('acting', skill.id);
     try {
-      const result = await skill.run(this.context(utterance, resolved));
+      const result = await skill.run({ ...this.context(utterance, resolved), prepared });
       if (result.card) this.card(result.card);
       this.activity(result.activity, 'done', skill, { by, undo: result.undo });
       // It needs a time: the next thing said can be one ("When should I remind you?" - "at 5").
-      if (result.needs === 'when') this.ask({ kind: 'slot', slot: 'when', skill, resolved, utterance, by });
+      if (result.needs === 'when') this.ask({ kind: 'slot', id: uid(), prompt: result.say, slot: 'when', skill, resolved, utterance, by });
       // A brain gives the answer, with the user's services at hand (the briefing); without one, the plain one does.
       if (result.handoff && this.opts.reasoning) return this.think(said, undefined, { question: result.handoff });
       this.say(said, `${result.say}${also}`);
@@ -657,7 +699,7 @@ export class NovaBrain implements ToolHost {
       return this.say(utterance, "I can't answer that yet. Pair an agent, or choose who answers open questions in Settings → Answers.");
     }
     this.phase('thinking', brain.name);
-    this.thinking?.abort();
+    this.stopThinking();
     const thinking = (this.thinking = new AbortController());
     const signal = AbortSignal.any([thinking.signal, AbortSignal.timeout(this.replyTimeoutMs)]);
     const history = this.history.slice(-6);
@@ -690,7 +732,24 @@ export class NovaBrain implements ToolHost {
       if (this.thinking === thinking) this.thinking = null;
       if (this.lesson === lesson) this.lesson = null;
       if (this.answering === utterance) this.answering = null;
+      // What it was still waiting to be allowed goes with it: a late yes runs nothing.
+      this.withdraw((a) => a.thinking === thinking);
+      this.nextApproval();
     }
+  }
+
+  /** Stop the answer being written - and withdraw what it was waiting to be allowed. */
+  private stopThinking() {
+    const thinking = this.thinking;
+    if (!thinking) return;
+    thinking.abort();
+    this.withdraw((a) => a.thinking === thinking);
+  }
+
+  /** Timers running now: Nova's own, and the countdowns the reminder service keeps (which outlast a restart). */
+  private activeTimers() {
+    const now = this.now();
+    return this.timers.size + (this.opts.reminders?.list().filter((r) => r.countdown && r.due !== null && r.due > now).length ?? 0);
   }
 
   /** The notes for a question, or none - never holding the answer up for long. */
@@ -788,14 +847,32 @@ export class NovaBrain implements ToolHost {
     return name ? this.opts.agents?.agents.find((a) => a.name === name) : undefined;
   }
 
-  /** Ask the user something new; an agent waiting for a yes or no is asked again afterwards. */
-  private ask(next: Pending) {
-    if (this.pending?.kind === 'approval') {
-      clearTimeout(this.pending.timer);
-      this.emit({ type: 'dismiss', id: this.pending.cardId });
-      this.approvals.unshift(this.pending.approval);
-    }
+  /** Ask the user something new; an agent waiting for a yes or no is asked again afterwards (its time keeps running). */
+  private ask(next: Question) {
+    const was = this.pending;
+    if (was?.kind === 'approval') {
+      this.emit({ type: 'dismiss', id: was.id });
+      this.approvals.unshift(was.approval);
+    } else if (was) this.settleQuestion(was);
+    next.timer = setTimeout(() => this.expire(next), QUESTION_TIMEOUT_MS);
     this.pending = next;
+  }
+
+  /** A question of Nova's is answered or dropped: its time stops, its card goes. */
+  private settleQuestion(question: Question) {
+    clearTimeout(question.timer);
+    if (question.kind === 'confirm') this.emit({ type: 'dismiss', id: question.id });
+    if (this.pending === question) this.pending = null;
+  }
+
+  /** Nobody answered Nova's question: it's dropped, card and all, and noted - a routine waiting on it ends there. */
+  private expire(question: Question) {
+    if (this.pending !== question) return;
+    this.settleQuestion(question);
+    this.activity(`No answer - left it: ${question.prompt}`, 'cancelled', question.skill, { by: question.by });
+    if (this.routineRest && question.by === `routine: ${this.routineRest.name}`) this.routineRest = null;
+    if (this.current === 'listening' && this.now() >= this.followUpUntil) this.phase('idle');
+    this.nextApproval();
   }
 
   private readonly timerService: TimerService = {
@@ -936,12 +1013,13 @@ export class NovaBrain implements ToolHost {
   private requestApproval(taskId: string, agent: AgentRef, project: string, request: ApprovalRequest): Promise<boolean> {
     const detail = request.detail?.replace(/\s+/g, ' ').trim() ?? '';
     const risky = request.tool === 'Bash' && RISKY_COMMAND.test(detail);
-    const remember = request.tool && !risky ? { key: `agent:${agent.name}:${project}:${request.tool}:${detail}`, label: `${agent.label} may ${request.action} in ${project}` } : undefined;
+    // Without a detail (the command, the site, the file) "always" would cover the whole tool: then it's asked each time.
+    const remember = request.tool && detail && !risky ? { key: `agent:${agent.name}:${project}:${request.tool}:${detail}`, label: `${agent.label} may ${request.action} in ${project}` } : undefined;
     if (remember && this.opts.trust?.allows(remember.key)) {
       this.activity(`${agent.label}: ${request.action} (you said always)`, 'done', undefined, { by: agent.label });
       return Promise.resolve(true);
     }
-    return this.approve(`${agent.label} wants to ${request.action} in ${project}. Allow it?`, `${agent.label} to ${request.action}`, taskId, remember);
+    return this.approve(`${agent.label} wants to ${request.action} in ${project}. Allow it?`, `${agent.label} to ${request.action}`, { taskId, remember });
   }
 
   /**
@@ -949,13 +1027,16 @@ export class NovaBrain implements ToolHost {
    * waiting for a yes, the routine under way - and mute the microphone. Returns the tasks stopped.
    */
   stopEverything() {
-    this.thinking?.abort();
+    this.stopThinking();
     this.emit({ type: 'barge-in' }); // every window, and Nova.app, stops speaking
     const tasks = this.tasks.size;
     for (const controller of this.tasks.values()) controller.abort();
     if (this.pending?.kind === 'approval') this.settleApproval(false, 'Refused - you stopped everything');
-    for (const approval of this.approvals.splice(0)) approval.resolve(false);
-    if (this.pending?.kind === 'confirm') this.emit({ type: 'dismiss', id: this.pending.cardId });
+    else if (this.pending) this.settleQuestion(this.pending);
+    for (const approval of this.approvals.splice(0)) {
+      clearTimeout(approval.timer);
+      approval.resolve(false);
+    }
     this.pending = null;
     this.routineRest = null;
     this.emit({ type: 'listen', on: false });
@@ -965,27 +1046,46 @@ export class NovaBrain implements ToolHost {
     return tasks;
   }
 
-  /** Ask the user a yes-or-no question out loud, queued behind any other. */
-  private approve(prompt: string, summary: string, taskId?: string, remember?: { key: string; label: string }): Promise<boolean> {
+  /**
+   * Ask the user a yes-or-no question out loud, queued behind any other. Its time runs from now, so it's
+   * refused if nobody answers - even while another question holds it up.
+   */
+  private approve(prompt: string, summary: string, extra: Pick<Approval, 'taskId' | 'remember' | 'thinking'> = {}): Promise<boolean> {
     return new Promise((resolve) => {
       this.flushReply?.(); // finish the sentence being spoken first
-      this.approvals.push({ taskId, prompt, summary, remember, resolve });
+      const approval: Approval = { ...extra, prompt, summary, resolve, deadline: this.now() + APPROVAL_TIMEOUT_MS };
+      approval.timer = setTimeout(() => this.expireApproval(approval), APPROVAL_TIMEOUT_MS);
+      this.approvals.push(approval);
       if (!this.pending) this.nextApproval();
     });
   }
 
+  /** No answer in time: refused, whether it was being asked or still waiting its turn. */
+  private expireApproval(approval: Approval) {
+    const note = `No answer - refused ${approval.summary}`;
+    if (this.pending?.kind === 'approval' && this.pending.approval === approval) {
+      this.settleApproval(false, note);
+      this.nextApproval();
+    } else if (this.approvals.includes(approval)) {
+      this.approvals = this.approvals.filter((a) => a !== approval);
+      this.activity(note, 'cancelled');
+      approval.resolve(false);
+    }
+  }
+
   private nextApproval() {
+    if (this.pending) return;
     const approval = this.approvals.shift();
     if (!approval) return;
-    const cardId = uid();
-    const timer = setTimeout(() => {
-      if (this.pending?.kind === 'approval' && this.pending.cardId === cardId) {
-        this.settleApproval(false, `No answer - refused ${approval.summary}`);
-        this.nextApproval();
-      }
-    }, APPROVAL_TIMEOUT_MS);
-    this.pending = { kind: 'approval', approval, cardId, timer };
-    this.card({ id: cardId, kind: 'confirm', title: approval.prompt, body: 'Say "yes" or "no"' });
+    // However long it waited behind others, the user has a moment to answer it.
+    if (approval.deadline - this.now() < ANSWER_MIN_MS) {
+      clearTimeout(approval.timer);
+      approval.deadline = this.now() + ANSWER_MIN_MS;
+      approval.timer = setTimeout(() => this.expireApproval(approval), ANSWER_MIN_MS);
+    }
+    const id = uid();
+    this.pending = { kind: 'approval', id, approval };
+    this.card({ id, kind: 'confirm', title: approval.prompt, body: approval.remember ? 'Say "yes", "yes, always" or "no"' : 'Say "yes" or "no"' });
     this.announce(approval.prompt);
   }
 
@@ -993,20 +1093,26 @@ export class NovaBrain implements ToolHost {
     const pending = this.pending;
     if (pending?.kind !== 'approval') return;
     this.pending = null;
-    clearTimeout(pending.timer);
-    this.emit({ type: 'dismiss', id: pending.cardId });
+    clearTimeout(pending.approval.timer);
+    this.emit({ type: 'dismiss', id: pending.id });
     this.activity(note ?? `${ok ? 'Allowed' : 'Refused'} ${pending.approval.summary}`, ok ? 'done' : 'cancelled');
     pending.approval.resolve(ok);
   }
 
+  /** Questions whose asker is gone (a task that ended, an answer that stopped) are withdrawn: told no. */
+  private withdraw(gone: (approval: Approval) => boolean) {
+    for (const a of this.approvals.filter(gone)) {
+      clearTimeout(a.timer);
+      a.resolve(false);
+    }
+    this.approvals = this.approvals.filter((a) => !gone(a));
+    if (this.pending?.kind === 'approval' && gone(this.pending.approval)) this.settleApproval(false, `Withdrawn: ${this.pending.approval.summary}`);
+  }
+
   /** A finished or stopped task's open questions are withdrawn. */
   private dropApprovals(taskId: string) {
-    for (const a of this.approvals.filter((a) => a.taskId === taskId)) a.resolve(false);
-    this.approvals = this.approvals.filter((a) => a.taskId !== taskId);
-    if (this.pending?.kind === 'approval' && this.pending.approval.taskId === taskId) {
-      this.settleApproval(false, `Withdrawn: ${this.pending.approval.summary}`);
-      this.nextApproval();
-    }
+    this.withdraw((a) => a.taskId === taskId);
+    this.nextApproval();
   }
 
   private openWindow() {
@@ -1060,7 +1166,10 @@ export class NovaBrain implements ToolHost {
     if (!remember) return " I'll still ask each time for that one.";
     const today = new Date(this.now());
     const until = scope === 'today' ? `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}` : undefined;
-    void this.opts.trust.allow(remember.key, remember.label, until);
+    this.opts.trust.allow(remember.key, remember.label, until).catch((error: Error) => {
+      this.emit({ type: 'error', message: `Couldn't save "${remember.label}" to Settings: ${error.message}` });
+      this.activity(`Couldn't remember: ${remember.label}`, 'failed', undefined, { by: 'you' });
+    });
     this.activity(`${scope === 'today' ? 'Allowed for today' : 'Allowed from now on'}: ${remember.label}`, 'done', undefined, { by: 'you' });
     return scope === 'today' ? " And I won't ask again today." : " And I won't ask again - you can change that in Settings.";
   }

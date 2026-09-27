@@ -8,8 +8,9 @@ import type { ActionRecord, Skill, SkillContext } from './types.ts';
 
 const list = (items: string[]) => (items.length <= 1 ? (items[0] ?? '') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`);
 
-/** What "undo" means: the last undoable thing - of the agent named, if one is. */
-const undoing = (ctx: SkillContext): ActionRecord | null => ctx.actions?.lastUndoable(ctx.agent?.label) ?? null;
+/** What "undo" means: the action settled when it was asked (a yes takes back that one), else the last undoable - of the agent named, if one is. */
+const lastUndoable = (ctx: SkillContext): ActionRecord | null => ctx.actions?.lastUndoable(ctx.agent?.label) ?? null;
+const undoing = (ctx: SkillContext): ActionRecord | null => (ctx.prepared !== undefined ? (ctx.prepared as ActionRecord | null) : lastUndoable(ctx));
 
 /** Taking back something from a while ago is asked about first, as is putting back files. */
 const A_WHILE_MS = 3_600_000;
@@ -44,8 +45,10 @@ function told(action: ActionRecord, by: string | undefined, names: string[]) {
 export const trustSkills: Skill[] = [
   {
     id: 'undo',
-    summary: 'Take back the last thing Nova did that can be undone (or the last thing a named agent did).',
+    summary: 'Take back the last thing Nova did that can be undone - or, with agent, the last thing that agent did.',
     tier: 1,
+    namesAgent: true,
+    prepare: lastUndoable,
     // Putting files back changes a project, and something from a while ago may not be what the user means: asked first.
     tierFor: (ctx) => {
       const action = undoing(ctx);
@@ -68,9 +71,10 @@ export const trustSkills: Skill[] = [
   },
   {
     id: 'activity_report',
-    summary: 'What Nova did - today, yesterday or this week - and who asked for each thing. Put the question in request.',
+    summary: 'What Nova did - today, yesterday or this week - and who asked for each thing. Put the question in request; agent for what one agent did.',
     tier: 0,
     informs: true,
+    namesAgent: true,
     examples: ['what did you do today', 'what have you done', 'what did claude change', 'what happened today', 'what did you do while i was away'],
     async run(ctx) {
       const now = ctx.platform.now();

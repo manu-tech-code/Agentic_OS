@@ -63,6 +63,7 @@ const when = (at: number) => new Date(at).toLocaleString('en-US', { weekday: 'sh
 export const memorySkills: Skill[] = [
   {
     id: 'remember',
+    needsRequest: true,
     summary:
       "Save a short fact about the user for later - a schedule, preference, person or project. When they didn't ask for it to be remembered, Nova asks them first. Put the fact in request, in the user's own words.",
     tier: 1,
@@ -99,6 +100,7 @@ export const memorySkills: Skill[] = [
   },
   {
     id: 'recall',
+    needsRequest: true,
     summary: 'What the user asked Nova to remember that relates to a question. Put the question in request.',
     tier: 0,
     informs: true,
@@ -124,6 +126,7 @@ export const memorySkills: Skill[] = [
   },
   {
     id: 'forget',
+    needsRequest: true,
     summary: 'Forget one thing the user asked Nova to remember. Put what to forget in request.',
     tier: 2,
     tierFor: (ctx) => (forgetting(ctx) ? 2 : 0),
@@ -138,6 +141,7 @@ export const memorySkills: Skill[] = [
   },
   {
     id: 'search_conversations',
+    needsRequest: true,
     toolOnly: true,
     informs: true,
     summary: 'Search past conversations with the user - what they asked and what Nova said, with when. Put what to look for in request.',

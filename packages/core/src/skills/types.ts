@@ -56,6 +56,8 @@ export interface SkillContext {
   trust?: TrustService;
   /** Stop everything at once: agents, questions, speech, routines - and mute the microphone. Says how many tasks stopped. */
   halt?: () => number;
+  /** What the skill's `prepare` settled when the request came in: the thing a confirmation named. */
+  prepared?: unknown;
 }
 
 /** One entry of the record of what Nova did. */
@@ -237,6 +239,15 @@ export interface Skill {
   rememberAs?: (ctx: SkillContext) => { key: string; label: string } | null;
   /** Offered only when agents are paired. */
   needsAgents?: boolean;
+  /** An agent may be named ("undo what Claude did"); as a tool it takes `agent`, and none means anyone's. */
+  namesAgent?: boolean;
+  /** It acts on what the request says (a duration, a fact, a task): a tool call without `request` is refused, never filled in from an example. */
+  needsRequest?: boolean;
+  /**
+   * Settle what the request is about when it comes in (the action "undo" means), so a yes to the
+   * confirmation acts on exactly that - not on whatever is newest by then. Reaches the skill as `ctx.prepared`.
+   */
+  prepare?: (ctx: SkillContext) => unknown;
   /** Only a tool for brains, never something System 1 picks for an utterance (reading the screen). */
   toolOnly?: boolean;
   /**
