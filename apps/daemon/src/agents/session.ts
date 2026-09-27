@@ -52,14 +52,23 @@ export class AgentSession implements ReasoningBrain {
     this.fresh = true;
     child.stderr.on('data', (d) => (this.stderr = (this.stderr + d).slice(-2000)));
     child.stdin.on('error', () => {});
-    createInterface({ input: child.stdout }).on('line', (line) => this.onLine(line));
-    child.on('exit', (code) => {
-      if (this.child === child) this.child = null;
-      const turn = this.turn;
-      this.turn = null;
-      turn?.out.end(new Error(this.stderr.trim().split('\n').at(-1)?.slice(0, 200) || `${this.name} stopped (${code}).`));
-      turn?.done();
-    });
+    // Only the current process speaks for the session: one that was replaced (refreshed, stopped) is ignored.
+    createInterface({ input: child.stdout }).on('line', (line) => this.child === child && this.onLine(line));
+    const gone = (why: string) => {
+      if (this.child !== child) return; // its turn was settled when it was replaced
+      this.child = null;
+      this.settle(new Error(why));
+    };
+    child.on('error', (e) => gone(`${this.name} couldn't start: ${e.message}`));
+    child.on('exit', (code) => gone(this.stderr.trim().split('\n').at(-1)?.slice(0, 200) || `${this.name} stopped (${code}).`));
+  }
+
+  /** The turn in progress ends - with `error`, unless it already ended. */
+  private settle(error: Error) {
+    const turn = this.turn;
+    this.turn = null;
+    turn?.out.end(error);
+    turn?.done();
   }
 
   private onLine(line: string) {
@@ -106,8 +115,8 @@ export class AgentSession implements ReasoningBrain {
             done();
           };
           const stop = () => {
-            this.close(); // the only way to stop a turn mid-answer; the next question starts a new process
             out.end(new Error('Stopped.'));
+            this.close(); // the only way to stop a turn mid-answer; the next question starts a new process
           };
           signal?.addEventListener('abort', stop, { once: true });
           this.turn = { out, wrote: false, done: finish };
@@ -136,5 +145,6 @@ export class AgentSession implements ReasoningBrain {
     const child = this.child;
     this.child = null;
     child?.kill();
+    this.settle(new Error(`${this.name} was stopped.`)); // a question in progress doesn't wait for an answer that won't come
   }
 }

@@ -1,11 +1,14 @@
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { connect } from 'node:net';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { startBridge } from '../src/agents/bridge.ts';
+import { agentEnv } from '../src/agents/host.ts';
+import { describeAction, tooLongToSay } from '../src/agents/parsers.ts';
 import { customPreset, PRESETS, type AgentPreset } from '../src/agents/presets.ts';
 import { AgentSession } from '../src/agents/session.ts';
 
@@ -133,5 +136,50 @@ describe('an agent kept running as the brain', () => {
     // A new process, told what was said before.
     expect(await session.reply('after', [{ user: 'hi', nova: 'Turn 1: hello there.' }])).toBe('Turn 1: I remember. hello there.');
     session.close();
+  });
+
+  it("isn't cut off by the process a refresh replaced", async () => {
+    const session = new AgentSession({ preset, bin: process.execPath, extraArgs: [] }, { cwd: tmpdir(), assistant: 'Nova', env: () => process.env });
+    session.warm();
+    session.refresh(); // the old process exits while the new one answers
+    expect(await session.reply('hi', [])).toBe('Turn 1: hello there.');
+    session.close();
+  });
+
+  it("says so when its CLI can't start, instead of taking Nova down", async () => {
+    const session = new AgentSession({ preset, bin: '/nonexistent/claude', extraArgs: [] }, { cwd: tmpdir(), assistant: 'Nova', env: () => process.env });
+    await expect(session.reply('hi', [])).rejects.toThrow(/couldn't start/);
+    session.close();
+  });
+});
+
+describe('what agents are given', () => {
+  it('an environment without keys, but with what finds their own sign-in', () => {
+    const saved = { ...process.env };
+    Object.assign(process.env, { OPENAI_API_KEY: 'k', CODEX_API_KEY: 'k', GEMINI_API_KEY: 'k', ANTHROPIC_API_KEY: 'k', NOVA_GITHUB_TOKEN: 't', AI_GATEWAY_API_KEY: 'g', CLAUDECODE: '1', CODEX_HOME: '/c', XDG_CONFIG_HOME: '/x' });
+    try {
+      const env = agentEnv(undefined, { OPENCODE_CONFIG: '/o.json' });
+      for (const key of ['OPENAI_API_KEY', 'CODEX_API_KEY', 'GEMINI_API_KEY', 'ANTHROPIC_API_KEY', 'NOVA_GITHUB_TOKEN', 'AI_GATEWAY_API_KEY', 'CLAUDECODE']) expect(env[key], key).toBeUndefined();
+      expect(env).toMatchObject({ PATH: process.env.PATH, HOME: process.env.HOME, CODEX_HOME: '/c', XDG_CONFIG_HOME: '/x', OPENCODE_CONFIG: '/o.json' });
+    } finally {
+      process.env = saved;
+    }
+  });
+
+  it("Claude's tasks without the project's committed settings, which could skip asking", () => {
+    const args = PRESETS.claude!.task('fix it', { assistant: 'Nova', approvals: { mcpConfig: '{}', tool: 'mcp__nova__approve' } }).args;
+    expect(args[args.indexOf('--setting-sources') + 1]).toBe('local');
+    expect(args).toContain('--permission-prompt-tool');
+  });
+
+  it('permission prompts that say exactly what is allowed', () => {
+    const long = `npm run build && ${'echo step && '.repeat(30)}echo done`;
+    expect(describeAction('Bash', { command: long })).toBe(`run "${long}"`); // all of it
+    expect(tooLongToSay('Bash', { command: long })).toMatch(/too long.*shorter commands/);
+    expect(tooLongToSay('Bash', { command: 'npm test' })).toBeNull();
+    const project = join(homedir(), 'dev', 'site');
+    expect(describeAction('Edit', { file_path: join(project, 'src', 'app.ts') }, project)).toBe(`edit ${join('src', 'app.ts')}`);
+    expect(describeAction('Write', { file_path: join(homedir(), 'Library', 'LaunchAgents', 'x.plist') }, project)).toBe('write ~/Library/LaunchAgents/x.plist, outside the project');
+    expect(describeAction('Edit', { file_path: '../other/secret.ts' }, project)).toBe('edit ~/dev/other/secret.ts, outside the project');
   });
 });

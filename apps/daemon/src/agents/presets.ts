@@ -127,9 +127,10 @@ export const PRESETS: Record<string, AgentPreset> = {
       args: [
         '-p', '--output-format', 'stream-json', '--verbose',
         '--append-system-prompt', taskNote(assistant),
-        // The project's own Claude settings apply, user-level ones don't: those can reroute Claude
-        // through an API gateway (e.g. ANTHROPIC_BASE_URL), and tasks should run on the signed-in plan.
-        '--setting-sources', 'project,local',
+        // Only the user's own settings for this project (.claude/settings.local.json) apply - not the
+        // project's committed ones, which could allow shell commands without asking, add hooks or an
+        // apiKeyHelper, or reroute Claude (ANTHROPIC_BASE_URL); nor user-level ones (an API gateway).
+        '--setting-sources', 'local',
         '--permission-mode', 'acceptEdits',
         '--allowedTools', CLAUDE_SAFE_TOOLS,
         '--strict-mcp-config',

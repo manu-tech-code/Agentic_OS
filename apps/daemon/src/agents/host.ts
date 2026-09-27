@@ -6,7 +6,7 @@ import { delimiter, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { withTime, type AgentHost, type ReasoningBrain, type TaskCallbacks, type Turn } from '@nova/core';
 import type { Bridge } from './bridge.ts';
-import { approvalDetail, describeAction, outputReader } from './parsers.ts';
+import { approvalDetail, describeAction, outputReader, tooLongToSay } from './parsers.ts';
 import { customPreset, PRESETS, type AgentPreset, type CustomAgentSpec, type Invocation } from './presets.ts';
 import { AgentSession } from './session.ts';
 import { channel } from './stream.ts';
@@ -53,12 +53,18 @@ interface Agent {
   extraArgs: string[];
 }
 
-/** Host-session markers (e.g. from running inside the Claude app) and Nova's own settings never reach an agent. */
-const HOST_ENV = /^(CLAUDECODE$|CLAUDE_CODE_|CLAUDE_AGENT_SDK_|CLAUDE_PID$|CLAUDE_EFFORT$|CLAUDE_PREVIEW_|NOVA_|AI_GATEWAY_API_KEY$|VERCEL_OIDC_TOKEN$)/;
+/**
+ * What an agent gets from Nova's environment: what a CLI needs to run and to find the user's own
+ * sign-in (home, user, the CLIs' config folders, locale, proxy, SSH agent) - never a key. API keys
+ * (OPENAI_API_KEY, GEMINI_API_KEY, ...), .env secrets and Nova's settings would bill an account
+ * instead of the plan, or reach an agent they aren't for.
+ */
+const AGENT_ENV =
+  /^(?:PATH|HOME|USER|LOGNAME|SHELL|TMPDIR|TMP|TEMP|LANG|LANGUAGE|LC_[A-Z_]+|TZ|TERM|TERM_PROGRAM|COLORTERM|NO_COLOR|FORCE_COLOR|__CF_USER_TEXT_ENCODING|SSH_AUTH_SOCK|XDG_[A-Z_]+|CLAUDE_CONFIG_DIR|CODEX_HOME|OPENCODE_CONFIG_DIR|GOOGLE_CLOUD_PROJECT|GOOGLE_CLOUD_LOCATION|(?:HTTPS?|ALL|NO)_PROXY|(?:https?|all|no)_proxy|NODE_EXTRA_CA_CERTS|SSL_CERT_(?:FILE|DIR))$/;
 
 export function agentEnv(drop: RegExp | undefined, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
-  for (const [k, v] of Object.entries(process.env)) if (!HOST_ENV.test(k) && !drop?.test(k)) env[k] = v;
+  for (const [k, v] of Object.entries(process.env)) if (AGENT_ENV.test(k) && !drop?.test(k)) env[k] = v;
   return { ...env, ...extra };
 }
 
@@ -198,7 +204,12 @@ export async function createAgentHost(opts: AgentHostOptions): Promise<NovaAgent
       if (!cwd) throw new Error(`${project} isn't a known project.`);
       const hookup =
         agent.preset.approvals && opts.bridge
-          ? opts.bridge.hookup((p) => callbacks.approve({ action: describeAction(p.tool_name, p.input), tool: p.tool_name, detail: approvalDetail(p.tool_name, p.input) }))
+          ? opts.bridge.hookup(async (p) => {
+              // What's said is exactly what's allowed: a command too long to say is sent back, not summarized.
+              const unsayable = tooLongToSay(p.tool_name, p.input);
+              if (unsayable) return { deny: unsayable };
+              return callbacks.approve({ action: describeAction(p.tool_name, p.input, cwd), tool: p.tool_name, detail: approvalDetail(p.tool_name, p.input) });
+            })
           : undefined;
       try {
         return await run(agent, agent.preset.task(task, { model: agent.model, approvals: hookup, assistant: opts.assistant }), {

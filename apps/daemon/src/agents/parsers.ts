@@ -1,3 +1,5 @@
+import { homedir } from 'node:os';
+import { relative, resolve, sep } from 'node:path';
 import type { AgentStep } from '@nova/core';
 import type { OutputFormat } from './presets.ts';
 
@@ -55,11 +57,35 @@ export function describeTool(name: string, input: any): AgentStep {
   }
 }
 
-/** What a permission prompt asks for, phrased to follow "wants to". */
-export function describeAction(tool: string, input: any): string {
+/** Longest command Nova reads out to be allowed; a longer one is sent back to be split up. */
+export const MAX_SPOKEN_COMMAND = 300;
+const oneLine = (s: string) => s.replace(/\s+/g, ' ').trim();
+
+/** Why a permission prompt can't be put to the user as it is (a command too long to say), or null. */
+export function tooLongToSay(tool: string, input: any): string | null {
+  if (tool !== 'Bash') return null;
+  const command = oneLine(String(input?.command ?? ''));
+  return command.length > MAX_SPOKEN_COMMAND
+    ? `Not run: this command is too long (${command.length} characters) for the user to hear in full and approve by voice. Run it as shorter commands, one step at a time (at most ${MAX_SPOKEN_COMMAND} characters each).`
+    : null;
+}
+
+/** A file, as the user should hear it: inside the project from its folder, anywhere else in full from ~ - and said to be outside. */
+function whereIs(file: unknown, project?: string): string {
+  if (typeof file !== 'string' || !file) return 'a file';
+  const path = resolve(project ?? '/', expandHome(file));
+  if (project && (path === project || path.startsWith(project.endsWith(sep) ? project : project + sep))) return relative(project, path) || '.';
+  const home = homedir();
+  const shown = path === home || path.startsWith(home + sep) ? `~${path.slice(home.length)}` : path;
+  return project ? `${shown}, outside the project` : shown;
+}
+const expandHome = (p: string) => (p === '~' ? homedir() : p.startsWith('~/') ? homedir() + p.slice(1) : p);
+
+/** What a permission prompt asks for, phrased to follow "wants to" - all of it: what's said is what's allowed. */
+export function describeAction(tool: string, input: any, project?: string): string {
   switch (tool) {
     case 'Bash':
-      return `run "${clip(String(input?.command ?? ''), 120)}"`;
+      return `run "${oneLine(String(input?.command ?? ''))}"`;
     case 'WebFetch':
       return `open ${input?.url ?? 'a web page'}`;
     case 'WebSearch':
@@ -67,7 +93,8 @@ export function describeAction(tool: string, input: any): string {
     case 'Edit':
     case 'MultiEdit':
     case 'Write':
-      return `edit ${base(input?.file_path)}`;
+    case 'NotebookEdit':
+      return `${tool === 'Write' ? 'write' : 'edit'} ${whereIs(input?.file_path ?? input?.notebook_path, project)}`;
     default:
       return `use ${tool}`;
   }

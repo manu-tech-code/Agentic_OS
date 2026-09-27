@@ -12,6 +12,9 @@ export interface PermissionPrompt {
   input: unknown;
 }
 
+/** Whether a step may run: yes, no, or no with a word to the agent on what to do instead. */
+export type Approver = (prompt: PermissionPrompt) => Promise<boolean | { deny: string }>;
+
 /** An MCP server any agent CLI can start: Nova's tools, reached through a small stdio bridge. */
 export interface McpServer {
   name: string;
@@ -30,7 +33,7 @@ export type Approvals = Bridge;
  * gets its own token, so nothing else on the machine can call in.
  */
 export async function startBridge(tools: ToolHost) {
-  const approvers = new Map<string, (prompt: PermissionPrompt) => Promise<boolean>>();
+  const approvers = new Map<string, Approver>();
   const callers = new Map<string, string>(); // token -> who is calling, e.g. "Claude"
   const handle = async (req: IncomingMessage, res: ServerResponse) => {
     const body = req.method === 'POST' ? await readJson(req) : null;
@@ -41,8 +44,9 @@ export async function startBridge(tools: ToolHost) {
     };
     const token = String(body?.token ?? '');
     if (req.url === '/approve' && approvers.has(token)) {
-      const ok = await approvers.get(token)!({ tool_name: String(body.tool_name), input: body.input ?? {} }).catch(() => false);
-      return reply(ok ? { behavior: 'allow', updatedInput: body.input ?? {} } : { behavior: 'deny', message: 'The user said no to this step (asked by voice through Nova).' });
+      const answer = await approvers.get(token)!({ tool_name: String(body.tool_name), input: body.input ?? {} }).catch(() => false as const);
+      if (answer === true) return reply({ behavior: 'allow', updatedInput: body.input ?? {} });
+      return reply({ behavior: 'deny', message: typeof answer === 'object' ? answer.deny : 'The user said no to this step (asked by voice through Nova).' });
     }
     if (req.url === '/tools' && callers.has(token)) return reply({ tools: tools.specs() });
     if (req.url === '/call' && callers.has(token)) {
@@ -65,7 +69,7 @@ export async function startBridge(tools: ToolHost) {
 
   return {
     /** Route one task's permission prompts to `ask`; close() when the task ends. */
-    hookup(ask: (prompt: PermissionPrompt) => Promise<boolean>): ApprovalHookup & { close(): void } {
+    hookup(ask: Approver): ApprovalHookup & { close(): void } {
       const token = randomBytes(16).toString('hex');
       approvers.set(token, ask);
       const server = bridge({ NOVA_APPROVAL_TOKEN: token });
