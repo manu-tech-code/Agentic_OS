@@ -36,7 +36,7 @@ const passes = (i: ActivityItem, f: Filter) =>
             ? Boolean(i.undoable && !i.undone)
             : i.status === 'failed';
 const matches = (i: ActivityItem, words: string[]) => {
-  const text = `${i.label} ${i.by ?? ''} ${i.files?.join(' ') ?? ''} ${i.undone ? 'undone' : ''}`.toLowerCase();
+  const text = `${i.label} ${i.by ?? ''} ${i.status} ${i.files?.join(' ') ?? ''} ${i.undone ? 'undone' : ''}`.toLowerCase();
   return words.every((w) => text.includes(w));
 };
 
@@ -64,7 +64,12 @@ export function Timeline({ items, found, keepDays, onUndo, onSearch }: TimelineP
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
   // The whole record's answer, once it's for what's typed now.
   const fromRecord = asked !== null && found?.query === asked && asked === query.trim() ? found.items : null;
-  const shown = useMemo(() => (fromRecord ?? items).filter((i) => passes(i, filter) && matches(i, words)), [fromRecord, items, filter, words.join(' ')]);
+  // The server already matched its own results (status included) - re-running the word search over
+  // them here would only drop ones this simpler local check misses. Only the chip filter reapplies.
+  const shown = useMemo(
+    () => (fromRecord ? fromRecord.filter((i) => passes(i, filter)) : items.filter((i) => passes(i, filter) && matches(i, words))),
+    [fromRecord, items, filter, words.join(' ')],
+  );
 
   const groups: { day: string; items: ActivityItem[] }[] = [];
   for (const item of shown) {

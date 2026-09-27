@@ -30,7 +30,7 @@ export function PresencePanel({ snapshot, name, onAction }: { snapshot: Settings
             name,
           )}
         </span>
-        <code className="command">npm run app</code>
+        <code className="cmd-snippet">npm run app</code>
         <span className="muted">It goes in ~/Applications, opens at login, and runs the daemon for you. The settings below apply while it runs.</span>
       </div>
     );

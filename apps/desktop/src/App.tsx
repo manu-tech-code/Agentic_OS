@@ -12,7 +12,7 @@ import { Tasks } from './components/Tasks';
 import { Timeline } from './components/Timeline';
 import { formatShortcut } from '@nova/core/shortcut';
 import type { SettingsSection } from '@nova/core/settings';
-import { appLevel, inApp, openOnLoad, tellApp, useAppState } from './lib/shell';
+import { appLevel, inApp, onShellOpen, openOnLoad, tellApp, useAppState } from './lib/shell';
 import { useNova, type SayEvent } from './lib/useNova';
 import {
   earcon,
@@ -121,8 +121,12 @@ export default function App() {
   const micStop = useRef<(() => void) | null>(null);
   /** The user turned listening off; only they turn it back on (a stray click doesn't). */
   const stoppedByUser = useRef(false);
+  /** Bumped whenever wake() should stop where it is: sleep() can't cancel an await already in
+   * flight (startCapture/startMicLevel), so it's checked again once each one resolves. */
+  const wakeGen = useRef(0);
   const wake = useCallback(async () => {
     if (handsOffRef.current || waking.current || capture.current || listener.current?.active) return;
+    const gen = ++wakeGen.current;
     waking.current = true;
     setAwake(true);
     setMicError(null);
@@ -136,8 +140,8 @@ export default function App() {
           (l) => (levelRef.current = l),
           () => setNeedsTap(true),
         );
-        // Nova's Mac app took over while the microphone was starting.
-        if (handsOffRef.current) {
+        // Nova's Mac app took over, or the user stopped it, while the microphone was starting.
+        if (gen !== wakeGen.current || handsOffRef.current) {
           stop();
           waking.current = false;
           return setAwake(false);
@@ -154,7 +158,13 @@ export default function App() {
     }
     if (!micStop.current) {
       try {
-        micStop.current = await startMicLevel((l) => (levelRef.current = l));
+        const stop = await startMicLevel((l) => (levelRef.current = l));
+        if (gen !== wakeGen.current) {
+          stop();
+          waking.current = false;
+          return setAwake(false);
+        }
+        micStop.current = stop;
       } catch {
         waking.current = false; // the next click retries
         return setMicError(MIC_HELP);
@@ -185,6 +195,7 @@ export default function App() {
 
   /** Stop listening: recognition ends and the microphone is released, not just muted. */
   const sleep = useCallback(() => {
+    wakeGen.current++; // a wake() still awaiting the microphone stops where it is once it resumes
     stoppedByUser.current = true;
     if (capture.current) {
       capture.current();
@@ -213,6 +224,7 @@ export default function App() {
     const was = wasHandsOff.current;
     wasHandsOff.current = handsOff;
     if (handsOff) {
+      wakeGen.current++; // a wake() still awaiting the microphone stops where it is once it resumes
       if (capture.current) {
         capture.current();
         capture.current = null;
@@ -308,6 +320,10 @@ export default function App() {
     if (state.showRequest?.panel === 'welcome') setShowWelcome(true);
   }, [state.showRequest]);
 
+  // The app asked this already-open window to show a panel (the menu bar's "Settings…", or "open
+  // settings" said while the window was already up - windowPanel in its URL only takes on a fresh load).
+  useEffect(() => onShellOpen((panel) => (panel === 'welcome' ? setShowWelcome(true) : openSettings())), [openSettings]);
+
   // A result from outside Settings (an undo from the timeline), shown for a moment. Settings shows its own.
   const [toast, setToast] = useState<{ ok: boolean; message: string; at: number } | null>(null);
   const settingsOpen = useRef(showSettings);
@@ -373,14 +389,16 @@ export default function App() {
       if (mod && e.key === ',') (e.preventDefault(), openSettings());
       // ⌃⌥⌘. stops everything (Nova.app has it everywhere; this is the window's own).
       if (e.ctrlKey && e.altKey && e.metaKey && (e.key === '.' || e.code === 'Period')) (e.preventDefault(), stopEverything());
-      if (e.key === 'Escape') {
+      // An overlay's own Escape (the ⌘K bar, Settings, the walkthrough) closes itself - it shouldn't
+      // also abort the answer or refuse a pending agent approval underneath it.
+      if (e.key === 'Escape' && !showCommand && !showSettings && !showWelcome && !e.defaultPrevented) {
         stopSpeaking();
         send({ type: 'cancel' });
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [send, openSettings, stopEverything]);
+  }, [send, openSettings, stopEverything, showCommand, showSettings, showWelcome]);
 
   const engineShort = state.engine?.split(' ')[0] ?? 'offline';
   // While the Mac app hears for Nova, "listening" is whatever it says (muted, locked, ...).

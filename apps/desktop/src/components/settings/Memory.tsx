@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ClientEvent } from '@nova/core/protocol';
 import { personalize, type SettingsSnapshot } from '@nova/core/settings';
 
@@ -63,6 +63,9 @@ export function MemoryPanel({ snapshot, name, onAction }: Actions) {
 
 function MemoryRow({ item, onAction }: { item: SettingsSnapshot['memory']['items'][number]; onAction: (event: ClientEvent) => void }) {
   const [text, setText] = useState(item.text);
+  // Keep this in step with the item's own text (another edit, or the save that just went out) -
+  // otherwise a later blur here saves this row's stale copy back over it.
+  useEffect(() => setText(item.text), [item.text]);
   const save = () => text.trim() && text.trim() !== item.text && onAction({ type: 'memory-edit', id: item.id, text: text.trim() });
   return (
     <div className="tool-row memory-row">

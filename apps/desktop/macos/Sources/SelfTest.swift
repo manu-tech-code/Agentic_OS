@@ -17,6 +17,21 @@ enum SelfTest {
     check("control+option+f5", Shortcut("control+option+f5")?.keyCode == UInt32(kVK_F5))
     check("unknown ones refused", Shortcut("hyper+space") == nil && Shortcut("option+") == nil && Shortcut("option+option+a") == nil)
 
+    // Whatever answers on the dev server's port: only trusted if it looks like Nova's own page.
+    let novaHtml = "<html><head><title>Nova</title></head><body><script src=\"/src/main.tsx\"></script></body></html>"
+    check("Nova's dev page is recognised", AppDelegate.isNovaPage(novaHtml.data(using: .utf8)))
+    check("a marked page is recognised", AppDelegate.isNovaPage(#"<meta name="nova-app" content="1">"#.data(using: .utf8)))
+    check("someone else's Vite project isn't", !AppDelegate.isNovaPage("<html><head><title>My App</title></head></html>".data(using: .utf8)))
+    check("nothing there isn't either", !AppDelegate.isNovaPage(nil))
+
+    // Origins, for the page's message handler and its navigation policy: scheme and port both count.
+    check("an origin string", WebHost.originString(URL(string: "http://127.0.0.1:7878/")!) == "http://127.0.0.1:7878")
+    check("a different port is a different origin", WebHost.originString(URL(string: "http://127.0.0.1:5173/")!) != WebHost.originString(URL(string: "http://127.0.0.1:7878/")!))
+    check("only http(s) is ever handed to another app", WebHost.isExternal(URL(string: "https://nova.dev")!) && !WebHost.isExternal(URL(string: "file:///etc/passwd")!) && !WebHost.isExternal(URL(string: "javascript:alert(1)")!))
+
+    // The HUD never grows past a small card, however the page misbehaves.
+    check("the HUD size is clamped", HudPanel.clamp(5000) == 480 && HudPanel.clamp(4) == 40 && HudPanel.clamp(200) == 200)
+
     // The microphone: five 20 ms blocks at 48 kHz become 1600 samples at 16 kHz, just as loud.
     let mono = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 1, interleaved: false)!
     let send = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16_000, channels: 1, interleaved: true)!

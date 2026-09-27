@@ -24,7 +24,7 @@ export function StepFix({ step, onAction, onNavigate }: { step: SetupStep; onAct
       )}
       {fix.command && !step.done && (
         <span className="setup__command">
-          <code className="command">{fix.command}</code>
+          <code className="cmd-snippet">{fix.command}</code>
           <button type="button" className="link" onClick={() => void navigator.clipboard?.writeText(fix.command!)}>
             Copy
           </button>

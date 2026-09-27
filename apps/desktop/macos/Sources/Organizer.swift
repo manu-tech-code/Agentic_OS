@@ -5,6 +5,12 @@ import UserNotifications
 
 /// The Calendar and Reminders apps, for Nova: today's events (for the briefing, and to stay quiet in
 /// meetings) and reminders that reach the iPhone. macOS asks the user the first time each is needed.
+/// Asked to complete or remove a reminder that isn't there any more (already done elsewhere, or its id
+/// is stale) - so the caller reports failure instead of a success that didn't actually do anything.
+struct ReminderNotFound: LocalizedError {
+  var errorDescription: String? { "That reminder isn't there any more." }
+}
+
 final class Organizer {
   private let store = EKEventStore()
 
@@ -75,13 +81,13 @@ final class Organizer {
   }
 
   func complete(_ id: String) throws {
-    guard let reminder = store.calendarItem(withIdentifier: id) as? EKReminder else { return }
+    guard let reminder = store.calendarItem(withIdentifier: id) as? EKReminder else { throw ReminderNotFound() }
     reminder.isCompleted = true
     try store.save(reminder, commit: true)
   }
 
   func remove(_ id: String) throws {
-    guard let reminder = store.calendarItem(withIdentifier: id) as? EKReminder else { return }
+    guard let reminder = store.calendarItem(withIdentifier: id) as? EKReminder else { throw ReminderNotFound() }
     try store.remove(reminder, commit: true)
   }
 

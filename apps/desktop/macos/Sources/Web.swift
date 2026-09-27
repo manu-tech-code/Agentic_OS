@@ -11,10 +11,16 @@ final class WebHost: NSObject, WKScriptMessageHandler, WKNavigationDelegate, WKU
   let view: WKWebView
   /// Where to load from - asked again after a failure (the dev server may have stopped).
   private let address: () -> URL
+  /// Origins ("scheme://host:port") this page is allowed to talk to the app from and navigate to:
+  /// the daemon's own address, and the dev server while it's confirmed to be Nova's and switched on.
+  /// Whatever else answers on the same machine - another Vite project, a page that redirected itself
+  /// somewhere else - is a stranger, never handed the microphone or a place to navigate the window to.
+  private let allowedOrigins: () -> Set<String>
   private var retry: DispatchWorkItem?
 
-  init(transparent: Bool, address: @escaping () -> URL) {
+  init(transparent: Bool, allowedOrigins: @escaping () -> Set<String>, address: @escaping () -> URL) {
     self.address = address
+    self.allowedOrigins = allowedOrigins
     let config = WKWebViewConfiguration()
     config.mediaTypesRequiringUserActionForPlayback = []
     view = WKWebView(frame: .zero, configuration: config)
@@ -42,8 +48,24 @@ final class WebHost: NSObject, WKScriptMessageHandler, WKNavigationDelegate, WKU
   }
 
   func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+    // Only Nova's own page, its main frame - never an iframe it happens to contain, and never a
+    // stranger sharing the port - may unmute the microphone, resize the HUD, or ask to expand it.
+    guard message.frameInfo.isMainFrame, allowedOrigins().contains(WebHost.originString(message.frameInfo.securityOrigin)) else { return }
     if let body = message.body as? [String: Any] { onMessage(body) }
   }
+
+  /// "scheme://host:port", so a page's declared origin and a trusted URL's can be compared exactly
+  /// (unlike a bare host, this can't be fooled by a different scheme or port on the same host).
+  static func originString(_ origin: WKSecurityOrigin) -> String { "\(origin.protocol)://\(origin.host):\(origin.port)" }
+
+  static func originString(_ url: URL) -> String? {
+    guard let scheme = url.scheme, let host = url.host else { return nil }
+    return "\(scheme)://\(host):\(url.port ?? (scheme == "https" ? 443 : 80))"
+  }
+
+  /// Only http(s) ever gets handed to NSWorkspace - never file:, a custom scheme, or anything else a
+  /// page could use to reach past the browser and into some other app.
+  static func isExternal(_ url: URL) -> Bool { url.scheme == "http" || url.scheme == "https" }
 
   func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { onLoad() }
 
@@ -67,17 +89,18 @@ final class WebHost: NSObject, WKScriptMessageHandler, WKNavigationDelegate, WKU
     decisionHandler(.deny)
   }
 
-  /// Links to anywhere else open in the browser, not in Nova.
+  /// Any navigation - a clicked link, a redirect, a form, script that sets location - to anywhere but
+  /// Nova's own page opens in the browser instead (only if it's a page at all) and never happens
+  /// inside Nova's own views: a stranger's page never gets to load where the microphone answers to.
   func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-    if let url = action.request.url, action.navigationType == .linkActivated, url.host != address().host {
-      NSWorkspace.shared.open(url)
-      return decisionHandler(.cancel)
-    }
-    decisionHandler(.allow)
+    guard let url = action.request.url else { return decisionHandler(.allow) }
+    if let origin = WebHost.originString(url), allowedOrigins().contains(origin) { return decisionHandler(.allow) }
+    if WebHost.isExternal(url) { NSWorkspace.shared.open(url) }
+    decisionHandler(.cancel)
   }
 
   func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for action: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-    if let url = action.request.url { NSWorkspace.shared.open(url) }
+    if let url = action.request.url, WebHost.isExternal(url) { NSWorkspace.shared.open(url) }
     return nil
   }
 

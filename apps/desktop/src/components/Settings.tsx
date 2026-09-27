@@ -10,6 +10,7 @@ import { MemoryPanel, ScreenPanel } from './settings/Memory';
 import { PresencePanel, ShortcutInput } from './settings/Presence';
 import { InitiativePanel } from './settings/Initiative';
 import { PrivacyPanel, SetupPanel } from './settings/Trust';
+import { inApp, tellApp, useVoiceOwner } from '../lib/shell';
 
 const LANGUAGES: [string, string][] = [
   ['en-US', 'English (US)'],
@@ -34,6 +35,13 @@ const LANGUAGES: [string, string][] = [
 
 /** A Kokoro voice, with a button to hear it (the daemon speaks the sample). */
 export function KokoroVoiceSelect({ field, value, installed, onSave, onAction }: { field: SettingField; value: string; installed: boolean; onSave: (v: string) => void; onAction: (e: ClientEvent) => void }) {
+  // Nova.app owns the voice: previewing here, in a plain browser window with no bridge to it, would
+  // play "Hi, I'm Nova" out loud where its microphone - listening with no reason to expect its own
+  // voice from somewhere else - could hear it and answer itself. Inside the app, the bridge sends the
+  // preview to ask for itself instead, so it plays through the app's own echo-cancelled engine.
+  const appVoice = useVoiceOwner();
+  const blocked = !inApp && appVoice;
+  const preview = () => (inApp ? tellApp({ type: 'preview', voice: value }) : onAction({ type: 'voice-preview', id: previewVoice(), voice: value }));
   return (
     <span className="setting__inline">
       <select className="setting__input" value={value} onChange={(e) => onSave(e.target.value)}>
@@ -43,7 +51,13 @@ export function KokoroVoiceSelect({ field, value, installed, onSave, onAction }:
           </option>
         ))}
       </select>
-      <button type="button" className="btn btn--ghost" disabled={!installed} onClick={() => onAction({ type: 'voice-preview', id: previewVoice(), voice: value })}>
+      <button
+        type="button"
+        className="btn btn--ghost"
+        disabled={!installed || blocked}
+        title={blocked ? "Nova.app is listening on this Mac - open its own window to preview a voice" : undefined}
+        onClick={preview}
+      >
         Preview
       </button>
     </span>

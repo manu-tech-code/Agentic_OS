@@ -33,7 +33,10 @@ export type ToApp =
   /** Listen now, as if the shortcut were tapped. */
   | { type: 'talk' }
   /** Turn the microphone off or back on. */
-  | { type: 'mute'; on: boolean };
+  | { type: 'mute'; on: boolean }
+  /** Hear a Kokoro voice: asked for over the app's own connection, so it plays through its
+   * echo-cancelled engine instead of this page's - which the microphone would just hear. */
+  | { type: 'preview'; voice: string };
 
 export function tellApp(message: ToApp) {
   (window as { webkit?: { messageHandlers?: { nova?: { postMessage(m: unknown): void } } } }).webkit?.messageHandlers?.nova?.postMessage(message);
@@ -61,6 +64,12 @@ let current: AppState | null = null;
 /** The microphone's level, 0-1, straight from the app (for the orb; no React re-renders). */
 export const appLevel = { current: 0 };
 
+/** A panel to open in the window - even one that already exists (the menu bar's "Settings…", or
+ * "open settings" said while it was already open): windowPanel in the app's URL only takes on a
+ * fresh page load, so an already-open window is told directly instead. */
+type OpenPanel = 'settings' | 'welcome';
+const openListeners = new Set<(panel: OpenPanel) => void>();
+
 if (inApp) {
   (window as unknown as { novaShell: unknown }).novaShell = {
     state(next: AppState) {
@@ -69,6 +78,9 @@ if (inApp) {
     },
     level(value: number) {
       appLevel.current = value;
+    },
+    open(panel: OpenPanel) {
+      for (const l of openListeners) l(panel);
     },
   };
 }
@@ -81,4 +93,30 @@ export function useAppState(): AppState | null {
     return () => void listeners.delete(setState);
   }, []);
   return state;
+}
+
+/** The app asked this already-open window to show a panel. */
+export function onShellOpen(handler: (panel: OpenPanel) => void) {
+  openListeners.add(handler);
+  return () => void openListeners.delete(handler);
+}
+
+/** Nova.app is connected (it hears and speaks for Nova), read reactively - so, for example, a voice
+ * Preview button can tell whether playing here would go out loud where the app's microphone could
+ * hear it, without threading appVoice through every settings panel as a prop. */
+const voiceOwnerListeners = new Set<(app: boolean) => void>();
+let voiceOwnerNow = false;
+
+export function setVoiceOwner(app: boolean) {
+  voiceOwnerNow = app;
+  for (const l of voiceOwnerListeners) l(app);
+}
+
+export function useVoiceOwner(): boolean {
+  const [value, setValue] = useState(voiceOwnerNow);
+  useEffect(() => {
+    voiceOwnerListeners.add(setValue);
+    return () => void voiceOwnerListeners.delete(setValue);
+  }, []);
+  return value;
 }
