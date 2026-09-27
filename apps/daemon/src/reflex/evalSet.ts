@@ -595,7 +595,7 @@ export const SET_D: EvalCase[] = [
   c('chat', 'how long should i boil eggs'),
   c('chat', 'what time does the sun set today'),
   c('chat', 'how many minutes are in a day'),
-  c('chat', 'what apps do i have open'),
+  c('window_control', 'what apps do i have open'), // Hands answers it itself (the windows skill lists them); it was chat before
   c('chat', 'why does my mac keep freezing'),
   c('chat', 'can you help me write a message to my landlord'),
   c('chat', "what's a good song to focus to"),

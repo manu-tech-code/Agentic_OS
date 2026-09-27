@@ -292,6 +292,40 @@ Worth knowing: what Nova Eyes may see, Nova can see - and, as with any assistant
 under your account could ask Nova for it (or start Nova Eyes itself). Grant these permissions on a Mac where you trust
 what runs, and turn them off in System Settings whenever you like.
 
+## Hands: Nova uses the Mac
+
+Nova does what you'd do on the Mac yourself - when you ask, or when a brain or agent needs it:
+
+- **Settings**: "volume to 30", "turn it down a bit", "mute the sound", the brightness, dark mode, Wi-Fi, Bluetooth,
+  Focus (Do Not Disturb), "lock the screen", "put the Mac to sleep" (asked first), "how's the battery?".
+- **Media**: play, pause, next, previous, "what's playing?", or "play some jazz" from the Music library (or Spotify).
+- **Windows**: "Safari on the left, Slack on the right", "maximize this", "move this to the other display", minimize,
+  full screen, hide an app, "what's open?" - and layouts you save ("save this layout as work", then "work layout").
+- **Files**: find them by name or kind ("the budget spreadsheet", "PDFs from last week"), recent ones, open one, show it
+  in Finder, read or sum up what's in it, move it to a folder, rename it, or put it in the Trash - never deleted for
+  good. Moving, renaming and trashing are asked about first, naming the file Nova found.
+- **Clipboard**: "what did I copy?" (never what a password manager hides), "copy that" (the last answer), "copy the
+  link" (the page in front).
+- **Your Shortcuts**: "run my log water shortcut", with text if it takes some ("run translate with good morning"), and
+  "what shortcuts do I have?". Asked first; one still running after a minute is stopped.
+- **Clicking and typing**: your own commands for the app in front - "click send", "type see you at five", "press
+  command s", "scroll down".
+- **A whole task on the computer**: "use the computer to book a table", "fill in this form for me". The brain that
+  answers looks at the screen and clicks, types and scrolls one step at a time. Nova asks before each step, with a
+  frame around the button or field it means, or once when you say "go ahead with all of it" - for that task only,
+  never remembered. It holds off while you're using the mouse or keyboard, stops after 60 steps and says what's
+  left, and the window and the orb show while it's at work. "Stop everything" takes its hands off at once.
+
+The same rules hold whoever asks. You, by voice; brains and agents, as tools, agents at work on a project task
+included. Anything you didn't ask for yourself is asked about first, and so is anything hard to take back. "Undo
+that" takes back the volume, the brightness and the other settings, windows moved, a file moved or trashed, or what
+was on the clipboard.
+
+Hands works through Nova Eyes (above). Clicking, typing and windows need its Accessibility permission, and looking
+needs Screen Recording. The first time Nova controls Music or Spotify, macOS asks whether Nova (or the terminal it
+runs in) may; say OK. Settings → Hands turns brains' use of the computer off, sets the step limit and how long a
+shortcut may run, and lists your Shortcuts.
+
 ## Reflex: Nova's own decision model
 
 System 1 - deciding what each thing you say means - runs on your Mac by default, in about a millisecond,
@@ -326,11 +360,12 @@ were talking to Nova; *scores* when a question needs one), and answers them from
   Settings shows how much, and can switch learning off or forget it.
 
 `npm run reflex:eval` measures it on phrasings it never learned from (every test phrasing is held out of its training
-data). On set E - 330 utterances written by a separate agent that never saw Reflex's data - it picks the right intent
-82% of the time (the keyword matcher: 50%; Reflex before its classifier and larger data: 72%), does the wrong thing 4%
-of the time (was 8%), hands 14% to the brain, and tells background speech from speech meant for it 90% of the time
-(was 79%). On the older held-out set C: 98% right, 1% wrong. Sets A, B and D are for development; C and E stay held
-out - never tune to them (`REFLEX_SHOW_HELDOUT=1` shows their misses). The model is downloaded from a pinned revision
+data). With a brain to hand doubtful requests to (`REFLEX_CANTHINK=1`), on set E - 362 utterances written by a separate
+agent that never saw Reflex's data, Hands' included - it picks the right intent 75% of the time (the keyword matcher:
+43%; the closest-example search alone: 75%, but doing the wrong thing 11% of the time), does the wrong thing 4% of
+the time, and hands 21% to the brain. Across all sets it tells background speech from speech meant for it 94% of the
+time. On the older held-out set C: 93% right, 6% wrong. Sets A, B and D are for development; C and E stay held out -
+never tune to them (`REFLEX_SHOW_HELDOUT=1` shows their misses). The model is downloaded from a pinned revision
 and checked against its checksums; it lives in `~/.nova/models` (`NOVA_MODELS_DIR` in `.env` moves it).
 
 ## Turning on Jev (optional)
