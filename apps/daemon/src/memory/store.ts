@@ -1,12 +1,15 @@
 import { randomBytes } from 'node:crypto';
-import { appendFile, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { appendFile, mkdir, readdir, readFile, rm, stat } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { Embedder, MemoryItem, MemoryService, Turn } from '@nova/core';
+import { setAside, writeDurably } from '../initiative/durable.ts';
 
 /**
  * Nova's memory of the user: facts they said to remember, or agreed to when Nova suggested them,
- * kept as plain JSON they can read and edit (~/.nova/memory.json). Related memories are found by
- * meaning (Reflex's embedding model) and by shared words, so it works before Reflex is installed too.
+ * kept as plain JSON they can read and edit (~/.nova/memory.json) - even while Nova runs: what
+ * they changed by hand is kept when Nova next saves, with Nova's own changes on top. A file Nova
+ * can't read is never written over. Related memories are found by meaning (Reflex's embedding
+ * model) and by shared words, so it works before Reflex is installed too.
  */
 
 export interface StoredMemory {
@@ -37,16 +40,45 @@ function relatedness(query: string, text: string, q?: Float32Array, m?: Float32A
   return q && m ? 0.6 * meaning + 0.4 * shared : shared;
 }
 
-async function writePrivate(file: string, data: string) {
-  await mkdir(dirname(file), { recursive: true });
-  await writeFile(`${file}.tmp`, data, { mode: 0o600 });
-  await rename(`${file}.tmp`, file);
+/** memory.json's memories - or null when it isn't something Nova can read. `skipped`: entries it can't use. */
+function parse(raw: string): { items: StoredMemory[]; skipped: number } | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  const list = Array.isArray(parsed) ? parsed : (parsed as { memories?: unknown[] } | null)?.memories;
+  if (!Array.isArray(list)) return null;
+  const items = list.filter((m): m is StoredMemory => typeof (m as StoredMemory)?.text === 'string' && typeof (m as StoredMemory)?.id === 'string');
+  return { items, skipped: list.length - items.length };
+}
+
+/** The memories as the file has them, with Nova's changes since (by id; null: forgotten) on top. */
+function merge(theirs: StoredMemory[], ours: Map<string, StoredMemory | null>, cleared: boolean) {
+  const out = cleared ? [] : [...theirs];
+  for (const [id, item] of ours) {
+    const at = out.findIndex((m) => m.id === id);
+    if (item === null) {
+      if (at >= 0) out.splice(at, 1);
+    } else if (at >= 0) out[at] = item;
+    else out.push(item);
+  }
+  return out;
 }
 
 export class MemoryStore implements MemoryService {
   private items: StoredMemory[] = [];
   private readonly vectors = new Map<string, Float32Array>();
   private saving: Promise<unknown> = Promise.resolve();
+  /** What Nova changed since it last saved, by id (null: forgotten) - put over any hand edits made meanwhile. */
+  private readonly changes = new Map<string, StoredMemory | null>();
+  /** Everything was forgotten since the last save. */
+  private cleared = false;
+  /** memory.json as Nova last read or wrote it (time, size, file), to tell when it was edited by hand. */
+  private seen: string | null = null;
+  /** memory.json couldn't be read, nor kept aside: nothing is saved over it. */
+  private broken = false;
   suggestions = true;
 
   constructor(
@@ -56,14 +88,32 @@ export class MemoryStore implements MemoryService {
   ) {}
 
   async load() {
+    this.items = [];
+    let raw: string | null = null;
     try {
-      const parsed: unknown = JSON.parse(await readFile(this.file, 'utf8'));
-      const list = Array.isArray(parsed) ? parsed : (parsed as { memories?: unknown[] })?.memories;
-      this.items = (Array.isArray(list) ? list : []).filter((m): m is StoredMemory => typeof (m as StoredMemory)?.text === 'string' && typeof (m as StoredMemory)?.id === 'string');
+      raw = await readFile(this.file, 'utf8');
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') console.warn(`  [memory] can't read ${this.file}: ${(e as Error).message}`);
-      this.items = [];
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
+        this.broken = true;
+        console.warn(`  [memory] can't read ${this.file} (${(e as Error).message}) - it's left as it is, and what Nova learns now lasts only until it stops`);
+      }
     }
+    if (raw !== null) {
+      const got = parse(raw);
+      if (!got) {
+        const kept = await setAside(this.file);
+        this.broken = !kept;
+        console.warn(`  [memory] ${this.file} couldn't be read${kept ? `, so it's kept as ${kept} and Nova starts with no memories` : " - it's left as it is, and nothing is saved over it"}`);
+      } else {
+        this.items = got.items;
+        if (got.skipped) {
+          const kept = await setAside(this.file, 'copy');
+          this.broken = !kept;
+          console.warn(`  [memory] ${got.skipped} of the entries in ${this.file} couldn't be used${kept ? ` - the file as it was is kept as ${kept}` : ", so it's left as it is"}`);
+        }
+      }
+    }
+    this.seen = await this.stamp();
     return this;
   }
 
@@ -84,17 +134,18 @@ export class MemoryStore implements MemoryService {
 
   remember(fact: string, source: 'said' | 'suggested'): MemoryItem {
     const text = fact.trim().replace(/\s+/g, ' ');
-    // The same thing said again (or nearly): the newer wording replaces it.
+    // The same thing said again (or nearly): the newer wording replaces it - and undoing that puts the older back.
     const same = this.items.find((m) => m.text.toLowerCase() === text.toLowerCase() || relatedness(text, m.text, this.vector(text), this.vector(m.text)) > 0.9);
     if (same) {
+      const replaced = same.text;
       same.text = text;
       same.updated = Date.now();
-      this.save();
-      return { id: same.id, text };
+      this.changed(same);
+      return { id: same.id, text, replaced };
     }
     const item: StoredMemory = { id: randomBytes(4).toString('hex'), text, created: Date.now(), source };
     this.items.push(item);
-    this.save();
+    this.changed(item);
     return { id: item.id, text };
   }
 
@@ -113,8 +164,10 @@ export class MemoryStore implements MemoryService {
   forget(id: string) {
     const before = this.items.length;
     this.items = this.items.filter((m) => m.id !== id);
-    if (this.items.length !== before) this.save();
-    return this.items.length !== before;
+    if (this.items.length === before) return false;
+    this.changes.set(id, null);
+    this.save();
+    return true;
   }
 
   edit(id: string, text: string) {
@@ -122,12 +175,14 @@ export class MemoryStore implements MemoryService {
     if (!item || !text.trim()) return false;
     item.text = text.trim();
     item.updated = Date.now();
-    this.save();
+    this.changed(item);
     return true;
   }
 
   clear() {
     this.items = [];
+    this.changes.clear();
+    this.cleared = true;
     return this.save();
   }
 
@@ -140,10 +195,41 @@ export class MemoryStore implements MemoryService {
     return Promise.all([this.saving, this.journal.flushed()]).then(() => undefined);
   }
 
+  private changed(item: StoredMemory) {
+    this.changes.set(item.id, item);
+    this.save();
+  }
+
   private save() {
-    const data = `${JSON.stringify({ memories: this.items }, null, 2)}\n`;
-    this.saving = this.saving.then(() => writePrivate(this.file, data)).catch((e) => console.warn(`  [memory] can't save: ${(e as Error).message}`));
+    this.saving = this.saving.then(() => this.write()).catch((e) => console.warn(`  [memory] can't save: ${(e as Error).message}`));
     return this.saving;
+  }
+
+  /** memory.json again: edited by hand since Nova last read it, it's read first - theirs, with Nova's changes on top. */
+  private async write() {
+    if (this.broken) return;
+    if ((await this.stamp()) !== this.seen) {
+      const raw = await readFile(this.file, 'utf8').catch(() => null); // gone: nothing of theirs to keep
+      const got = raw === null ? { items: [] } : parse(raw);
+      if (got) this.items = merge(got.items, this.changes, this.cleared);
+      else {
+        const kept = await setAside(this.file); // can't be read now: kept, and Nova's own list saved
+        if (!kept) return;
+        console.warn(`  [memory] ${this.file} couldn't be read, so it's kept as ${kept}`);
+      }
+    }
+    this.changes.clear();
+    this.cleared = false;
+    await writeDurably(this.file, `${JSON.stringify({ memories: this.items }, null, 2)}\n`);
+    this.seen = await this.stamp();
+  }
+
+  /** When memory.json was last changed, how big it is and which file it is - or null when there's none. */
+  private stamp() {
+    return stat(this.file).then(
+      (s) => `${s.mtimeMs}:${s.size}:${s.ino}`,
+      () => null,
+    );
   }
 }
 
