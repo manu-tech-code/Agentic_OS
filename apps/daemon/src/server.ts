@@ -19,7 +19,7 @@ import {
 } from '@nova/core';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { startBridge } from './agents/bridge.ts';
-import { createAgentHost, type NovaAgentHost } from './agents/host.ts';
+import { createAgentHost, findProjects, type NovaAgentHost } from './agents/host.ts';
 import type { CustomAgentSpec } from './agents/presets.ts';
 import { loadConfig, loadDotEnv, migrateSettings, readSettings, settingsFile, settingsInEnv, watchSettings, writeSettings, type Config, type Settings } from './config.ts';
 import { modelResolver } from './models.ts';
@@ -87,34 +87,57 @@ interface Runtime {
   /** Whether hearing's downloadable models are installed. */
   parakeetInstalled: boolean;
   smartTurnInstalled: boolean;
-  /** Paired agents, some kept running as brains; closed when the runtime is replaced. */
+  /** Paired agents, some kept running as brains; closed when a runtime with other agent settings replaces this one. */
   host: NovaAgentHost | null;
+  /** What the host was made from: the same again, and the next runtime keeps it (and the brain's answer in progress). */
+  agentsKey: string;
   options: NovaSettings;
 }
 
-/** Everything Nova runs on: the settings file, plus constants and secrets from .env. */
-async function buildRuntime(): Promise<Runtime> {
-  let settings: Settings = {};
-  let fileError: string | undefined;
+/** The settings file as it is now, or why it can't be read. */
+async function currentSettings(): Promise<{ settings: Settings; fileError?: string }> {
   try {
-    settings = (await readSettings()) ?? {};
+    return { settings: (await readSettings()) ?? {} };
   } catch (e) {
-    fileError = (e as Error).message;
+    return { settings: {}, fileError: (e as Error).message };
   }
+}
+
+/**
+ * Everything Nova runs on: the settings file, plus constants and secrets from .env. The agents of
+ * `previous` stay if nothing about them changed - saving an unrelated setting ("yes, always", say)
+ * never restarts the brain mid-answer.
+ */
+async function buildRuntime(previous?: Runtime): Promise<Runtime> {
+  const { settings, fileError } = await currentSettings();
   const config = loadConfig(settings, process.env);
+  const custom = { ...(await readAgentsFile(config.agentsFile)), ...config.customAgents };
+  const folders = [...(await findProjects(config.projectsDir, config.projects))];
+  const agentsKey = JSON.stringify([config.agents, custom, folders, config.agentOptions, config.agentTaskTimeoutMs, config.name]);
+  const kept = previous && previous.agentsKey === agentsKey;
+  const agents = kept
+    ? previous.host
+    : await createAgentHost({
+        names: config.agents,
+        custom,
+        projects: config.projects,
+        projectsDir: config.projectsDir,
+        options: config.agentOptions,
+        bridge,
+        taskTimeoutMs: config.agentTaskTimeoutMs,
+        assistant: config.name,
+      });
+  try {
+    return await finishRuntime(settings, fileError, config, custom, agents, agentsKey);
+  } catch (e) {
+    if (!kept) agents?.close(); // made for a runtime that never came: its agents go too
+    throw e;
+  }
+}
+
+async function finishRuntime(settings: Settings, fileError: string | undefined, config: Config, custom: Record<string, CustomAgentSpec>, agents: NovaAgentHost | null, agentsKey: string): Promise<Runtime> {
   const models = modelResolver(config.localProviders);
   const hasKey = Boolean(config.gatewayKey);
-  const custom = { ...(await readAgentsFile(config.agentsFile)), ...config.customAgents };
-  const agents = await createAgentHost({
-    names: config.agents,
-    custom,
-    projects: config.projects,
-    projectsDir: config.projectsDir,
-    options: config.agentOptions,
-    bridge,
-    taskTimeoutMs: config.agentTaskTimeoutMs,
-    assistant: config.name,
-  });
 
   // Who answers open questions: a paired agent (claude, codex, ...), a local model (lmstudio/...)
   // or an AI Gateway id (needs the key). Automatic (empty) means the default paired agent.
@@ -154,6 +177,7 @@ async function buildRuntime(): Promise<Runtime> {
     parakeetInstalled,
     smartTurnInstalled,
     host: agents,
+    agentsKey,
     options: {
       name: config.name,
       engine,
@@ -477,7 +501,7 @@ function saveSettings(changes: unknown) {
     const settings = (await readSettings()) ?? {}; // throws for a broken file, so it's never overwritten
     for (const [key, value] of Object.entries(changes)) setPath(settings, key, value ?? undefined);
     await writeSettings(settings);
-    apply(await buildRuntime());
+    apply(await buildRuntime(runtime));
   });
 }
 
@@ -491,7 +515,7 @@ function installReflex(progress: (message: string) => void) {
         if (file === 'model.safetensors' && pct !== shown) progress(`Downloading Reflex… ${(shown = pct)}%`);
       },
     });
-    apply(await buildRuntime());
+    apply(await buildRuntime(runtime));
     return runtime.reflex.model ? 'Reflex is installed and making decisions.' : "Reflex downloaded, but it didn't load - see the daemon log.";
   });
 }
@@ -509,7 +533,7 @@ function installHearing(model: 'parakeet' | 'smart-turn', progress: (message: st
         if (file === big && pct !== shown) progress(`Downloading ${model === 'parakeet' ? 'Parakeet' : 'Smart Turn'}… ${(shown = pct)}%`);
       },
     });
-    apply(await buildRuntime());
+    apply(await buildRuntime(runtime));
     if (model === 'parakeet') hearing!.retry(); // it may have been waiting for this
     return model === 'parakeet'
       ? 'Parakeet is installed. Choose it in Settings → Hearing → Speech recognition.'
@@ -528,10 +552,11 @@ function forgetReflex() {
 // Edits made by hand apply as soon as the file is saved.
 watchSettings(() =>
   queue(async () => {
-    const next = await buildRuntime();
-    if (JSON.stringify([next.settings, next.fileError]) === JSON.stringify([runtime.settings, runtime.fileError])) return; // e.g. our own save
+    // Compared before anything is built: Nova's own save (already applied) starts no second set of agents.
+    const { settings, fileError } = await currentSettings();
+    if (JSON.stringify([settings, fileError]) === JSON.stringify([runtime.settings, runtime.fileError])) return;
     console.log(`  [settings] ${settingsFile()} changed - applying it`);
-    apply(next);
+    apply(await buildRuntime(runtime));
   }).catch((e) => console.warn(`  [settings] ${(e as Error).message}`)),
 );
 
