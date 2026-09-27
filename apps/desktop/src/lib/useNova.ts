@@ -4,7 +4,7 @@ import type { TaskRecord } from '@nova/core';
 import type { HearingStatus, SettingsSnapshot } from '@nova/core/settings';
 import { pushAudio } from '../voice/voice';
 import { demoScript } from './demo';
-import { daemonUrl } from './shell';
+import { daemonUrl, setVoiceOwner } from './shell';
 
 const URL = daemonUrl(import.meta.env.VITE_NOVA_URL ?? 'ws://127.0.0.1:7878');
 
@@ -89,8 +89,9 @@ type Action = ServerEvent | { type: 'connected'; value: boolean };
 function reducer(s: NovaState, a: Action): NovaState {
   switch (a.type) {
     case 'connected':
-      // Whoever holds the voice says so again on reconnecting.
-      return { ...s, connected: a.value, phase: a.value ? s.phase : 'idle', appVoice: a.value ? s.appVoice : false };
+      // appVoice is left as it was: a daemon blip doesn't mean Nova.app quit - it says voice-owner
+      // again the moment it reconnects, and that's what corrects this if it actually changed.
+      return { ...s, connected: a.value, phase: a.value ? s.phase : 'idle' };
     case 'hello':
       return {
         ...s,
@@ -158,6 +159,9 @@ function reducer(s: NovaState, a: Action): NovaState {
       return { ...s, decision: a.trace };
     case 'error':
       return { ...s, error: a.message };
+    default:
+      // An event type this window doesn't know yet: ignored, not a blank window.
+      return s;
   }
 }
 
@@ -190,6 +194,8 @@ export function useNova(onSay: (say: SayEvent) => void) {
         const event = JSON.parse(m.data) as ServerEvent;
         // Audio goes straight to the speaker, not through React state.
         if (event.type === 'audio') return pushAudio(event);
+        // Read outside any one window's state, so a Preview button knows without new props.
+        if (event.type === 'voice-owner') setVoiceOwner(event.app);
         dispatch(event);
         if (event.type === 'say') sayRef.current(event);
       };
