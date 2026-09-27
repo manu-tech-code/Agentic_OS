@@ -159,6 +159,14 @@ export function alwaysIn(said: string): 'always' | 'today' | null {
   return null;
 }
 
+/**
+ * "Go ahead with all of it" to one step of a task on the computer: the rest of that task needn't
+ * ask. Never remembered past the task.
+ */
+export function taskScope(said: string): boolean {
+  return /\b(?:(?:go ahead|carry on|continue|keep going|do it|yes)\s+(?:with\s+)?(?:all of it|all of them|everything|the rest|the whole (?:thing|lot|task))|yes to (?:all|everything)|all of it|the whole thing|for (?:the rest of )?(?:this|the) task|(?:don'?t|no need to) (?:keep )?ask(?:ing)? (?:me )?(?:again )?(?:for|during|until the end of) (?:this|the rest)|stop asking(?: me)?(?: for this)?|every step)\b/i.test(said);
+}
+
 const GIT = String.raw`\bgit\s+(?:-[Cc]\s+\S+\s+|--[\w-]+(?:=\S+)?\s+)*`;
 
 /**

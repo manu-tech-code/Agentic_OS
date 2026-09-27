@@ -20,8 +20,11 @@ export { outputText, skillTool, type IntegrationTool, type IntegrationTools, typ
 export { factFrom, memorySkills, toYou } from './skills/memory.ts';
 export { screenSkills } from './skills/screen.ts';
 export { dueText, initiativeSkills, reminderText, routineFrom, splitSteps } from './skills/initiative.ts';
-export { alwaysIn, RISKY_COMMAND, trustSkills } from './skills/trust.ts';
+export { alwaysIn, RISKY_COMMAND, taskScope, trustSkills } from './skills/trust.ts';
+export { computerBrief, handsSkills, userAsked } from './skills/hands.ts';
+export { actionFrom, computerSkills } from './skills/computer.ts';
 export * from './when.ts';
+export * from './hands.ts';
 export { buildQuestions, shortlistApps, META_INTENTS } from './brain/questions.ts';
 export { builtinSkills, countdownText, parseDuration, humanDuration } from './skills/builtin.ts';
 export { agentSkills } from './skills/agents.ts';
@@ -30,6 +33,11 @@ export type {
   ActionService,
   AgentRef,
   BriefingService,
+  ComputerAction,
+  ComputerService,
+  ComputerView,
+  FileHit,
+  HandsService,
   MemoryItem,
   MemoryService,
   News,
@@ -45,10 +53,12 @@ export type {
   Skill,
   SkillContext,
   SkillResult,
+  SystemState,
   TaskRecord,
   TaskService,
   TimerService,
   TrustService,
+  WindowFrame,
 } from './skills/types.ts';
 export type { AgentHost, AgentStep, ApprovalRequest, TaskCallbacks } from './agents.ts';
 export { gateFor, MIN_CONFIDENCE, type Gate } from './guardian.ts';

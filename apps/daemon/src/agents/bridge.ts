@@ -23,18 +23,28 @@ export interface McpServer {
   env: Record<string, string>;
 }
 
+/** What one project task is given: Nova's MCP server, and - for Claude - how its permission prompts reach Nova. */
+export interface TaskHookup {
+  /** One server for both: the approval tool (when asked for) and Nova's tools (when given). */
+  server: McpServer;
+  approvals?: ApprovalHookup;
+  close(): void;
+}
+
 export type Bridge = Awaited<ReturnType<typeof startBridge>>;
 /** Older name, from when the bridge only carried permission prompts. */
 export type Approvals = Bridge;
 
 /**
  * A localhost endpoint that agents reach through nova-mcp.mjs: Claude Code's permission prompts
- * during project tasks, and Nova's tools for any agent answering open questions. Every hookup
- * gets its own token, so nothing else on the machine can call in.
+ * during project tasks, and Nova's tools - for agents answering open questions, and for agents at
+ * work on a task (through the task's own host, so its questions are the task's). Every hookup gets
+ * its own token, so nothing else on the machine can call in.
  */
 export async function startBridge(tools: ToolHost) {
   const approvers = new Map<string, Approver>();
-  const callers = new Map<string, string>(); // token -> who is calling, e.g. "Claude"
+  /** Token -> who is calling (e.g. "Claude") and where their calls go. */
+  const callers = new Map<string, { caller: string; host: ToolHost }>();
   const handle = async (req: IncomingMessage, res: ServerResponse) => {
     const body = req.method === 'POST' ? await readJson(req) : null;
     if (res.destroyed) return; // the agent went away mid-request
@@ -48,9 +58,10 @@ export async function startBridge(tools: ToolHost) {
       if (answer === true) return reply({ behavior: 'allow', updatedInput: body.input ?? {} });
       return reply({ behavior: 'deny', message: typeof answer === 'object' ? answer.deny : 'The user said no to this step (asked by voice through Nova).' });
     }
-    if (req.url === '/tools' && callers.has(token)) return reply({ tools: tools.specs() });
-    if (req.url === '/call' && callers.has(token)) {
-      const output = await tools.call(String(body.name), body.arguments ?? {}, callers.get(token)!).catch((e) => `That didn't work: ${(e as Error).message}`);
+    const hooked = callers.get(token);
+    if (req.url === '/tools' && hooked) return reply({ tools: hooked.host.specs() });
+    if (req.url === '/call' && hooked) {
+      const output = await hooked.host.call(String(body.name), body.arguments ?? {}, hooked.caller).catch((e) => `That didn't work: ${(e as Error).message}`);
       // A picture (a screenshot) goes along for agents that can see.
       return reply({ text: outputText(output), image: typeof output === 'object' ? output.image : undefined });
     }
@@ -66,20 +77,47 @@ export async function startBridge(tools: ToolHost) {
   server.unref();
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const bridge = (env: Record<string, string>): McpServer => ({ name: 'nova', command: process.execPath, args: [MCP_BRIDGE], env: { NOVA_BRIDGE_URL: url, ...env } });
+  const token = () => randomBytes(16).toString('hex');
+
+    /**
+   * One project task's hookup: its permission prompts go to `approve` (Claude), and `host` is Nova's
+   * tools for the agent at work - one nova-mcp server with both tokens. close() when the task ends.
+   */
+  const task = (opts: { caller: string; approve?: Approver; host?: ToolHost }): TaskHookup => {
+    const env: Record<string, string> = {};
+    const approval = opts.approve ? token() : null;
+    const toolsToken = opts.host ? token() : null;
+    if (approval) {
+      approvers.set(approval, opts.approve!);
+      env.NOVA_APPROVAL_TOKEN = approval;
+    }
+    if (toolsToken) {
+      callers.set(toolsToken, { caller: opts.caller, host: opts.host! });
+      env.NOVA_TOOLS_TOKEN = toolsToken;
+    }
+    const server = bridge(env);
+    return {
+      server,
+      ...(approval ? { approvals: { mcpConfig: claudeMcpConfig(server), tool: 'mcp__nova__approve' } } : {}),
+      close: () => {
+        if (approval) approvers.delete(approval);
+        if (toolsToken) callers.delete(toolsToken);
+      },
+    };
+  };
 
   return {
+    task,
     /** Route one task's permission prompts to `ask`; close() when the task ends. */
     hookup(ask: Approver): ApprovalHookup & { close(): void } {
-      const token = randomBytes(16).toString('hex');
-      approvers.set(token, ask);
-      const server = bridge({ NOVA_APPROVAL_TOKEN: token });
-      return { mcpConfig: claudeMcpConfig(server), tool: 'mcp__nova__approve', close: () => void approvers.delete(token) };
+      const hooked = task({ caller: '', approve: ask });
+      return { ...hooked.approvals!, close: hooked.close };
     },
     /** Nova's tools for one agent, as an MCP server its CLI can start. */
     tools(caller: string): McpServer & { close(): void } {
-      const token = randomBytes(16).toString('hex');
-      callers.set(token, caller);
-      return { ...bridge({ NOVA_TOOLS_TOKEN: token }), close: () => void callers.delete(token) };
+      const t = token();
+      callers.set(t, { caller, host: tools });
+      return { ...bridge({ NOVA_TOOLS_TOKEN: t }), close: () => void callers.delete(t) };
     },
   };
 }

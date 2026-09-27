@@ -15,6 +15,7 @@ import {
   type Phase,
   type ReasoningBrain,
   type ServerEvent,
+  type SettingsSnapshot,
   type ToolHost,
 } from '@nova/core';
 import { WebSocketServer, type WebSocket } from 'ws';
@@ -24,6 +25,7 @@ import type { CustomAgentSpec } from './agents/presets.ts';
 import { loadConfig, loadDotEnv, migrateSettings, readSettings, settingsFile, settingsInEnv, watchSettings, writeSettings, type Config, type Settings } from './config.ts';
 import { modelResolver } from './models.ts';
 import { createPlatform } from './platform.ts';
+import { createHands } from './hands/index.ts';
 import { Hearing } from './hearing/service.ts';
 import { Initiative } from './initiative/index.ts';
 import { IntegrationHub } from './integrations/hub.ts';
@@ -188,6 +190,7 @@ async function finishRuntime(settings: Settings, fileError: string | undefined, 
       requireWakeWord: config.requireWakeWord,
       replyTimeoutMs: config.replyTimeoutMs,
       ui: config.ui,
+      computerUse: config.hands.computerUse,
     },
   };
 }
@@ -303,6 +306,21 @@ const eyes =
     ? new Eyes({ skipTitles: () => [runtime.config.name], images: () => runtime.config.screen.images, onChange: () => broadcastSnapshot() })
     : null;
 
+// Nova's hands: the Mac's settings, music, windows, files, the clipboard, Shortcuts, and using the computer.
+// NOVA_DRY_RUN=1 (for trying Nova out) only says what they'd change.
+const dryRun = process.env.NOVA_DRY_RUN === '1';
+const hands = eyes
+  ? createHands({
+      eyes,
+      config: () => runtime.config.hands,
+      saveLayout: (name, windows) => saveSettings({ [`windows.layouts.${name}`]: windows }),
+      projects: () => Object.fromEntries((runtime.host?.projects ?? []).flatMap((p) => ((path) => (path ? [[p, path]] : []))(runtime.host?.projectPath(p)))),
+      name: () => runtime.config.name,
+      broadcast,
+      dryRun,
+    })
+  : null;
+
 /** The notes that go with a question to the brain: what the user is working in, and related memories. */
 async function notes(utterance: string): Promise<string | null> {
   const { config } = runtime;
@@ -355,6 +373,7 @@ const nova = new NovaBrain({
   integrations,
   memory,
   screen: eyes,
+  hands,
   notes,
   onTurn: (turn) => memory.journal.append(turn),
   platform,
@@ -367,6 +386,7 @@ trust.wire({
   memory,
   platform,
   project: initiative.state,
+  hands,
   saveRoutine: (name, routine) => saveSettings({ [`routines.${name}`]: routine ? { ...(routine.phrase ? { phrase: routine.phrase } : {}), ...(routine.schedule ? { schedule: routine.schedule } : {}), steps: routine.steps } : null }),
 });
 await nova.init();
@@ -407,6 +427,13 @@ const screenStatus = async () => {
   const message = problem ?? (running ? undefined : starting ? 'Nova Eyes is starting - the first time, it is built on this Mac.' : 'Nova Eyes starts when Nova first needs it.');
   return { available: true, running, permissions, message };
 };
+/** Nova's hands, for Settings: what Nova Eyes may do, the user's Shortcuts, saved layouts. */
+const handsStatus = async (): Promise<SettingsSnapshot['hands']> => {
+  if (!hands || !eyes) return { available: false, permissions: null, shortcuts: null, focus: {}, layouts: [], active: false, message: "Nova's hands need macOS." };
+  const { shortcuts, focus } = await hands.status();
+  const layouts = Object.entries(runtime.config.hands.layouts).map(([name, windows]) => ({ name, windows: windows.length, apps: [...new Set(windows.map((w) => w.app))] }));
+  return { available: true, permissions: eyes.known, shortcuts, focus, layouts, active: hands.computer.status().active, ...(dryRun ? { message: 'Trying Nova out (NOVA_DRY_RUN=1): changes are only written to the log.' } : {}) };
+};
 /** Whether Nova.app is installed (in either Applications folder). */
 const appInstalled = async () => {
   for (const dir of [join(homedir(), 'Applications'), '/Applications']) if (await stat(join(dir, 'Nova.app')).then(() => true, () => false)) return true;
@@ -424,6 +451,7 @@ const snapshot = async () =>
     integrations.status(),
     await memoryStatus(),
     await screenStatus(),
+    await handsStatus(),
     { app: presence.status },
     initiative!.snapshot(),
     {
@@ -727,6 +755,9 @@ wss.on('connection', (ws, req) => {
       else await memory.journal.clear();
       send(ws, { type: 'settings-result', ok: true, message: event.type === 'conversations-clear' ? 'Conversation history cleared.' : 'Saved' });
       broadcastSnapshot();
+    } else if (event.type === 'hands-refresh') {
+      hands?.shortcuts.forget(); // a shortcut made just now: read the list again
+      broadcastSnapshot();
     } else if (event.type === 'screen-permission' || event.type === 'screen-restart' || event.type === 'screen-preview') {
       if (!eyes) return send(ws, { type: 'settings-result', ok: false, message: 'Seeing the screen needs macOS.' });
       try {
@@ -828,6 +859,7 @@ function banner() {
   Hearing      ${runtime.config.hearing.engine === 'browser' ? "the browser's speech recognition" : runtime.config.hearing.engine === 'parakeet' ? 'Parakeet, on this Mac' : "Apple's on-device recognizer"}${runtime.smartTurnInstalled && runtime.config.hearing.smartTurn ? ' · Smart Turn' : ''}
   Voice        ${speaksAloud() ? `Kokoro · ${config.voice.kokoroVoice}${runtime.voiceBundled ? ' (inside Nova.app)' : ''}` : 'Kokoro comes with Nova.app (npm run app) - until then replies are shown, not spoken'}
   Apps found   ${nova.apps.length}
+  Hands        ${hands ? (dryRun ? 'dry run (NOVA_DRY_RUN=1) - changes are only logged' : `on${config.hands.computerUse ? ', and brains may use the computer (with a yes)' : ''}`) : '(needs macOS)'}
   Integrations ${runtime.config.integrations && Object.keys(runtime.config.integrations).length ? Object.keys(runtime.config.integrations).join(', ') : '(none - add them in Settings → Integrations)'}
   Agents       ${agents ? `${agents.agents.map((a, i) => (i ? a.label : `${a.label} (default)`)).join(', ')} · ${agents.projects.length} projects` : '(none - install Claude Code, Codex, OpenCode or Gemini CLI)'}
   Wake words   ${config.requireWakeWord ? `${config.wakeWords.join(', ')} · then ${config.followUpMs / 1000}s without` : 'not needed (conversation mode)'}

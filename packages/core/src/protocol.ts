@@ -108,6 +108,17 @@ export type UndoStep =
    * `shared`: another task worked in the project at the same time, so its changes are in there too.
    */
   | { kind: 'agent-files'; project: string; before: string; after: string; agent: string; files: string[]; shared?: boolean }
+  /** A setting back as it was: the volume, the brightness, dark mode, Wi-Fi, Bluetooth, Focus. */
+  | { kind: 'system-set'; setting: 'volume' | 'brightness' | 'dark-mode' | 'wifi' | 'bluetooth' | 'focus'; level?: number; on?: boolean; muted?: boolean }
+  | { kind: 'media'; action: 'play' | 'pause' }
+  /** Windows back where they were. */
+  | { kind: 'windows-restore'; frames: { app: string; pid: number; window: number; id?: number; title?: string; frame: { x: number; y: number; w: number; h: number }; minimized?: boolean; fullscreen?: boolean }[] }
+  /** A file moved or renamed: back from `to` to `from`. */
+  | { kind: 'file-move'; from: string; to: string }
+  /** A file put in the Trash: back where it was. */
+  | { kind: 'file-untrash'; trashed: string; original: string }
+  /** The clipboard as it was before Nova copied something. */
+  | { kind: 'clipboard-set'; text: string }
   | { kind: 'batch'; steps: UndoStep[] };
 
 export interface DecisionTrace {
@@ -181,6 +192,12 @@ export type ServerEvent =
   | { type: 'activity-update'; item: ActivityItem }
   /** What a search of the whole record found, newest first. */
   | { type: 'activity-found'; query: string; items: ActivityItem[] }
+  /**
+   * Nova's hands are on the computer (a brain clicking and typing, or the user's own "click send"),
+   * or no longer are - so windows and the orb can say so, and how to stop it. `paused`: the user
+   * is using the mouse or keyboard, so Nova waits.
+   */
+  | { type: 'computer'; active: boolean; caller?: string; app?: string; paused?: boolean; steps?: number }
   | { type: 'error'; message: string };
 
 /**
@@ -211,6 +228,8 @@ export type ClientEvent =
   | { type: 'screen-permission'; kind: 'accessibility' | 'screen' }
   | { type: 'screen-restart' }
   | { type: 'screen-preview' }
+  /** Read the user's Shortcuts again (Settings → Hands). */
+  | { type: 'hands-refresh' }
   /** Sign in to an integration with the browser, sign out of one, or try connecting again. */
   | { type: 'integration-sign-in'; name: string }
   | { type: 'integration-sign-out'; name: string }

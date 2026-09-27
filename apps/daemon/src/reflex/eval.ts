@@ -6,6 +6,7 @@ import {
   agentSkills,
   buildQuestions,
   builtinSkills,
+  handsSkills,
   HeuristicEvaluationModel,
   initiativeSkills,
   memorySkills,
@@ -46,7 +47,7 @@ await reflex.train(process.env.REFLEX_TRAIN ? JSON.parse(process.env.REFLEX_TRAI
 console.log(`Trained the classifier on ${training.length} phrasings in ${Math.round(performance.now() - trainStarted)} ms`);
 const keywords = new HeuristicEvaluationModel();
 // Every intent Nova has, memory's included (the tool-only skills never reach System 1).
-const skills = [...builtinSkills, ...agentSkills, ...memorySkills, ...initiativeSkills, ...trustSkills];
+const skills = [...builtinSkills, ...agentSkills, ...memorySkills, ...initiativeSkills, ...trustSkills, ...handsSkills];
 const host = { agents: EVAL_AGENTS, projects: EVAL_PROJECTS } as unknown as Parameters<typeof buildQuestions>[3];
 
 // How many test phrasings the phrase bank and grammar already contain (these are held out above).

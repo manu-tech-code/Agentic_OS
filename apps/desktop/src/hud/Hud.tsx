@@ -59,6 +59,9 @@ export default function Hud() {
   }, [app?.talk]);
 
   const busy = state.phase === 'thinking' || state.phase === 'acting' || state.phase === 'speaking';
+  // A brain using the computer: said plainly, with how to stop it, for as long as it does.
+  const computer = state.computer;
+  const using = computer ? `${computer.paused ? 'Waiting while you use the Mac' : `${computer.caller ?? state.name} is using the computer${computer.app ? ` in ${computer.app}` : ''}`} · ⌃⌥⌘. stops` : null;
   const confirm = state.cards.find((c) => c.kind === 'confirm');
   const incoming = heard !== null && !heard.final;
   const lingering = endedAt > 0 && now - endedAt < (app?.orbSeconds ?? 6) * 1000;
@@ -83,9 +86,9 @@ export default function Hud() {
           : listening && !words
             ? 'Listening…'
             : null;
-  const somethingToSay = Boolean(words || status || shownReply || confirm);
+  const somethingToSay = Boolean(words || status || shownReply || confirm || using);
 
-  const card = state.connected && somethingToSay && (busy || incoming || holding || Boolean(confirm) || (lingering && reply !== null) || (listening && fresh));
+  const card = state.connected && somethingToSay && (busy || incoming || holding || Boolean(confirm) || Boolean(using) || (lingering && reply !== null) || (listening && fresh));
   const mode: 'hidden' | 'orb' | 'card' = card ? 'card' : state.connected && (busy || (listening && quietFor < ORB_ALONE_MS)) ? 'orb' : 'hidden';
 
   // Tell the app what to show, and how big it is (it sizes its panel to this, from its corner).
@@ -110,7 +113,8 @@ export default function Hud() {
       {mode === 'card' && (
         <div className="hud__body">
           {words && <p className={`hud__heard ${words.final ? '' : 'is-live'}`}>{words.final ? `“${words.text}”` : words.text}</p>}
-          {status && !shownReply && <p className="hud__status">{status}</p>}
+          {using && <p className="hud__computer">{using}</p>}
+          {status && !shownReply && !using && <p className="hud__status">{status}</p>}
           {shownReply && <p className="hud__reply">{shownReply}</p>}
           {confirm && (
             <p className="hud__ask">

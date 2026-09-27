@@ -104,6 +104,56 @@ describe("Nova's tools, for any agent", () => {
     expect(aider.args[0]).toBe('--mcp-config');
     expect(PRESETS.codex!.ask('hi', { assistant: 'Nova' }).args.some((a) => a.includes('mcp_servers'))).toBe(false);
   });
+
+  it('reach an agent at work on a task through the task itself - one server with both tokens', async () => {
+    const global: unknown[][] = [];
+    const bridge = await startBridge({ specs: () => [], call: async (...a) => (global.push(a), 'global') });
+    const own: unknown[][] = [];
+    const asked: string[] = [];
+    const hookup = bridge.task({
+      caller: 'Claude',
+      approve: async (p) => (asked.push(p.tool_name), true),
+      host: {
+        specs: () => [{ name: 'system_control', description: 'Settings', parameters: { type: 'object', properties: { request: { type: 'string' } }, required: [] } }],
+        call: async (name, args, caller) => (own.push([name, args, caller]), 'Volume at 40%.'),
+      },
+    });
+    expect(Object.keys(hookup.server.env).sort()).toEqual(['NOVA_APPROVAL_TOKEN', 'NOVA_BRIDGE_URL', 'NOVA_TOOLS_TOKEN']);
+    expect(JSON.parse(hookup.approvals!.mcpConfig).mcpServers.nova.env).toEqual(hookup.server.env);
+    const child = spawn(hookup.server.command, hookup.server.args, { env: { ...process.env, ...hookup.server.env } });
+    const rpc = rpcClient(child);
+    await rpc('initialize', { protocolVersion: '2025-06-18' });
+    const { tools } = await rpc('tools/list');
+    expect(tools.map((t: any) => t.name)).toEqual(['approve', 'system_control']);
+    expect((await rpc('tools/call', { name: 'system_control', arguments: { request: 'volume to 40' } })).content[0].text).toBe('Volume at 40%.');
+    expect(own).toEqual([['system_control', { request: 'volume to 40' }, 'Claude']]);
+    expect(global).toEqual([]); // the task's calls are the task's, never the brain's
+    expect(JSON.parse((await rpc('tools/call', { name: 'approve', arguments: { tool_name: 'Bash', input: { command: 'npm test' } } })).content[0].text).behavior).toBe('allow');
+    expect(asked).toEqual(['Bash']);
+    hookup.close();
+    expect((await rpc('tools/call', { name: 'system_control', arguments: {} })).content[0].text).toMatch(/couldn't/);
+    child.kill();
+  });
+
+  it("are given to each CLI's tasks the way its questions get them", () => {
+    const tools = { name: 'nova', command: '/usr/bin/node', args: ['/x/nova-mcp.mjs'], env: { NOVA_BRIDGE_URL: 'http://127.0.0.1:1', NOVA_TOOLS_TOKEN: 't', NOVA_APPROVAL_TOKEN: 'a' } };
+    const approvals = { mcpConfig: JSON.stringify({ mcpServers: { nova: tools } }), tool: 'mcp__nova__approve' };
+    const claude = PRESETS.claude!.task('fix it', { assistant: 'Nova', tools, approvals }).args;
+    // Nova's own gate asks by tier, so Claude doesn't ask a second time for Nova's tools.
+    expect(claude[claude.indexOf('--allowedTools') + 1]).toMatch(/,mcp__nova$/);
+    expect(JSON.parse(claude[claude.indexOf('--mcp-config') + 1]!).mcpServers.nova.env).toMatchObject({ NOVA_TOOLS_TOKEN: 't', NOVA_APPROVAL_TOKEN: 'a' });
+    expect(claude[claude.indexOf('--permission-prompt-tool') + 1]).toBe('mcp__nova__approve');
+    expect(claude.filter((a) => a === '--mcp-config')).toHaveLength(1);
+    // Without tools (no bridge), only what it had before.
+    const bare = PRESETS.claude!.task('fix it', { assistant: 'Nova', approvals }).args;
+    expect(bare[bare.indexOf('--allowedTools') + 1]).not.toMatch(/mcp__nova/);
+
+    expect(PRESETS.codex!.task('fix it', { assistant: 'Nova', tools }).args).toContain('mcp_servers.nova.command="/usr/bin/node"');
+    const opencode = PRESETS.opencode!.task('fix it', { assistant: 'Nova', tools });
+    expect(JSON.parse(readFileSync(opencode.env!.OPENCODE_CONFIG!, 'utf8')).mcp.nova.environment).toEqual(tools.env);
+    const aider = customPreset('aider', { command: 'aider', ask: [], task: ['--yes', '{prompt}'], mcp: ['--mcp-config', '{mcpConfig}'] }).task('fix it', { assistant: 'Nova', tools });
+    expect(aider.args.slice(0, 2)).toEqual(['--mcp-config', JSON.stringify({ mcpServers: { nova: { command: tools.command, args: tools.args, env: tools.env } } })]);
+  });
 });
 
 describe('an agent kept running as the brain', () => {

@@ -19,6 +19,7 @@ export interface SetupInput {
   /** Projects agents may work in, and whether each is a git repository (so agents' changes can be undone). */
   projects: { name: string; git: boolean }[];
   screen: SettingsSnapshot['screen'];
+  hands?: SettingsSnapshot['hands'];
 }
 
 const ACCESS: Record<string, string> = { granted: 'allowed', denied: 'not allowed', undetermined: 'not asked yet', restricted: 'restricted' };
@@ -133,6 +134,26 @@ export function setupSteps(input: SetupInput): SetupStep[] {
         : (screen.message ?? 'Starts when Nova first needs it.'),
     fix: { section: 'screen' },
   });
+
+  // Nova's hands: Accessibility to click, type and move windows - and Screen Recording for brains to see what they use.
+  const hands = input.hands;
+  if (hands?.available) {
+    const p = hands.permissions;
+    const seeing = config.hands.computerUse;
+    const missing = [!p?.accessibility && 'Accessibility (to click, type and move windows)', seeing && !p?.screen && 'Screen Recording (for brains to see the screen they use)'].filter(Boolean) as string[];
+    steps.push({
+      id: 'hands',
+      label: "Nova's hands - clicking, typing and windows",
+      done: Boolean(p) && missing.length === 0,
+      optional: true,
+      detail: !p
+        ? 'Nova Eyes starts when Nova first needs it; then this shows what macOS lets it do.'
+        : missing.length
+          ? `Nova Eyes needs ${list(missing)}: Settings → Hands → Allow.`
+          : `Ready: Nova can change settings, arrange windows and use the computer when you say so${hands.shortcuts?.length ? `, and run your ${hands.shortcuts.length} Shortcuts` : ''}.`,
+      fix: { section: 'hands' },
+    });
+  }
 
   steps.push({ id: 'privacy', label: 'What leaves this Mac', done: true, optional: true, detail: 'Each thing that goes anywhere, where to, and its switch.', fix: { section: 'privacy' } });
   return steps;

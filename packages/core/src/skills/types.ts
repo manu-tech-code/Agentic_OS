@@ -1,3 +1,4 @@
+import type { FileKind, SystemSetting, WindowPosition } from '../hands.ts';
 import type { Card, RiskTier, UndoStep } from '../protocol.ts';
 import type { Schedule } from '../when.ts';
 
@@ -56,8 +57,152 @@ export interface SkillContext {
   trust?: TrustService;
   /** Stop everything at once: agents, questions, speech, routines - and mute the microphone. Says how many tasks stopped. */
   halt?: () => number;
-  /** What the skill's `prepare` settled when the request came in: the thing a confirmation named. */
+  /** Nova's hands on the Mac: settings, media, windows, files, the clipboard, Shortcuts, and using the computer. */
+  hands?: HandsService;
+  /** A tool call's own arguments (computer_click's element, x and y), for skills that take more than a request. */
+  args?: Record<string, unknown>;
+  /** Who is calling it as a tool - a brain or agent by name ("Claude"); none when the user asked by voice. */
+  caller?: string;
+  /** What the skill's `prepare` settled when the request came in (the action "undo" means, the file "the invoice" is): the thing a confirmation named, kept while the user is asked. */
   prepared?: unknown;
+  /** What Nova said last, for "copy that". */
+  lastReply?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Hands
+
+/** A system setting as it is now. */
+export interface SystemState {
+  setting: SystemSetting;
+  /** 0-100, for the volume and the brightness. */
+  level?: number;
+  on?: boolean;
+  muted?: boolean;
+  /** The battery: charging, and time left or to full ("3:12"). */
+  charging?: boolean;
+  remaining?: string;
+}
+
+/** A window where it was, to put it back ("undo that"). */
+export interface WindowFrame {
+  app: string;
+  pid: number;
+  /** Its place among the app's windows. */
+  window: number;
+  /** The window server's id, when known: the same window even after others are raised. */
+  id?: number;
+  title?: string;
+  frame: { x: number; y: number; w: number; h: number };
+  minimized?: boolean;
+  fullscreen?: boolean;
+}
+
+export interface FileHit {
+  path: string;
+  name: string;
+  /** The folder it's in, as said: "Downloads", "Documents/Taxes". */
+  folder: string;
+  /** Last changed or used, epoch ms. */
+  modified: number;
+  kind?: string;
+}
+
+/** Something to do on screen - what a brain asks for, or what the user said ("click send"). */
+export type ComputerAction =
+  | { kind: 'click'; element?: string; x?: number; y?: number; button?: 'left' | 'right'; count?: number }
+  | { kind: 'type'; text: string; element?: string; clear?: boolean; submit?: boolean }
+  | { kind: 'key'; keys: string; count?: number }
+  | { kind: 'scroll'; direction: 'up' | 'down' | 'left' | 'right' | 'top' | 'bottom'; amount?: number; element?: string; x?: number; y?: number }
+  | { kind: 'drag'; from: { element?: string; x?: number; y?: number }; to: { element?: string; x?: number; y?: number } }
+  | { kind: 'wait'; seconds: number };
+
+/** The screen, for a brain: a picture, and the things on it to click or type in. */
+export interface ComputerView {
+  app: string;
+  window?: string;
+  image?: { data: string; mimeType: string };
+  /** The picture's size in pixels: x and y in actions are in these. */
+  width: number;
+  height: number;
+  /** One per line: `[e12] button "Send" at 812,44 (60×28)`. */
+  elements: string;
+  /** The element with the keyboard focus. */
+  focused?: string;
+}
+
+export interface ComputerService {
+  /** See the screen (or just the window in front) - for `caller`, the brain or agent about to use it. */
+  look(opts?: { scope?: 'screen' | 'window'; caller?: string }): Promise<ComputerView>;
+  /** Do one thing; says what was done ("Clicked “Send” in Mail"). `caller`: the brain or agent acting, none for the user's own command. */
+  act(action: ComputerAction, caller?: string): Promise<string>;
+  /** What an action would do, in words, to ask the user first: `click “Send” in Mail`. */
+  describe(action: ComputerAction): string;
+  /** Show on screen what's about to be clicked or typed in, while the user is asked; resolves with how to take it away. */
+  preview(action: ComputerAction): Promise<() => void>;
+  /** Something the user named ("send", "reply") in the window in front: one, several that fit, or nothing. */
+  find(target: string): Promise<{ element: string; label: string; app: string } | { several: string[]; app: string } | null>;
+  /** The app in front. */
+  front(): Promise<string | null>;
+  /** Stop acting (stop everything) until the user asks for something again. */
+  halt(): void;
+  resume(): void;
+  /** A brain finished its answer: its hands are off the computer. */
+  finished?(caller: string): void;
+}
+
+export interface HandsService {
+  system: {
+    get(setting: SystemSetting): Promise<SystemState>;
+    set(setting: SystemSetting, change: { level?: number; on?: boolean; muted?: boolean }): Promise<SystemState>;
+    lock(): Promise<void>;
+    sleep(): Promise<void>;
+  };
+  media: {
+    command(action: 'play' | 'pause' | 'toggle' | 'next' | 'previous', app?: 'Music' | 'Spotify'): Promise<{ app: string | null }>;
+    nowPlaying(): Promise<{ app: string; title: string; artist?: string; album?: string; playing: boolean } | null>;
+    /** Play something from the Music library (or Spotify's own search): what started, or null when nothing fits. */
+    play(query: string, app?: 'Music' | 'Spotify'): Promise<{ app: string; what: string } | null>;
+  };
+  windows: {
+    /** Apps with windows open, for recognising names. */
+    apps(): Promise<string[]>;
+    list(): Promise<{ app: string; windows: string[] }[]>;
+    /** Put windows in their places; says which moved, and where they all were before. */
+    place(placements: { app?: string; position: WindowPosition }[]): Promise<{ moved: string[]; before: WindowFrame[] }>;
+    act(action: 'minimize' | 'fullscreen' | 'exit-fullscreen' | 'hide' | 'other-display' | 'show-all', app?: string): Promise<{ app: string; before: WindowFrame[] }>;
+    saveLayout(name: string): Promise<{ windows: number }>;
+    layout(name: string): Promise<{ windows: number; missing: string[]; before: WindowFrame[] } | null>;
+    layouts(): string[];
+    restore(frames: WindowFrame[]): Promise<void>;
+  };
+  files: {
+    find(q: { query?: string; kind?: FileKind; folder?: string; days?: number }, limit?: number): Promise<FileHit[]>;
+    recent(q: { kind?: FileKind; folder?: string; days: number }, limit?: number): Promise<FileHit[]>;
+    open(path: string): Promise<void>;
+    reveal(path: string): Promise<void>;
+    /** A folder to move something to, by name ("documents", a project, "taxes"). */
+    folder(name: string): Promise<string | null>;
+    move(path: string, toFolder: string): Promise<string>;
+    rename(path: string, name: string): Promise<string>;
+    /** To the Trash (never deleted): where it is there, to put it back. */
+    trash(path: string): Promise<string>;
+    untrash(trashed: string, original: string): Promise<void>;
+    /** The text in a file (a document, PDF, spreadsheet, text), cut to `max` characters. */
+    read(path: string, max?: number): Promise<string>;
+  };
+  clipboard: {
+    /** What's copied - never what a password manager marks as concealed. */
+    read(): Promise<{ text?: string; concealed?: boolean; files?: string[]; image?: boolean }>;
+    write(text: string): Promise<void>;
+  };
+  shortcuts: {
+    list(): Promise<string[]>;
+    run(name: string, input?: string): Promise<{ output?: string }>;
+  };
+  computer: ComputerService;
+  /** The page in front's address, for "copy the link". */
+  pageAddress?(): Promise<string | null>;
 }
 
 /** One entry of the record of what Nova did. */
@@ -244,10 +389,11 @@ export interface Skill {
   /** It acts on what the request says (a duration, a fact, a task): a tool call without `request` is refused, never filled in from an example. */
   needsRequest?: boolean;
   /**
-   * Settle what the request is about when it comes in (the action "undo" means), so a yes to the
-   * confirmation acts on exactly that - not on whatever is newest by then. Reaches the skill as `ctx.prepared`.
+   * Settle what the request is about when it comes in, before the tier is decided and the user is
+   * asked (the action "undo" means, which file "the invoice" is), so the question can name it and a
+   * yes acts on exactly that - not on whatever is newest by then. Reaches the skill as `ctx.prepared`.
    */
-  prepare?: (ctx: SkillContext) => unknown;
+  prepare?: (ctx: SkillContext) => unknown | Promise<unknown>;
   /** Only a tool for brains, never something System 1 picks for an utterance (reading the screen). */
   toolOnly?: boolean;
   /**
@@ -266,6 +412,15 @@ export interface Skill {
   confirmPrompt?: (ctx: SkillContext) => string;
   /** What Nova says when a request of this skill needs a tap on screen (tier 3): where the user can do it. */
   tapPrompt?: (ctx: SkillContext) => string;
+  /**
+   * What "yes, go ahead with all of it" covers for the rest of this task (the brain using the
+   * computer) - never remembered past it. Null: each one is asked.
+   */
+  session?: (ctx: SkillContext) => { key: string; label: string } | null;
+  /** While the user is asked: show what's about to happen (the button about to be clicked); resolves with how to stop showing it. */
+  preview?: (ctx: SkillContext) => Promise<(() => void) | void>;
+  /** For tools that take more than a request: their own arguments (JSON schema properties), and which are needed. */
+  parameters?: { properties: Record<string, unknown>; required?: string[] };
   run(ctx: SkillContext): Promise<SkillResult>;
 }
 

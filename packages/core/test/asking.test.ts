@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  builtinSkills,
   EvaluationDecisionEngine,
   HeuristicEvaluationModel,
   NovaBrain,
@@ -14,6 +15,8 @@ import {
   type ReminderService,
   type Routine,
   type ServerEvent,
+  type Skill,
+  type ToolOutput,
   type TrustService,
 } from '../src/index.ts';
 
@@ -233,24 +236,75 @@ describe('questions that wait', () => {
     expect(t.said().at(-1)).toBe('Codex wants to run "npm run lint" in site. Allow it?');
   });
 
-  it("withdraws a brain's question when its answer runs out of time, so a late yes runs nothing", async () => {
+  it("gives the user time to answer a brain's question: the answer's time limit waits for the yes", async () => {
     let nova!: NovaBrain;
     const brain: ReasoningBrain = {
       name: 'Brain',
       reply: async () => '',
-      async *stream(_u, _h, signal) {
-        yield 'Let me close Spotify. ';
-        const stopped = new Promise<never>((_, reject) => signal?.addEventListener('abort', () => reject(new Error('It took too long.'))));
-        yield outputText(await Promise.race([nova.call('quit_app', { app: 'Spotify' }, 'Brain'), stopped]));
+      async *stream() {
+        const result = outputText(await nova.call('quit_app', { app: 'Spotify' }, 'Brain'));
+        yield result.includes('said no') ? 'Okay, I left it.' : 'Done, it is closed.';
       },
     };
     const t = await setup({ reasoning: brain, replyTimeoutMs: 100 });
     nova = t.nova;
+    const answering = t.nova.handle('nova why is the sky blue');
+    await vi.waitFor(() => expect(t.said().at(-1)).toMatch(/Quit Spotify\?/));
+    await new Promise((r) => setTimeout(r, 300)); // longer than the answer may take on its own
+    expect(t.said().join(' ')).not.toMatch(/didn't respond/);
+    await t.nova.handle('yes');
+    await answering;
+    expect(t.quit).toEqual(['Spotify']);
+    expect(t.said().at(-1)).toBe('Done, it is closed.');
+  });
+
+  it("withdraws a brain's question when its answer ends, so a late yes runs nothing", async () => {
+    let t!: Awaited<ReturnType<typeof setup>>;
+    const brain: ReasoningBrain = {
+      name: 'Brain',
+      reply: async () => '',
+      async *stream() {
+        void t.nova.call('quit_app', { app: 'Spotify' }, 'Brain'); // asks - and the answer doesn't wait for the yes
+        await vi.waitFor(() => expect(t.said().at(-1)).toMatch(/Quit Spotify\?/));
+        yield 'I asked.';
+      },
+    };
+    t = await setup({ reasoning: brain });
     await t.nova.handle('nova why is the sky blue');
-    expect(t.said().at(-1)).toMatch(/didn't respond/);
     expect(t.events).toContainEqual({ type: 'dismiss', id: t.lastCard('confirm') });
     await t.nova.handle('yes');
     expect(t.quit).toEqual([]);
+  });
+
+  it("doesn't ask for a tool call whose answer ended before its question was ready", async () => {
+    let nova!: NovaBrain;
+    let call!: Promise<ToolOutput>;
+    let lookedUp!: () => void;
+    const ran: string[] = [];
+    const slow: Skill = {
+      id: 'send_draft',
+      examples: ['send the draft'],
+      tier: 2,
+      // Finding the draft takes a moment: the answer is over by the time the question could be asked.
+      prepare: () => new Promise<string>((resolve) => (lookedUp = () => resolve('draft'))),
+      confirmPrompt: () => 'Send the draft?',
+      run: async () => (ran.push('sent'), { say: 'Sent.', activity: 'Sent the draft' }),
+    };
+    const brain: ReasoningBrain = {
+      name: 'Brain',
+      reply: async () => '',
+      async *stream() {
+        call = nova.call('send_draft', { request: 'send the draft' }, 'Brain');
+        yield 'Done.';
+      },
+    };
+    const t = await setup({ reasoning: brain, skills: [...builtinSkills, slow] });
+    nova = t.nova;
+    await t.nova.handle('nova why is the sky blue');
+    lookedUp();
+    expect(outputText(await call)).toMatch(/answer is over/);
+    expect(t.said().join(' ')).not.toMatch(/Send the draft\?/);
+    expect(ran).toEqual([]);
   });
 
   it("lets the user answer a brain's question by talking over it", async () => {

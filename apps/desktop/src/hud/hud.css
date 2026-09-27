@@ -36,6 +36,7 @@ html.is-hud #root {
 .hud__heard { font-size: 13px; line-height: 1.35; color: rgba(255, 255, 255, 0.6); }
 .hud__heard.is-live { color: rgba(255, 255, 255, 0.86); }
 .hud__status { font-size: 13px; line-height: 1.35; color: rgba(255, 255, 255, 0.7); }
+.hud__computer { font-size: 12.5px; line-height: 1.35; font-weight: 600; color: #7dd3fc; }
 .hud__reply {
   font-size: 14.5px;
   line-height: 1.42;
