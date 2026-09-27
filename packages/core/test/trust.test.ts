@@ -5,6 +5,7 @@ import {
   HeuristicEvaluationModel,
   NovaBrain,
   RISKY_COMMAND,
+  trustSkills,
   type ActionRecord,
   type ActionService,
   type AgentHost,
@@ -83,6 +84,17 @@ describe('"yes, always"', () => {
     expect(alwaysIn('yes')).toBeNull();
     expect(alwaysIn('yes, do it today')).toBeNull(); // "today" alone isn't a scope
     expect(alwaysIn('yes for now')).toBeNull();
+    expect(alwaysIn('yes. never ask me again')).toBe('always');
+    expect(alwaysIn('sure, always')).toBe('always');
+  });
+
+  it("isn't read from words that say the opposite", () => {
+    for (const said of ['yes, but ask me every time', 'yes, but not always', 'yes, always ask me first', 'yes but check with me every time', "yes, but don't always do that", 'yes, not from now on', 'yes, not for good']) {
+      expect(alwaysIn(said), said).toBeNull();
+    }
+    for (const said of ['yes, but not for today', 'yes, just not today only', 'yes but ask me again for the rest of the day']) {
+      expect(alwaysIn(said), said).toBeNull();
+    }
   });
 
   it('never covers deleting, force, superuser or piping a download into a shell', () => {
@@ -90,6 +102,41 @@ describe('"yes, always"', () => {
       expect(RISKY_COMMAND.test(risky), risky).toBe(true);
     }
     for (const fine of ['npm test', 'npm run build', 'git status', 'git diff', 'ls -la', 'node scripts/firm.js', 'npx vitest run', 'git commit -m "x"']) {
+      expect(RISKY_COMMAND.test(fine), fine).toBe(false);
+    }
+  });
+
+  it('knows risky commands however they are spelled', () => {
+    for (const risky of [
+      '/bin/rm -r build',
+      '\\rm -r build',
+      'command rm notes.txt',
+      'xargs rm < files.txt',
+      'find . -name "*.log" -delete',
+      'find dist -type f -exec rm {} +',
+      'git -C ../site push',
+      'git -C ../site push origin main',
+      'git -c user.name=x push',
+      'git checkout .',
+      'git checkout -- src/app.ts',
+      'git checkout -f main',
+      'git restore .',
+      'git restore --staged --worktree src',
+      'git stash drop',
+      'git stash clear',
+      'git clean -fdx',
+      'git -C ../site clean -xdf',
+      'git branch -D feature',
+      'git reset --hard',
+      'npx rimraf dist',
+      'unlink config.json',
+      'shred -u secrets.txt',
+      'truncate -s 0 app.log',
+      'mv notes.txt /dev/null',
+    ]) {
+      expect(RISKY_COMMAND.test(risky), risky).toBe(true);
+    }
+    for (const fine of ['git -C ../site status', 'git -C ../site log --oneline', 'git checkout -b feature', 'git checkout main', 'git stash', 'git stash list', 'git stash show', 'find . -name "*.ts"', 'npm run format', 'git branch -a', 'ls ./bin/rmdir-helper']) {
       expect(RISKY_COMMAND.test(fine), fine).toBe(false);
     }
   });
@@ -229,6 +276,20 @@ describe('the record, asked about', () => {
     expect(said().at(-1)).not.toMatch(/claude finished/); // a name keeps its capital
     await nova.handle('nova what did claude change today');
     expect(said().at(-1)).toBe('Today Claude did one thing: finished in site (2 files changed). Altogether Claude changed style.css and index.html.');
+  });
+
+  it('says what was done this week - not only today - and yesterday within its own day', async () => {
+    const record = fakeRecord();
+    const day = (back: number, hour: number) => new Date(NOW.getFullYear(), NOW.getMonth(), NOW.getDate() - back, hour).getTime();
+    record.items.push({ id: 'old', at: day(8, 12), label: 'Opened Linear', by: 'you', status: 'done', undoable: false });
+    record.items.push({ id: 'week', at: day(6, 9), label: 'Opened Slack', by: 'you', status: 'done', undoable: false });
+    record.items.push({ id: 'y', at: day(1, 12), label: 'Quit Spotify', by: 'you', status: 'done', undoable: false });
+    record.items.push({ id: 't', at: day(0, 9), label: 'Opened Notes', by: 'you', status: 'done', undoable: false });
+    const report = trustSkills.find((s) => s.id === 'activity_report')!;
+    const ask = async (utterance: string) => (await report.run({ utterance, heard: utterance, actions: record.actions, platform: { now: () => NOW } } as never)).say;
+    expect(await ask('what did you do this week')).toBe('This week I did 3 things: opened Notes; quit Spotify; opened Slack.');
+    expect(await ask('what did you do yesterday')).toBe('Yesterday I did one thing: quit Spotify.');
+    expect(await ask('what did you do today')).toBe('Today I did one thing: opened Notes.');
   });
 });
 

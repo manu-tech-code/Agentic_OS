@@ -15,10 +15,10 @@ const undoing = (ctx: SkillContext): ActionRecord | null => ctx.actions?.lastUnd
 const A_WHILE_MS = 3_600_000;
 const aWhileAgo = (ctx: SkillContext, action: ActionRecord) => ctx.platform.now().getTime() - action.at > A_WHILE_MS;
 
-/** Which days a question is about: today, yesterday, this week. */
+/** Which days a question is about: today, yesterday, this week (today and the six days before). `from`: days back it starts. */
 function days(said: string) {
   if (/\byesterday\b/i.test(said)) return { days: 2, from: 1, label: 'yesterday' };
-  if (/\bthis week\b|\blately\b|\brecently\b/i.test(said)) return { days: 7, from: 0, label: 'this week' };
+  if (/\bthis week\b|\blately\b|\brecently\b/i.test(said)) return { days: 7, from: 6, label: 'this week' };
   return { days: 1, from: 0, label: 'today' };
 }
 
@@ -133,13 +133,45 @@ export const trustSkills: Skill[] = [
   },
 ];
 
+const ALWAYS = /\b(?:always|every\s+time|from\s+now\s+on|(?:don'?t|do\s+not|never)\s+ask(?:\s+me)?(?:\s+again)?|for\s+good)\b/gi;
+const TODAY = /\b(?:for\s+today|just\s+today|today\s+only|for\s+the\s+(?:rest\s+of\s+the\s+)?day|until\s+tomorrow)\b/gi;
+/** Words before a scope, in its clause, that take it back: "not always", "but ask me every time". */
+const UNSAYS = /\b(?:not|never|no|don'?t|do\s+not|doesn'?t|stop|ask|asking|check|confirm)\b/i;
+
+/** Whether a scope is said and meant: not negated or contradicted in its clause ("not always", "always ask me"). */
+function meant(scope: RegExp, said: string) {
+  for (const m of said.matchAll(scope)) {
+    const clause = said.slice(0, m.index).split(/\b(?:but|except|though|although|however)\b|[.;!?]/i).at(-1) ?? '';
+    const after = said.slice(m.index + m[0].length);
+    if (!UNSAYS.test(clause) && !/^[\s,]*(?:ask|check|confirm|make\s+sure)\b/i.test(after)) return true;
+  }
+  return false;
+}
+
 /** "Yes, always" or "yes, for today", in a yes to one of Nova's questions. Read in code, from the user's own words. */
 export function alwaysIn(said: string): 'always' | 'today' | null {
-  if (/\b(?:always|every time|from now on|don'?t ask (?:me )?again|never ask|for good)\b/i.test(said)) return 'always';
-  if (/\b(?:for today|just today|today only|for the (?:rest of the )?day|until tomorrow)\b/i.test(said)) return 'today';
+  if (meant(ALWAYS, said)) return 'always';
+  if (meant(TODAY, said)) return 'today';
   return null;
 }
 
-/** Agent commands "yes, always" never covers: deleting, force, superuser, piping downloads into a shell. */
-export const RISKY_COMMAND =
-  /(?:^|[\s;&|(])(?:rm|rmdir|sudo|su|chmod|chown|dd|mkfs|diskutil|kill|killall|pkill|shutdown|reboot|launchctl|crontab)\b|git\s+(?:push|reset\s+--hard|clean|checkout\s+--|branch\s+-D|rebase)|--force\b|\s-f\b|(?:curl|wget)\b[^|]*\|\s*(?:sh|bash|zsh|python)|npm\s+(?:publish|unpublish)|drop\s+(?:table|database)|>\s*\/dev\//i;
+const GIT = String.raw`\bgit\s+(?:-[Cc]\s+\S+\s+|--[\w-]+(?:=\S+)?\s+)*`;
+
+/**
+ * Agent commands "yes, always" never covers: deleting (however it's spelled - /bin/rm, \rm, find -delete),
+ * throwing away work in git, force, superuser, piping downloads into a shell.
+ */
+export const RISKY_COMMAND = new RegExp(
+  [
+    String.raw`(?:^|[\s;&|(\x60'"])(?:[\w.~-]*\/)*\\?(?:rm|rmdir|unlink|shred|truncate|rimraf|sudo|su|doas|chmod|chown|chgrp|dd|mkfs(?:\.\w+)?|diskutil|kill|killall|pkill|shutdown|reboot|halt|launchctl|crontab)(?=\s|$|[;&|)'"\x60])`,
+    String.raw`\bfind\b[^;&|]*\s-(?:delete|exec(?:dir)?\s+rm)\b`,
+    `${GIT}(?:push|reset\\s+--(?:hard|merge|keep)|clean|checkout\\s+(?:--|\\.|-f\\b)|restore|stash\\s+(?:drop|clear)|branch\\s+-D|rebase|filter-branch|update-ref\\s+-d|reflog\\s+(?:expire|delete)|gc\\s+--prune)`,
+    String.raw`--force\b|\s-f\b`,
+    String.raw`(?:curl|wget)\b[^|]*\|\s*(?:sudo\s+)?(?:sh|bash|zsh|python\d?|node)\b`,
+    String.raw`npm\s+(?:publish|unpublish)`,
+    String.raw`drop\s+(?:table|database|schema)`,
+    String.raw`>\s*\/dev\/`,
+    String.raw`\bmv\b[^;&|]*\s\/dev\/`,
+  ].join('|'),
+  'i',
+);
