@@ -17,9 +17,9 @@ async function scanApps(dir: string): Promise<string[]> {
   }
 }
 
-/** macOS implementation. Other OSes get a dry-run platform for now. */
+/** macOS implementation. Other OSes - or NOVA_DRY_RUN=1, for trying Nova out safely - get a dry-run platform. */
 export function createPlatform(): Platform {
-  if (osPlatform() !== 'darwin') return dryRunPlatform();
+  if (osPlatform() !== 'darwin' || process.env.NOVA_DRY_RUN === '1') return dryRunPlatform();
 
   let known = new Set<string>();
   // Only ever pass names we discovered ourselves to `open`/AppleScript.
@@ -41,6 +41,12 @@ export function createPlatform(): Platform {
       assertKnown(name);
       await run('osascript', ['-e', `tell application ${JSON.stringify(name)} to quit`]);
     },
+    // Asking doesn't start it.
+    async isRunning(name) {
+      assertKnown(name);
+      const { stdout } = await run('osascript', ['-e', `application ${JSON.stringify(name)} is running`]);
+      return stdout.trim() === 'true';
+    },
     now: () => new Date(),
   };
 }
@@ -51,6 +57,7 @@ function dryRunPlatform(): Platform {
     listApps: async () => apps,
     openApp: async (name) => console.log(`[dry-run] open ${name}`),
     quitApp: async (name) => console.log(`[dry-run] quit ${name}`),
+    isRunning: async () => false,
     now: () => new Date(),
   };
 }

@@ -6,10 +6,12 @@ const ICON: Record<Card['kind'], string> = {
   app: '◐',
   time: '◷',
   timer: '⏱',
+  reminder: '◔',
   info: 'ⓘ',
   confirm: '⚠︎',
   error: '✕',
   answer: '✦',
+  task: '✳︎',
 };
 
 function Countdown({ endsAt }: { endsAt: number }) {

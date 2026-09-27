@@ -21,7 +21,7 @@ function Bars({ probs, selected }: { probs: Record<string, number>; selected?: s
 }
 
 /** Developer view of the last System 1 decision. */
-export function Inspector({ trace, engine }: { trace: DecisionTrace | null; engine: string | null }) {
+export function Inspector({ trace, engine, wakeWord }: { trace: DecisionTrace | null; engine: string | null; wakeWord: string }) {
   const a = (trace?.answers ?? {}) as Record<string, any>;
   return (
     <motion.aside
@@ -36,7 +36,7 @@ export function Inspector({ trace, engine }: { trace: DecisionTrace | null; engi
         <span className="chip">{engine ?? '—'}</span>
       </header>
       {!trace ? (
-        <p className="muted">Say something after "Hey Nova" to see how System 1 decided.</p>
+        <p className="muted">Say something after "{wakeWord}" to see how System 1 decided.</p>
       ) : (
         <>
           <div className="inspector__utterance">“{trace.utterance}”</div>
@@ -56,6 +56,18 @@ export function Inspector({ trace, engine }: { trace: DecisionTrace | null; engi
             <section>
               <h4>App · choice</h4>
               <Bars probs={a.app.probabilities} selected={a.app.choice} />
+            </section>
+          )}
+          {a.agent?.probabilities && (
+            <section>
+              <h4>Agent · choice</h4>
+              <Bars probs={a.agent.probabilities} selected={a.agent.choice} />
+            </section>
+          )}
+          {a.project?.probabilities && (
+            <section>
+              <h4>Project · choice</h4>
+              <Bars probs={a.project.probabilities} selected={a.project.choice} />
             </section>
           )}
           {a.addressed && (

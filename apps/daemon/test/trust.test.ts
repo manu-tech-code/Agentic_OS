@@ -1,0 +1,361 @@
+import { execFile } from 'node:child_process';
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
+import type { ActivityItem, Platform, UndoStep } from '@nova/core';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { approvalDetail } from '../src/agents/parsers.ts';
+import { loadConfig } from '../src/config.ts';
+import { ActionLog } from '../src/trust/actions.ts';
+import { privacyFlows } from '../src/trust/privacy.ts';
+import { ruleId, TrustRules } from '../src/trust/rules.ts';
+import { setupSteps } from '../src/trust/setup.ts';
+import { Snapshots } from '../src/trust/snapshots.ts';
+import { Undoer } from '../src/trust/undo.ts';
+
+const exec = promisify(execFile);
+const temp = (name = 'nova-trust-') => mkdtemp(join(tmpdir(), name));
+// Sunday 27 September 2026, 1:43 PM.
+const NOW = new Date(2026, 8, 27, 13, 43).getTime();
+const DAY = 86_400_000;
+
+let n = 0;
+const item = (label: string, extra: Partial<ActivityItem> = {}): ActivityItem => ({ id: `a${++n}`, at: Date.now(), label, status: 'done', by: 'you', ...extra });
+
+describe('the record of actions', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => vi.useRealTimers());
+
+  const log = (dir: string, undo = vi.fn(async () => ({ ok: true, message: 'Okay.' })), changed = vi.fn(), keepDays = 30) => ({
+    log: new ActionLog({ dir, keepDays: () => keepDays, undo, changed }),
+    undo,
+    changed,
+  });
+
+  it('keeps each action with how to undo it, but windows never see how', async () => {
+    const dir = await temp();
+    const { log: actions } = log(dir);
+    await actions.load();
+    const shown = actions.add(item('Reminder: call mum'), { kind: 'reminder-cancel', id: 'r1' });
+    expect(shown).toMatchObject({ label: 'Reminder: call mum', undoable: true });
+    expect(shown).not.toHaveProperty('undo');
+    expect(actions.history()[0]).not.toHaveProperty('undo');
+    await actions.flushed();
+    const file = join(dir, '2026-09-27.jsonl');
+    expect((await stat(file)).mode & 0o777).toBe(0o600);
+    expect(await readFile(file, 'utf8')).toContain('"reminder-cancel"');
+  });
+
+  it('undoes the latest undoable action - or the latest of the one named - and only once', async () => {
+    const dir = await temp();
+    const { log: actions, undo, changed } = log(dir);
+    await actions.load();
+    const first = actions.add(item('Claude finished in site', { by: 'Claude' }), { kind: 'agent-files', project: 'site', before: 'b', after: 'a', agent: 'Claude', files: ['index.html'] });
+    actions.add(item('Opened Slack'), { kind: 'app-quit', app: 'Slack' });
+    actions.add(item('Told the time'));
+    expect(actions.lastUndoable()?.label).toBe('Opened Slack');
+    expect(actions.lastUndoable('Claude')).toMatchObject({ label: 'Claude finished in site', files: ['index.html'] });
+
+    expect(await actions.undo(first.id)).toEqual({ ok: true, message: 'Okay.' });
+    expect(undo).toHaveBeenCalledWith(expect.objectContaining({ kind: 'agent-files' }), expect.objectContaining({ id: first.id }));
+    expect(changed).toHaveBeenCalledWith(expect.objectContaining({ id: first.id, undone: NOW }));
+    expect(changed.mock.calls[0]![0].undoable).toBeUndefined();
+    expect(actions.lastUndoable('Claude')).toBeNull();
+    expect((await actions.undo(first.id)).ok).toBe(false);
+    expect(undo).toHaveBeenCalledTimes(1);
+  });
+
+  it("comes back after a restart, undone ones still undone - and a failed undo doesn't count", async () => {
+    const dir = await temp();
+    const failing = vi.fn(async () => ({ ok: false, message: "That reminder isn't there any more." }));
+    const { log: actions } = log(dir, failing);
+    await actions.load();
+    const a = actions.add(item('Reminder: stretch'), { kind: 'reminder-cancel', id: 'gone' });
+    const b = actions.add(item('Remembered: my standup is at 10'), { kind: 'memory-forget', id: 'm1' });
+    expect((await actions.undo(a.id)).ok).toBe(false);
+    await actions.flushed();
+
+    const again = log(dir);
+    await again.log.load();
+    expect(again.log.lastUndoable()?.id).toBe(b.id);
+    await again.log.undo(b.id);
+    await again.log.flushed();
+    const third = log(dir);
+    await third.log.load();
+    expect(third.log.lastUndoable()?.id).toBe(a.id); // only the failed one is left to undo
+    expect(third.log.history().find((i) => i.id === b.id)).toMatchObject({ undone: NOW });
+    expect(third.log.stats()).toEqual({ days: 30, kept: 2 });
+  });
+
+  it('keeps as many days as Settings says, and searches all of them', async () => {
+    const dir = await temp();
+    const old = (days: number, label: string) => JSON.stringify({ id: `old${days}`, at: NOW - days * DAY, label, status: 'done', by: days > 20 ? 'Codex' : 'you' });
+    const day = (days: number) => {
+      const d = new Date(NOW - days * DAY);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}.jsonl`;
+    };
+    await writeFile(join(dir, day(10)), `${old(10, 'Quit Spotify')}\n`);
+    await writeFile(join(dir, day(25)), `${old(25, 'Codex finished in api')}\n{"id":"old25","undone":1}\n`);
+    await writeFile(join(dir, day(40)), `${old(40, 'Opened Notes')}\n`);
+    const { log: actions } = log(dir);
+    await actions.load();
+    expect(await readdir(dir)).not.toContain(day(40)); // past the 30 days kept
+    expect(actions.recent(7)).toEqual([]); // ten days back isn't at hand
+    expect((await actions.search('spotify')).map((i) => i.label)).toEqual(['Quit Spotify']);
+    expect(await actions.search('codex undone')).toMatchObject([{ label: 'Codex finished in api', undone: 1 }]);
+    expect(await actions.search('spotify', 7)).toEqual([]);
+  });
+});
+
+describe('remembered permissions', () => {
+  it('hold at once, are saved under an id without dots, and list what they allow', async () => {
+    const saved: Record<string, unknown>[] = [];
+    let settings: Record<string, { key: string; label: string; until?: string }> = {};
+    const rules = new TrustRules({ rules: () => settings, save: async (c) => void saved.push(c), now: () => new Date(NOW) });
+    const key = 'agent:claude:Agentic_OS:Bash:npm run test.unit';
+    await rules.allow(key, 'Claude may run "npm run test.unit" in Agentic_OS');
+    expect(rules.allows(key)).toBe(true);
+    expect(rules.allows('agent:claude:Agentic_OS:Bash:npm run build')).toBe(false);
+    const id = ruleId(key);
+    expect(id).toMatch(/^r[0-9a-f]{12}$/);
+    expect(saved).toEqual([{ [`trust.rules.${id}`]: { key, label: 'Claude may run "npm run test.unit" in Agentic_OS' } }]);
+    settings = { [id]: { key, label: 'Claude may run "npm run test.unit" in Agentic_OS' } };
+    rules.configure();
+    expect(rules.list()).toEqual([{ key, label: 'Claude may run "npm run test.unit" in Agentic_OS' }]);
+  });
+
+  it('"for today" ends with the day, and is cleared out of Settings after', async () => {
+    let now = new Date(NOW);
+    const saved: Record<string, unknown>[] = [];
+    const rules = new TrustRules({ rules: () => ({ rq: { key: 'quit_app:Spotify', label: 'Quit Spotify', until: '2026-09-27' } }), save: async (c) => void saved.push(c), now: () => now });
+    expect(rules.allows('quit_app:Spotify')).toBe(true);
+    await rules.prune();
+    expect(saved).toEqual([]);
+    now = new Date(NOW + DAY);
+    expect(rules.allows('quit_app:Spotify')).toBe(false);
+    expect(rules.snapshot()).toEqual([]);
+    await rules.prune();
+    expect(saved).toEqual([{ 'trust.rules.rq': null }]);
+  });
+});
+
+describe('undoing', () => {
+  const platform = (): Platform & { calls: string[] } => {
+    const calls: string[] = [];
+    return { calls, listApps: async () => [], openApp: async (a) => void calls.push(`open ${a}`), quitApp: async (a) => void calls.push(`quit ${a}`), now: () => new Date(NOW) };
+  };
+  const deps = () => {
+    const memory = new Map([['m1', 'my standup is at 10:30']]);
+    const reminders = new Set(['r1']);
+    const routines: Record<string, unknown> = {};
+    const p = platform();
+    const state = { project: 'site' as string | null };
+    return {
+      memory,
+      reminders,
+      routines,
+      platform: p,
+      state,
+      undoer: new Undoer({
+        reminders: { cancel: async (id) => reminders.delete(id), add: async (r) => ({ ...r, id: 'r2' }) },
+        memory: { forget: (id) => memory.delete(id), remember: (text) => memory.set('m2', text), edit: (id, text) => memory.has(id) && Boolean(memory.set(id, text)) },
+        platform: p,
+        project: { set: (name) => void (state.project = name) },
+        saveRoutine: async (name, routine) => void (routines[name] = routine),
+        snapshots: {} as never,
+        now: () => NOW,
+      }),
+    };
+  };
+  const action = { id: 'x', at: NOW, label: 'x', status: 'done' as const, undoable: true };
+
+  it('takes back exactly the one thing', async () => {
+    const d = deps();
+    expect(await d.undoer.run({ kind: 'reminder-cancel', id: 'r1' }, action)).toEqual({ ok: true, message: 'Okay, that reminder is cancelled.' });
+    expect((await d.undoer.run({ kind: 'reminder-cancel', id: 'r1' }, action)).ok).toBe(false);
+    await d.undoer.run({ kind: 'memory-edit', id: 'm1', text: 'my standup is at 10' }, action);
+    expect(d.memory.get('m1')).toBe('my standup is at 10');
+    await d.undoer.run({ kind: 'app-quit', app: 'Slack' }, action);
+    await d.undoer.run({ kind: 'app-open', app: 'Spotify' }, action);
+    expect(d.platform.calls).toEqual(['quit Slack', 'open Spotify']);
+    await d.undoer.run({ kind: 'project-set', name: null }, action);
+    expect(d.state.project).toBeNull();
+    await d.undoer.run({ kind: 'routine-delete', name: 'start work' }, action);
+    expect(d.routines).toEqual({ 'start work': null });
+  });
+
+  it("brings back a reminder only while it's still to come", async () => {
+    const d = deps();
+    const later = { kind: 'reminder-restore', reminder: { text: 'call mum', about: 'to', due: NOW + 3_600_000 } } as UndoStep;
+    const past = { kind: 'reminder-restore', reminder: { text: 'call mum', about: 'to', due: NOW - 3_600_000 } } as UndoStep;
+    expect(await d.undoer.run(later, action)).toEqual({ ok: true, message: 'Okay, the reminder is back.' });
+    expect((await d.undoer.run(past, action)).ok).toBe(false);
+  });
+
+  it('says how much of a batch came back', async () => {
+    const d = deps();
+    const batch: UndoStep = { kind: 'batch', steps: [{ kind: 'reminder-cancel', id: 'r1' }, { kind: 'reminder-cancel', id: 'nope' }] };
+    expect(await d.undoer.run(batch, action)).toEqual({ ok: true, message: "I put back 1 of the 2; that reminder isn't there any more - it may have gone off already." });
+  });
+});
+
+describe('snapshots of agents’ projects', () => {
+  const git = async (cwd: string, ...args: string[]) => (await exec('git', args, { cwd, env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } })).stdout;
+  let repo: string;
+  let home: string;
+  const snapshots = (enabled = true) =>
+    new Snapshots({ file: join(home, 'snapshots.json'), enabled: () => enabled, projectPath: (name) => (name === 'site' ? repo : name === 'plain' ? home : undefined), keepDays: () => 30 });
+  const task = { id: 't1', project: 'site', label: 'Claude', task: 'tidy the styles' };
+
+  beforeEach(async () => {
+    repo = await temp('nova-repo-');
+    home = await temp('nova-home-');
+    await git(repo, 'init', '-q');
+    await writeFile(join(repo, 'index.html'), '<h1>Hi</h1>\n');
+    await writeFile(join(repo, 'style.css'), 'h1 { color: red; }\n');
+    await writeFile(join(repo, '.gitignore'), 'secret.txt\n');
+    await git(repo, 'add', '.');
+    await git(repo, 'commit', '-q', '-m', 'first');
+    // The user's own work in progress: one change staged, one file not yet added.
+    await writeFile(join(repo, 'index.html'), '<h1>Hello</h1>\n');
+    await git(repo, 'add', 'index.html');
+    await writeFile(join(repo, 'notes.md'), 'todo\n');
+  });
+  afterEach(async () => {
+    await rm(repo, { recursive: true, force: true });
+    await rm(home, { recursive: true, force: true });
+  });
+
+  it("puts back exactly the agent's files, and never the user's staging", async () => {
+    const s = await snapshots().load();
+    const staged = await git(repo, 'diff', '--cached', '--name-only');
+    await s.before(task);
+    // The agent edits, adds, deletes.
+    await writeFile(join(repo, 'style.css'), 'h1 { color: blue; }\n');
+    await writeFile(join(repo, 'new.js'), 'console.log(1)\n');
+    await rm(join(repo, 'notes.md'));
+    await writeFile(join(repo, 'secret.txt'), 'ignored, never snapshotted\n');
+    const step = await s.after(task);
+    expect(step).toMatchObject({ kind: 'agent-files', project: 'site', agent: 'Claude' });
+    expect(step!.files.sort()).toEqual(['new.js', 'notes.md', 'style.css']);
+    expect(await git(repo, 'for-each-ref', '--format=%(refname)', 'refs/nova/snapshots/')).toContain('refs/nova/snapshots/t1');
+
+    const result = await s.restore(step!);
+    expect(result).toMatchObject({ ok: true });
+    expect(result.message).toContain('the 3 files Claude changed in site are back as they were');
+    expect(await readFile(join(repo, 'style.css'), 'utf8')).toBe('h1 { color: red; }\n');
+    expect(await readFile(join(repo, 'notes.md'), 'utf8')).toBe('todo\n');
+    await expect(stat(join(repo, 'new.js'))).rejects.toThrow();
+    expect(await readFile(join(repo, 'secret.txt'), 'utf8')).toContain('ignored'); // not the agent's to take back
+    expect(await readFile(join(repo, 'index.html'), 'utf8')).toBe('<h1>Hello</h1>\n');
+    expect(await git(repo, 'diff', '--cached', '--name-only')).toBe(staged);
+    expect(await git(repo, 'log', '--oneline')).toMatch(/^\w+ first\n$/); // no commits of Nova's on the branch
+  });
+
+  it("refuses rather than overwrite what the user changed since - and changes nothing", async () => {
+    const s = await snapshots().load();
+    await s.before(task);
+    await writeFile(join(repo, 'style.css'), 'h1 { color: blue; }\n');
+    await writeFile(join(repo, 'new.js'), 'console.log(1)\n');
+    const step = (await s.after(task))!;
+    await writeFile(join(repo, 'style.css'), 'h1 { color: green; }\n'); // the user's own edit
+    const result = await s.restore(step);
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain('style.css has changed since Claude finished');
+    expect(await readFile(join(repo, 'style.css'), 'utf8')).toBe('h1 { color: green; }\n');
+    expect(await readFile(join(repo, 'new.js'), 'utf8')).toBe('console.log(1)\n');
+  });
+
+  it("says so when there's been a commit since, and puts the files back uncommitted", async () => {
+    const s = await snapshots().load();
+    await s.before(task);
+    await writeFile(join(repo, 'style.css'), 'h1 { color: blue; }\n');
+    await git(repo, 'commit', '-q', '-am', "the agent's commit");
+    const step = (await s.after(task))!;
+    const result = await s.restore(step);
+    expect(result.ok).toBe(true);
+    expect(result.message).toContain('The commit made since stays');
+    expect(await readFile(join(repo, 'style.css'), 'utf8')).toBe('h1 { color: red; }\n');
+  });
+
+  it('offers nothing when the agent changed nothing, or the project is not a git repository, or snapshots are off', async () => {
+    const s = await snapshots().load();
+    await s.before(task);
+    expect(await s.after(task)).toBeNull();
+    expect(await git(repo, 'for-each-ref', 'refs/nova/')).toBe('');
+    await s.before({ ...task, id: 't2', project: 'plain' });
+    expect(await s.after({ ...task, id: 't2', project: 'plain' })).toBeNull();
+    const off = await snapshots(false).load();
+    await off.before(task);
+    await writeFile(join(repo, 'style.css'), 'changed\n');
+    expect(await off.after(task)).toBeNull();
+  });
+
+  it('marks tasks that shared a project', async () => {
+    const s = await snapshots().load();
+    await s.before(task);
+    await s.before({ ...task, id: 't2', label: 'Codex' });
+    await writeFile(join(repo, 'style.css'), 'h1 { color: blue; }\n');
+    expect(await s.after(task)).toMatchObject({ shared: true });
+  });
+});
+
+describe('the privacy page', () => {
+  const base = { reflex: true, hasGatewayKey: false, brain: true, integrations: [], hearing: { engine: 'apple' as const, state: 'ready' as const }, voiceInstalled: true, isLocal: (id: string) => id.startsWith('lmstudio/') };
+
+  it("says where each thing goes, with the brain's destination for what goes with questions", () => {
+    const flows = privacyFlows({ ...base, config: loadConfig({}, {}), agents: [{ name: 'claude', label: 'Claude', paired: true }, { name: 'codex', label: 'Codex', paired: false }] });
+    const by = Object.fromEntries(flows.map((f) => [f.id, f]));
+    expect(by.hearing).toMatchObject({ leaves: false, where: "this Mac (Apple's on-device recognizer)" });
+    expect(by.decisions).toMatchObject({ leaves: false, where: 'this Mac (Reflex)' });
+    expect(by.answers).toMatchObject({ leaves: true, where: 'Anthropic, through Claude - on your own plan' });
+    expect(by['screen-context']).toMatchObject({ leaves: true, on: true, toggle: { key: 'screen.context', on: true, off: false } });
+    expect(by['agent-claude']).toMatchObject({ on: true, toggle: { key: 'agents.enabled', on: ['claude'], off: [] } });
+    expect(by['agent-codex']).toMatchObject({ on: false, toggle: { key: 'agents.enabled', on: ['claude', 'codex'], off: ['claude'] } });
+    expect(by.weather).toMatchObject({ on: false }); // no town set
+  });
+
+  it('keeps it on this Mac with a local model', () => {
+    const flows = privacyFlows({ ...base, config: loadConfig({ answers: { model: 'lmstudio/qwen3' } }, {}), agents: [] });
+    expect(flows.find((f) => f.id === 'answers')).toMatchObject({ leaves: false, where: 'this Mac (lmstudio/qwen3)' });
+    expect(flows.find((f) => f.id === 'memories')).toMatchObject({ leaves: false });
+  });
+});
+
+describe('the setup checklist', () => {
+  it('says what is missing, and the fix', () => {
+    const steps = setupSteps({
+      config: loadConfig({}, {}),
+      reflex: { installed: false, learned: 0, label: 'potion-base-8M · English · 31 MB' },
+      voice: { installed: false, label: 'Kokoro 82M · natural voices · 326 MB' },
+      hearing: { status: { engine: 'apple', state: 'ready' }, parakeet: {} as never, smartTurn: {} as never },
+      app: null,
+      appInstalled: false,
+      agents: [{ name: 'claude', label: 'Claude' }],
+      brain: 'Claude',
+      projects: [{ name: 'site', git: true }, { name: 'drafts', git: false }],
+      screen: { available: true, running: false, permissions: null },
+    });
+    const by = Object.fromEntries(steps.map((s) => [s.id, s]));
+    expect(by.reflex).toMatchObject({ done: false, fix: { install: 'reflex' } });
+    expect(by.reflex!.detail).toContain('31 MB');
+    expect(by.voice).toMatchObject({ done: false, fix: { command: 'npm run app' } });
+    expect(by.voice!.optional).toBeUndefined(); // Nova's one voice isn't optional
+    expect(by.agents).toMatchObject({ done: true });
+    expect(by.projects!.detail).toContain("drafts isn't a git repository");
+    expect(by.app).toMatchObject({ done: false, fix: { command: 'npm run app' } });
+  });
+});
+
+describe("what an agent's yes-always covers", () => {
+  it('is exactly the command, the site or the file', () => {
+    expect(approvalDetail('Bash', { command: 'npm   test\n' })).toBe('npm test');
+    expect(approvalDetail('WebFetch', { url: 'https://docs.github.com/en/rest?x=1' })).toBe('docs.github.com');
+    expect(approvalDetail('Edit', { file_path: '/p/src/a.ts' })).toBe('/p/src/a.ts');
+    expect(approvalDetail('mcp__linear__create_issue', {})).toBe('');
+  });
+});

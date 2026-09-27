@@ -1,0 +1,48 @@
+/* Nova's floating orb. The Mac app draws the frosted glass behind it and sizes its panel to .hud,
+   so the page itself is transparent and the card has fixed widths. */
+html.is-hud,
+html.is-hud body,
+html.is-hud #root {
+  background: transparent !important;
+  height: auto;
+  overflow: hidden;
+}
+
+.hud {
+  position: fixed;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  color: #fff;
+  cursor: pointer;
+  -webkit-font-smoothing: antialiased;
+}
+.hud--bottom-right { right: 0; bottom: 0; }
+.hud--top-right { right: 0; top: 0; }
+.hud--bottom-left { left: 0; bottom: 0; }
+.hud--top-left { left: 0; top: 0; }
+
+.hud--card { width: 360px; padding: 12px 18px 13px 12px; }
+.hud--orb,
+.hud--hidden { width: 64px; height: 64px; padding: 8px; }
+
+.hud__orb { position: relative; flex: none; width: 48px; height: 48px; }
+.hud .orb { --size: 48px; }
+.hud .particle-orb { inset: -30%; }
+.hud .orb__glow { filter: blur(12px); }
+
+.hud__body { flex: 1; min-width: 0; display: grid; gap: 5px; padding-top: 4px; }
+.hud__body p { margin: 0; overflow-wrap: anywhere; }
+.hud__heard { font-size: 13px; line-height: 1.35; color: rgba(255, 255, 255, 0.6); }
+.hud__heard.is-live { color: rgba(255, 255, 255, 0.86); }
+.hud__status { font-size: 13px; line-height: 1.35; color: rgba(255, 255, 255, 0.7); }
+.hud__reply {
+  font-size: 14.5px;
+  line-height: 1.42;
+  display: -webkit-box;
+  -webkit-line-clamp: 7;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.hud__ask { font-size: 14px; font-weight: 600; line-height: 1.35; }
+.hud__ask span { font-weight: 400; color: rgba(255, 255, 255, 0.6); margin-left: 6px; }

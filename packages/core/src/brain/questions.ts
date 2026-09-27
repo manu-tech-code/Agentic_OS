@@ -1,3 +1,4 @@
+import type { AgentHost } from '../agents.ts';
 import { tokens } from '../decision/heuristicModel.ts';
 import type { Question } from '../decision/types.ts';
 import type { Skill } from '../skills/types.ts';
@@ -17,20 +18,20 @@ export const JEV_CHOICE_LIMIT = 255;
  * One System 1 call per utterance, asking everything at once (speculative
  * fan-out): extra questions cost tokens, not latency.
  */
-export function buildQuestions(skills: Skill[], apps: string[], utterance: string) {
+export function buildQuestions(skills: Skill[], apps: string[], utterance: string, agents?: AgentHost | null, assistant = 'Nova') {
   const intentCriteria: Record<string, string[]> = {};
-  for (const s of skills) intentCriteria[s.id] = s.examples;
+  for (const s of skills) if (!s.toolOnly) intentCriteria[s.id] = s.examples;
   Object.assign(intentCriteria, META_INTENTS);
 
   const questions: Record<string, Question> = {
     intent: {
       type: 'choice',
-      instructions: 'What does the user want Nova to do with this utterance?',
+      instructions: `What does the user want ${assistant} to do with this utterance?`,
       criteria: intentCriteria,
     },
     addressed: {
       type: 'boolean',
-      instructions: 'The utterance is directed at the voice assistant Nova, not background speech.',
+      instructions: `The utterance is directed at the voice assistant ${assistant}, not background speech.`,
       criteria: {
         true: 'A command, request or question meant for the assistant, or a reply to its last question.',
         false: 'Background noise, TV or video audio, or the user talking to another person.',
@@ -43,6 +44,18 @@ export function buildQuestions(skills: Skill[], apps: string[], utterance: strin
     const appCriteria: Record<string, string | null> = { none: 'No application is mentioned' };
     for (const a of candidates) appCriteria[a] = null;
     questions.app = { type: 'choice', instructions: 'Which installed application does the user refer to?', criteria: appCriteria };
+  }
+
+  if (agents?.agents.length) {
+    const agentCriteria: Record<string, string> = { none: 'No AI agent is named' };
+    for (const a of agents.agents) agentCriteria[a.name] = a.label;
+    questions.agent = { type: 'choice', instructions: 'Which AI agent does the user name, to ask a question or give a task?', criteria: agentCriteria };
+  }
+  const projects = shortlistApps(agents?.projects ?? [], utterance, JEV_CHOICE_LIMIT - 1);
+  if (projects.length) {
+    const projectCriteria: Record<string, string | null> = { none: 'No project or folder is mentioned' };
+    for (const p of projects) projectCriteria[p] = null;
+    questions.project = { type: 'choice', instructions: 'Which project folder does the user refer to?', criteria: projectCriteria };
   }
   return questions;
 }

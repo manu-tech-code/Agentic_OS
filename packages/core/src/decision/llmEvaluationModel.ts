@@ -32,7 +32,9 @@ export class LlmEvaluationModel implements EvaluationModelV4 {
         'You are a decision function inside software. Answer every question strictly from the STATE. ' +
         'Read instructions literally. For choice pick one option key; for score pick a level index (0 = first level); ' +
         'for boolean give P(true). Confidence/probability must be honest and calibrated.',
-      prompt: `STATE:\n${JSON.stringify(state, null, 2)}\n\nQUESTIONS:\n${JSON.stringify(questions, null, 2)}`,
+      prompt:
+        `STATE:\n${JSON.stringify(state, null, 2)}\n\nQUESTIONS:\n${JSON.stringify(questions, null, 2)}\n\n` +
+        `Reply with one JSON object in this shape:\n${JSON.stringify(answerShape(questions))}`,
     });
 
     const answers: Record<string, RawAnswer> = {};
@@ -41,6 +43,20 @@ export class LlmEvaluationModel implements EvaluationModelV4 {
     }
     return { answers, warnings: [] };
   }
+}
+
+/** The reply shape in plain words, for local servers that can't enforce the JSON schema. */
+function answerShape(questions: Record<string, Question>) {
+  const shape: Record<string, unknown> = {};
+  for (const [id, q] of Object.entries(questions)) {
+    shape[id] =
+      q.type === 'choice'
+        ? { choice: `one key of QUESTIONS.${id}.criteria`, confidence: 'number 0-1' }
+        : q.type === 'score'
+          ? { level: `integer 0-${q.criteria.length - 1}`, confidence: 'number 0-1' }
+          : { probability: 'number 0-1' };
+  }
+  return shape;
 }
 
 function schemaFor(q: Question): z.ZodTypeAny {
