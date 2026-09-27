@@ -84,24 +84,34 @@ final class Voice {
       }
       if !capturing {
         onProblem("The microphone wouldn't start.")
-        speakOnly(attempt: 0)
+        speakOnly()
       }
     } else {
-      speakOnly(attempt: 0)
+      speakOnly()
     }
-    if interrupted { endPlayback(finished: false) }
+    // Told, not left stuck "speaking": a rebuild (a mic came or went, or capture just switched) still
+    // needs the daemon to know this reply is over, the same as one that played out normally.
+    if interrupted { endPlayback(finished: true) }
   }
 
-  /// No microphone, only Nova's voice. Right after voice processing stops, macOS can take a moment
-  /// to let go of it: try again shortly.
-  private func speakOnly(attempt: Int) {
+  /// No microphone, only Nova's voice - wired up but not started: the engine itself starts on demand,
+  /// in play()/chime(), so it isn't kept running (and the Mac awake) with nothing to do.
+  private func speakOnly() {
     fresh()
     connectPlayer(to: nil)
-    guard !start(), attempt < 4 else { return }
+  }
+
+  /// Starts the engine if it isn't already, because there's something to play. Right after voice
+  /// processing stops, macOS can take a moment to let go of it, so this retries briefly rather than
+  /// staying silent.
+  private func ensureRunning(attempt: Int = 0) {
+    guard !engine.isRunning else { return }
+    if start() { return }
+    guard attempt < 4 else { return }
     let session = self.session
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.3 * Double(attempt + 1)) { [weak self] in
-      guard let self, session == self.session, !self.capturing, !self.engine.isRunning else { return }
-      self.speakOnly(attempt: attempt + 1)
+      guard let self, session == self.session, !self.engine.isRunning else { return }
+      self.ensureRunning(attempt: attempt + 1)
     }
   }
 
@@ -278,6 +288,8 @@ final class Voice {
 
   /// A piece of a reply in Kokoro's voice: 16-bit PCM, in order by `seq`, the last one marked.
   func play(id: String, seq: Int, sampleRate: Double, pcm: Data, last: Bool) {
+    // A chunk that was already in flight when stopPlayback() cut this id off: dropped, not replayed.
+    guard !cutIds.contains(id) else { return }
     if playing != id {
       stopPlayback()
       playing = id
@@ -293,14 +305,26 @@ final class Voice {
   func stopPlayback() {
     generation += 1
     player.stop()
+    if let id = playing { markCut(id) }
     if playing != nil { endPlayback(finished: false) }
+  }
+
+  /// Ids stopPlayback() cut off: a chunk already on its way when that happened would otherwise start
+  /// this same reply playing again, from wherever it's up to, once it arrives.
+  private var cutIds: [String] = []
+
+  private func markCut(_ id: String) {
+    cutIds.append(id)
+    if cutIds.count > 20 { cutIds.removeFirst(cutIds.count - 20) }
   }
 
   /// A soft two-note chime as Nova starts listening - through the engine, so it's never heard back.
   func chime() {
     guard playing == nil, let buffer = Voice.chimeBuffer(format: playFormat) else { return }
+    ensureRunning()
     player.scheduleBuffer(buffer, completionHandler: nil)
     if engine.isRunning, !player.isPlaying { player.play() }
+    scheduleIdleStop()
   }
 
   static func chimeBuffer(format: AVAudioFormat) -> AVAudioPCMBuffer? {
@@ -327,6 +351,7 @@ final class Voice {
       nextPiece += 1
       guard buffer.frameLength > 0 else { continue }
       outstanding += 1
+      ensureRunning()
       let generation = self.generation
       player.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
         DispatchQueue.main.async {
@@ -352,6 +377,18 @@ final class Voice {
     lastPiece = nil
     outstanding = 0
     if finished { onFinished() }
+    scheduleIdleStop()
+  }
+
+  /// Nothing left to say and not listening: let the engine stop, so it isn't kept running - and the
+  /// Mac awake - for no reason. A short grace period, so back-to-back sentences don't restart it.
+  private func scheduleIdleStop() {
+    guard !capturing, playing == nil else { return }
+    let session = self.session
+    DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+      guard let self, session == self.session, !self.capturing, self.playing == nil else { return }
+      self.engine.stop()
+    }
   }
 
   private func silence() -> AVAudioPCMBuffer? {
