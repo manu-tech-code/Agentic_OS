@@ -1,0 +1,33 @@
+# Branches follow the flow in CONTRIBUTING.md: feature/…, bugfix/… and hotfix/… go into develop;
+# only develop goes into main.
+name: Branch rules
+
+on:
+  pull_request:
+    branches: [develop, main]
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  name:
+    name: Branch name
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check where this branch may go
+        env:
+          HEAD: ${{ github.head_ref }}
+          BASE: ${{ github.base_ref }}
+        run: |
+          if [ "$BASE" = "main" ]; then
+            if [ "$HEAD" != "develop" ]; then
+              echo "::error::Only develop merges into main - this is $HEAD. Open the pull request into develop instead."
+              exit 1
+            fi
+          elif ! [[ "$HEAD" =~ ^(feature|bugfix|hotfix)/[A-Za-z0-9._-]+$ ]]; then
+            echo "::error::Branches into develop are named feature/…, bugfix/… or hotfix/… - this is $HEAD."
+            exit 1
+          fi
+          echo "$HEAD → $BASE is fine."
