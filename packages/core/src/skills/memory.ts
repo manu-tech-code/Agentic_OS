@@ -130,6 +130,7 @@ export const memorySkills: Skill[] = [
     summary: 'Forget one thing the user asked Nova to remember. Put what to forget in request.',
     tier: 2,
     tierFor: (ctx) => (forgetting(ctx) ? 2 : 0),
+    destructive: (ctx) => Boolean(forgetting(ctx)),
     examples: ['forget that my standup is at 10', 'forget what I told you about the api key', 'delete that memory'],
     confirmPrompt: (ctx) => `Forget "${forgetting(ctx)?.text}"?`,
     async run(ctx) {

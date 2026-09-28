@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { barsFrom, consistent, cosine, enrollFrom, judge, leaveOneOut, learnFrom, migrateVoiceprint, VoiceId, VoiceprintStore, type StoredVoiceprint } from '../src/hearing/voiceid.ts';
+import { Keyword } from '../src/hearing/keyword.ts';
 
 /** Voiceprints for tests: a person's is their direction in 256-d, plus a little noise each time they speak. */
 function rng(seed: number) {
@@ -279,6 +280,41 @@ describe('Voice ID, set up and at work', () => {
       expect(voice.decide(null, 0.4)).toBe('unsure'); // …opens no window
       expect(log.mock.calls.map((c) => String(c[0]))).toContainEqual(expect.stringMatching(/\[voice-id\] you · 0\.4 s · short, 6 s after a clear one/));
       expect(log.mock.calls.map((c) => String(c[0]))).toContainEqual(expect.stringMatching(/\[voice-id\] you 0\.9\d · 3\.0 s$/));
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('turns itself off for any voice when the master keyword is said - until the user turns it back on', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'nova-voice-'));
+    const store = new VoiceprintStore(join(dir, 'voiceprint.json'), 'wespeaker-v2');
+    const keyword = await new Keyword(join(dir, 'voiceid-keyword.json')).load();
+    let enabled = true;
+    const said: string[] = [];
+    const voice = new VoiceId({ store, model: 'wespeaker-v2', label: '', modelDir: async () => dir, enabled: () => enabled, learning: () => false, name: () => 'Manuel', turnOn: async () => {}, changed: () => {}, keyword, onOverride: (rest) => void said.push(rest) });
+    await voice.refresh();
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      expect(voice.unlock('pineapple express open safari')).toBeNull(); // no keyword yet
+      await voice.setKeyword('pineapple express');
+      expect(voice.unlock('pineapple express open safari')).toBeNull(); // no voiceprint: nothing to override
+      await store.set(enrollFrom([you(), you(), you(), you()], 'wespeaker-v2'));
+      expect(voice.decide(other(), 3)).toBe('not-you');
+      expect(voice.unlock('Manuel, pineapple express - open Safari')).toBe('open Safari');
+      expect(said).toEqual(['open Safari']);
+      expect(voice.overridden()).toBe(true);
+      expect(voice.status().keyword).toEqual({ set: true, overriddenAt: expect.any(String) });
+      expect(voice.decide(other(), 3)).toBe('anyone'); // any voice, from now on
+      expect(voice.unlock('pineapple express')).toBeNull(); // already off
+      await voice.restore();
+      expect(voice.decide(other(), 3)).toBe('not-you');
+      // Setting up again, or forgetting the voice, leaves nothing overridden.
+      voice.unlock('pineapple express');
+      await voice.forget();
+      expect(voice.overridden()).toBe(false);
+      enabled = false;
+      await store.set(enrollFrom([you(), you(), you(), you()], 'wespeaker-v2'));
+      expect(voice.unlock('pineapple express')).toBeNull(); // Voice ID switched off: nothing to override
     } finally {
       log.mockRestore();
     }

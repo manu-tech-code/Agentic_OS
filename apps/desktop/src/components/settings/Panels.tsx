@@ -117,13 +117,13 @@ function ModelRow({ name, label, installed, size, busy, onInstall }: { name: str
 export function VoiceIdPanel({ snapshot, name, result, onAction }: ActionProps) {
   const v = snapshot.voiceId;
   const browser = snapshot.hearing.status.engine === 'browser';
-  const [busy, setBusy] = useBusy([v.installed, v.enrolled, v.enrolling?.step, Boolean(v.testing)], result);
-  const act = (action: 'install' | 'enroll' | 'test' | 'cancel' | 'forget') => (setBusy(true), onAction({ type: 'voiceid', action }));
+  const [busy, setBusy] = useBusy([v.installed, v.enrolled, v.enrolling?.step, Boolean(v.testing), v.keyword.set, v.keyword.overriddenAt], result);
+  const act = (action: 'install' | 'enroll' | 'test' | 'cancel' | 'forget' | 'keyword-clear' | 'override-end') => (setBusy(true), onAction({ type: 'voiceid', action }));
   const idle = v.installed && !v.enrolling && !v.testing;
   return (
     <div className="tile">
       <div className="tile__head tile__head--wrap">
-        <span className={`dot ${v.on ? 'dot--on' : ''}`} />
+        <span className={`dot ${v.keyword.overriddenAt ? 'dot--warn' : v.on ? 'dot--on' : ''}`} />
         <strong>Voice ID</strong>
         <Info label="Voice ID" text={personalize("With Voice ID on, Nova listens to you alone: other voices are ignored, even saying its name, and a TV can't answer its questions. When it can't tell (a very short \"yes\"), it says so - holding the talk shortcut always counts as you. To set it up, read six short phrases where it's quiet; Test my voice then shows whether it knows you. Your voiceprint is made and kept on this Mac, and never leaves it.", name)} />
         <span className="muted">
@@ -131,6 +131,8 @@ export function VoiceIdPanel({ snapshot, name, result, onAction }: ActionProps) 
             ? `learning your voice · ${v.enrolling.step} of ${v.enrolling.of}`
             : v.testing
               ? 'testing your voice'
+              : v.keyword.overriddenAt
+                ? 'off · the master keyword was said'
               : v.on
                 ? `on${v.learned ? ` · learned from ${v.learned} of your turns` : ''}`
                 : v.enrolled
@@ -174,6 +176,28 @@ export function VoiceIdPanel({ snapshot, name, result, onAction }: ActionProps) 
         </div>
       )}
       {v.testing && <VoiceTest testing={v.testing} bars={v.bars} on={v.on} name={name} />}
+      {v.keyword.overriddenAt && (
+        <div className="banner voice-override">
+          <span>
+            {personalize(
+              `Voice ID is off: the master keyword was said ${saidAt(v.keyword.overriddenAt)}. Anyone Nova hears can ask it things - nothing is deleted, spent or allowed for good.`,
+              name,
+            )}
+          </span>
+          <button type="button" className="btn btn--primary" disabled={busy} onClick={() => act('override-end')}>
+            Turn Voice ID back on
+          </button>
+        </div>
+      )}
+      {v.enrolled && idle && (
+        <KeywordRow
+          set={v.keyword.set}
+          name={name}
+          busy={busy}
+          onSet={(keyword) => (setBusy(true), onAction({ type: 'voiceid', action: 'keyword-set', keyword }))}
+          onClear={() => act('keyword-clear')}
+        />
+      )}
       {v.message && <span className="muted">{v.message}</span>}
       {browser && <span className="muted">Voice ID needs Nova's own hearing - Nova.app, or Hearing on Apple or Parakeet: the browser's speech recognition never passes the voice on.</span>}
     </div>
@@ -181,6 +205,77 @@ export function VoiceIdPanel({ snapshot, name, result, onAction }: ActionProps) 
 }
 
 const percent = (x: number) => `${Math.round(Math.max(0, Math.min(1, x)) * 100)}%`;
+
+/** "at 10:42" today, "on Mon at 10:42" before. */
+function saidAt(iso: string) {
+  const d = new Date(iso);
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  return d.toDateString() === new Date().toDateString() ? `at ${time}` : `on ${d.toLocaleDateString([], { weekday: 'short' })} at ${time}`;
+}
+
+/** Long enough never to be said by chance - the daemon's own rule, checked there too. */
+const keywordOk = (k: string) => k.trim().split(/\s+/).filter(Boolean).length >= 2 && k.replace(/[^\p{L}\p{N}]/gu, '').length >= 8;
+
+/** Voice ID's master keyword: typed, never shown back, and hashed by the daemon at once. */
+function KeywordRow({ set, name, busy, onSet, onClear }: { set: boolean; name: string; busy: boolean; onSet: (keyword: string) => void; onClear: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const about = (
+    <Info
+      label="Master keyword"
+      text={personalize(
+        "Said in any voice, anywhere in a sentence, it turns Voice ID off until you turn it back on here - for a guest, or on a day Nova doesn't know your voice. Meanwhile any voice is heard, but nothing gets deleted, spent or allowed for good. Nova says so aloud, sends a notification and puts it in Activity. Only a hash of it is kept, on this Mac.",
+        name,
+      )}
+    />
+  );
+  if (set && !editing) {
+    return (
+      <div className="voice-keyword">
+        <span className="muted">Master keyword: set</span>
+        {about}
+        <button type="button" className="link" disabled={busy} onClick={() => setEditing(true)}>
+          Change
+        </button>
+        <button type="button" className="link" disabled={busy} onClick={onClear}>
+          Clear
+        </button>
+      </div>
+    );
+  }
+  return (
+    <form
+      className="voice-keyword"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (!keywordOk(draft)) return;
+        onSet(draft.trim());
+        setDraft('');
+        setEditing(false);
+      }}
+    >
+      <input
+        type="password"
+        className="setting__input"
+        value={draft}
+        placeholder="Master keyword - two words or more"
+        aria-label="Master keyword"
+        autoComplete="off"
+        spellCheck={false}
+        onChange={(e) => setDraft(e.target.value)}
+      />
+      <button type="submit" className="btn btn--ghost" disabled={busy || !keywordOk(draft)}>
+        {set ? 'Change' : 'Set keyword'}
+      </button>
+      {editing && (
+        <button type="button" className="link" onClick={() => (setEditing(false), setDraft(''))}>
+          Cancel
+        </button>
+      )}
+      {about}
+    </form>
+  );
+}
 
 /** A voice test under way: what to do, and what each thing said sounded like, newest first. */
 function VoiceTest({ testing, bars, on, name }: { testing: NonNullable<SettingsSnapshot['voiceId']['testing']>; bars: SettingsSnapshot['voiceId']['bars']; on: boolean; name: string }) {

@@ -264,6 +264,7 @@ const filesSkill: Skill = {
     const destination = req.action === 'move' && req.destination ? await hands.files.folder(req.destination) : undefined;
     return { req, hits, destination } satisfies FilesPrepared;
   },
+  destructive: (ctx) => prepared(ctx).req?.action === 'trash',
   tierFor(ctx) {
     const { req } = prepared(ctx);
     if (!req) return 0;

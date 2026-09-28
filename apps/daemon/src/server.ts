@@ -31,6 +31,7 @@ import { modelResolver } from './models.ts';
 import { createPlatform } from './platform.ts';
 import { createHands } from './hands/index.ts';
 import { Hearing } from './hearing/service.ts';
+import { Keyword } from './hearing/keyword.ts';
 import { VoiceId, VoiceprintStore } from './hearing/voiceid.ts';
 import { Initiative } from './initiative/index.ts';
 import { IntegrationHub } from './integrations/hub.ts';
@@ -422,6 +423,8 @@ const vocabulary = () => [runtime.config.name, ...runtime.config.wakeWords, ...n
 // Hearing starts without a wait between it and Settings' snapshots below: its status can come back at any await.
 const voiceprints = new VoiceprintStore(join(dirname(settingsFile()), 'voiceprint.json'), VOICE_ID_MODEL);
 await voiceprints.load();
+// The master keyword (a hash of it): said in any voice, it turns Voice ID off until the user turns it back on.
+const keyword = await new Keyword(join(dirname(settingsFile()), 'voiceid-keyword.json')).load();
 const voiceId = new VoiceId({
   store: voiceprints,
   model: VOICE_ID_MODEL,
@@ -432,6 +435,15 @@ const voiceId = new VoiceId({
   name: () => runtime.config.name,
   shortcut: () => formatShortcut(runtime.config.presence.shortcut),
   ear: () => (presence.status ? 'Nova.app' : 'a window'),
+  keyword,
+  onOverride() {
+    // Said aloud, as a notification, and in the record - whoever said it, the user hears of it.
+    nova.tell("The master keyword: Voice ID is off. I'll hear anyone now - but nothing gets deleted, spent or allowed for good - until you turn it back on in Settings.");
+    if (presence.status) {
+      void initiative!.rpc.request('notify', { ref: '', title: 'Voice ID is off', body: 'Someone said the master keyword. Nova hears any voice until you turn Voice ID back on in Settings.', actions: [] }, 5000).catch(() => {});
+    }
+    emit({ type: 'activity', item: { id: randomBytes(6).toString('hex'), at: Date.now(), label: 'Voice ID turned off with the master keyword', status: 'done', by: 'someone, with the master keyword' } });
+  },
   turnOn: () => saveSettings({ 'voiceId.enabled': true }),
   changed: () => snapshotsReady && broadcastSnapshot(),
 });
@@ -553,6 +565,8 @@ function apply(next: Runtime) {
   memory.suggestions = next.config.memory.suggest;
   if (next.config.memory.keepDays !== keptDays) void pruneJournal().then(broadcastSnapshot);
   presence.configure(next.config.presence);
+  // Voice ID switched off in Settings: the master keyword's "off" goes with it, so switching it on is simply on.
+  if (!next.config.voiceId.enabled && voiceId.overridden()) void voiceId.restore();
   initiative!.configure();
   trust.configure();
   broadcast(nova.hello());
@@ -710,7 +724,14 @@ wss.on('connection', (ws, req) => {
   const onEvent = async (event: ClientEvent) => {
     // Speech a window recognised itself never reached Voice ID's ear: with Voice ID on it can't count as the
     // user (the talk shortcut still does). Typing is the user at the keyboard.
-    if (event.type === 'utterance') await nova.handle(event.text, event.source, event.source === 'voice' && voiceId.status().on ? 'unchecked' : undefined);
+    if (event.type === 'utterance') {
+      // A window's own speech recognition: the master keyword works here too; otherwise, with Voice ID on, the voice
+      // can't be checked - unless Voice ID is off since the keyword, when any voice is heard (held back).
+      const rest = event.source === 'voice' ? voiceId.unlock(event.text) : null;
+      if (rest !== null) {
+        if (rest) await nova.handle(rest, 'voice', 'anyone');
+      } else await nova.handle(event.text, event.source, event.source === 'voice' && voiceId.status().on ? (voiceId.overridden() ? 'anyone' : 'unchecked') : undefined);
+    }
     else if (event.type === 'audio-start') {
       // The latest window to start its microphone hears for Nova - unless the Mac app does.
       if (presence.mayListen(ws)) micOwner = ws;
@@ -852,7 +873,8 @@ wss.on('connection', (ws, req) => {
         send(ws, { type: 'settings-result', ok: false, message: (error as Error).message });
       }
     } else if (event.type === 'voiceid') {
-      // Voice ID: its model (pinned, checked), learning the user's voice, stopping, forgetting it.
+      // Voice ID: its model (pinned, checked), learning the user's voice, testing it, forgetting it - and the master
+      // keyword: set (hashed at once), cleared, and Voice ID turned back on after it was said.
       try {
         const progress = (message: string) => send(ws, { type: 'settings-result', ok: true, message });
         let message = '';
@@ -872,6 +894,11 @@ wss.on('connection', (ws, req) => {
           message = event.action === 'enroll' ? await voiceId.start() : await voiceId.test();
         }
         else if (event.action === 'cancel') (voiceId.cancel(), (message = 'Stopped.'));
+        else if (event.action === 'keyword-set') {
+          await voiceId.setKeyword(event.keyword ?? '');
+          message = 'The master keyword is set - only a hash of it is kept.';
+        } else if (event.action === 'keyword-clear') (await voiceId.clearKeyword(), (message = 'There is no master keyword now.'));
+        else if (event.action === 'override-end') (await voiceId.restore(), (message = 'Voice ID is back on: Nova answers your voice alone.'));
         else (await voiceId.forget(), await saveSettings({ 'voiceId.enabled': false }), (message = 'Your voiceprint is gone.'));
         broadcastSnapshot();
         send(ws, { type: 'settings-result', ok: true, message });

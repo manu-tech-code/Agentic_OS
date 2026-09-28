@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { NovaBrain, type DecisionEngine, type NovaOptions, type Platform, type ServerEvent } from '../src/index.ts';
+import { NovaBrain, type DecisionEngine, type NovaOptions, type Platform, type ServerEvent, type Skill } from '../src/index.ts';
 
 /** Voice ID in the brain: another voice is ignored entirely; one it can't place is told how to be sure. */
 
@@ -62,5 +62,23 @@ describe('Voice ID in the brain', () => {
     expect(t.quit).toEqual(['Spotify']);
     await t.nova.handle('nova quit spotify', 'keyboard', 'unsure');
     expect(t.quit).toEqual(['Spotify', 'Spotify']);
+  });
+
+  it('never deletes on the word of a voice that got in with the master keyword', async () => {
+    const shredded: string[] = [];
+    const shred: Skill = { id: 'shred', tier: 1, examples: ['shred the notes'], destructive: () => true, run: async () => (shredded.push('notes'), { say: 'Shredded.', activity: 'Shredded the notes' }) };
+    const engine: DecisionEngine = {
+      name: 'fixed',
+      decide: async () => ({ answers: { intent: choice('shred', 0.95, ['chat', 'other']), addressed: { type: 'boolean', probability: 0.95 } } as any, engine: 'fixed', latencyMs: 0, fellBack: false }),
+    };
+    const t = await setup({ engine, skills: [shred] });
+    await t.nova.handle('nova shred the notes', 'voice', 'anyone');
+    expect(shredded).toEqual([]);
+    expect(t.said().at(-1)).toMatch(/^Not while Voice ID is off: a voice that got in with the master keyword can't delete/);
+    expect(t.events.some((e) => e.type === 'activity' && e.item.status === 'cancelled' && e.item.by === 'someone, with the master keyword')).toBe(true);
+    await t.nova.handle('nova shred the notes', 'voice', 'you'); // the user's own voice
+    expect(shredded).toEqual(['notes']);
+    await t.nova.handle('shred the notes', 'keyboard'); // or typed: someone at the Mac
+    expect(shredded).toEqual(['notes', 'notes']);
   });
 });

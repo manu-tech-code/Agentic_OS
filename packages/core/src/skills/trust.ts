@@ -47,6 +47,7 @@ export const trustSkills: Skill[] = [
     id: 'undo',
     summary: 'Take back the last thing Nova did that can be undone - or, with agent, the last thing that agent did.',
     tier: 1,
+    destructive: () => true,
     namesAgent: true,
     prepare: lastUndoable,
     // Putting files back changes a project, and something from a while ago may not be what the user means: asked first.

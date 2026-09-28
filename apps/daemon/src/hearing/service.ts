@@ -52,6 +52,8 @@ export interface VoiceCheck {
   decide(print: number[] | null, seconds: number, opts?: { learn?: boolean }): Speaker | undefined;
   /** Setting up or testing Voice ID: the turn is for it, not for Nova. True when it took it. */
   claim(print: number[] | null, seconds: number, text: string): boolean;
+  /** The master keyword, in any voice: what was said after it (Voice ID is off from now on), or null. */
+  unlock?(text: string): string | null;
 }
 
 /** Longest Nova waits for a turn's voiceprint before deciding without one (unsure, then). */
@@ -494,6 +496,9 @@ export class Hearing {
       const voice = this.voice;
       // Setting up or testing Voice ID: what's said is for it, never a request.
       if (voice?.claim(print, printed.seconds, words)) return;
+      // The master keyword, in any voice: Voice ID is off from now on, and what came after it goes through.
+      const rest = voice?.unlock?.(words) ?? null;
+      if (rest !== null) return rest ? this.events.utterance(rest, explicit, 'anyone') : undefined;
       // Said with the talk shortcut: whoever holds the key down is at this Mac - it counts as the user.
       this.events.utterance(words, explicit, explicit ? undefined : voice?.decide(print, printed.seconds));
     });

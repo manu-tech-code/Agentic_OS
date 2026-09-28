@@ -44,9 +44,15 @@ import type { ReasoningBrain, Turn } from './reasoning.ts';
 
 /**
  * Whose voice a turn was, with Voice ID on: the user's, someone else's, one it couldn't place, or one it couldn't
- * check at all (a window's own speech recognition heard it, and never passes the voice on).
+ * check at all (a window's own speech recognition heard it, and never passes the voice on) - or `anyone`: Voice ID
+ * is off since the master keyword was said, so any voice is heard, but what it asks may not delete, spend or be
+ * allowed for good.
  */
-export type Speaker = 'you' | 'not-you' | 'unsure' | 'unchecked';
+export type Speaker = 'you' | 'not-you' | 'unsure' | 'unchecked' | 'anyone';
+
+/** Who asked, in the record, when a voice got in with the master keyword. */
+const ANYONE = 'someone, with the master keyword';
+const OVERRIDDEN = "Not while Voice ID is off: a voice that got in with the master keyword can't delete, spend or allow anything for good. Turn Voice ID back on in Settings - or type it.";
 
 export interface NovaOptions {
   /** The assistant's name (default "Nova"). Wake words default to "hey <name>", "okay <name>", "<name>". */
@@ -255,6 +261,10 @@ export class NovaBrain implements ToolHost {
   private lesson: Lesson | null = null;
   /** What the user said that the brain is answering now, for tools that depend on it. */
   private answering: string | null = null;
+  /** This turn came in with the master keyword (Voice ID off): what it may do is held back. */
+  private byAnyone = false;
+  /** The brain is answering such a turn: its steps are held back the same way. */
+  private answeringByAnyone = false;
   /** The answer's time limit: held while one of its tool calls runs (or waits for the user's yes). */
   private patience: { hold(): () => void } | null = null;
   /** Agent tasks running now, for the task board and "what are the agents doing". */
@@ -480,6 +490,8 @@ export class NovaBrain implements ToolHost {
     const heard = from.task ? '' : (this.answering ?? '');
     const ready = await this.prepared(skill, utterance, resolved, heard, tool);
     const context = this.context(utterance, ready, heard, tool);
+    // Answering a voice that got in with the master keyword: none of its steps delete, spend or can't be taken back.
+    if (this.answeringByAnyone && !from.task && this.heldBack(skill, context)) return `${OVERRIDDEN} It was not done.`;
     const gate = gateFor(skill.tierFor?.(context) ?? skill.tier);
     if (gate === 'tap') return `${skill.tapPrompt?.(context) ?? 'That needs a confirmation on screen.'} It was not done.`;
     if (gate === 'confirm') {
@@ -576,6 +588,9 @@ export class NovaBrain implements ToolHost {
     // One Nova can't place (a very short "yes") is told how to be sure: the talk shortcut counts as the user.
     if (source === 'voice' && speaker === 'not-you') return;
     if (source === 'voice' && (speaker === 'unsure' || speaker === 'unchecked')) return this.cantPlace(speaker);
+    // Voice ID is off (the master keyword): any voice is heard - and recorded as such - but held back.
+    this.byAnyone = source === 'voice' && speaker === 'anyone';
+    if (this.byAnyone) by = ANYONE;
     if (wake.found && !wake.rest) {
       this.openWindow();
       return;
@@ -645,6 +660,11 @@ export class NovaBrain implements ToolHost {
     if (pending?.kind === 'approval') {
       // An agent is waiting on a yes or no. Anything else is handled normally while it keeps waiting.
       if (answer) {
+        // Nothing an agent asks leaves on the word of a voice that got in with the master keyword.
+        if (this.byAnyone && intent === 'confirm_yes') {
+          this.settleApproval(false, `Refused while Voice ID is off: ${pending.approval.summary}`);
+          return this.say(utterance, OVERRIDDEN);
+        }
         const ok = intent === 'confirm_yes';
         trace(ok ? 'allowed agent step' : 'refused agent step');
         const remembered = ok ? this.rememberYes(pending.approval.remember, utterance, pending.approval.session) : '';
@@ -657,8 +677,12 @@ export class NovaBrain implements ToolHost {
       if (pending.kind === 'confirm') {
         if (intent === 'confirm_yes') {
           trace(`confirmed ${pending.skill.id}`);
-          this.opts.engine.learn?.({ utterance: pending.utterance, question: 'intent', choice: pending.skill.id, source: 'confirmed' });
           const ctx = this.context(pending.utterance, pending.resolved);
+          if (this.byAnyone && this.heldBack(pending.skill, ctx)) {
+            this.activity(`Refused while Voice ID is off: ${pending.prompt}`, 'cancelled', pending.skill, { by: ANYONE });
+            return this.say(utterance, OVERRIDDEN);
+          }
+          this.opts.engine.learn?.({ utterance: pending.utterance, question: 'intent', choice: pending.skill.id, source: 'confirmed' });
           const remembered = this.rememberYes(pending.skill.rememberAs?.(ctx), utterance, pending.skill.session?.(ctx) ?? undefined);
           return this.execute(pending.skill, pending.utterance, pending.resolved, utterance, pending.by, remembered);
         }
@@ -725,6 +749,11 @@ export class NovaBrain implements ToolHost {
     const resolved = await this.prepared(skill, utterance, resolvedFirst);
     const ctx = this.context(utterance, resolved);
     const tier = skill.tierFor?.(ctx) ?? skill.tier;
+    // A voice that got in with the master keyword: never what deletes, spends or can't be taken back.
+    if (this.byAnyone && this.heldBack(skill, ctx) && p >= MIN_CONFIDENCE[1]) {
+      this.activity(`Refused while Voice ID is off: ${skill.id.replace(/_/g, ' ')}`, 'cancelled', skill, { by });
+      return this.say(utterance, OVERRIDDEN);
+    }
     // A tap on screen, never a spoken yes (cancelling all the reminders): nothing is done, so saying where to do it
     // needs only a fair idea of what was meant.
     if (gateFor(tier) === 'tap' && p >= MIN_CONFIDENCE[1]) {
@@ -818,6 +847,7 @@ export class NovaBrain implements ToolHost {
     const history = this.history.slice(-6);
     const lesson: Lesson | null = opts.teach ? (this.lesson = { calls: [] }) : null;
     this.answering = utterance;
+    this.answeringByAnyone = this.byAnyone;
     try {
       // Notes go with the question (what the user is in, related memories); the history keeps their own words.
       const notes = await this.notesFor(utterance);
@@ -851,7 +881,10 @@ export class NovaBrain implements ToolHost {
         this.opts.hands?.computer.finished?.(brain.name); // its hands are off the computer
       }
       if (this.lesson === lesson) this.lesson = null;
-      if (this.answering === utterance) this.answering = null;
+      if (this.answering === utterance) {
+        this.answering = null;
+        this.answeringByAnyone = false;
+      }
       // What it was still waiting to be allowed goes with it: a late yes runs nothing.
       this.withdraw((a) => a.thinking === thinking);
       this.nextApproval();
@@ -926,6 +959,11 @@ export class NovaBrain implements ToolHost {
    * the brain's request), Nova isn't set to ask first, and it isn't weighty. An agent working on a task on
    * its own was told nothing, so it's always asked.
    */
+  /** What a voice that got in with the master keyword may never do: delete, spend, or what can't be taken back. */
+  private heldBack(skill: Skill, context: SkillContext) {
+    return Boolean(skill.weighty?.(context) || skill.destructive?.(context));
+  }
+
   private toldTo(skill: Skill, context: SkillContext, from: ToolFrom) {
     return this.opts.askFirst === false && !from.task && asksToAct(context.heard ?? '') && !skill.weighty?.(context);
   }
@@ -1343,6 +1381,8 @@ export class NovaBrain implements ToolHost {
    */
   private rememberYes(remember: { key: string; label: string } | null | undefined, said: string, session?: { key: string; label: string }) {
     const scope = alwaysIn(said);
+    // A voice that got in with the master keyword allows things once, never for good - nor for the rest of a task.
+    if (this.byAnyone) return scope || taskScope(said) ? " Just this once - nothing is allowed for good while Voice ID is off." : '';
     if (session && (taskScope(said) || (scope && !remember))) {
       this.sessionYes.set(session.key, this.now() + SESSION_MS);
       this.activity(`Allowed for this task: ${session.label}`, 'done', undefined, { by: 'you' });
