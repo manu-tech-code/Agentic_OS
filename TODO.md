@@ -19,3 +19,5 @@
   - [x] Hear with stronger models: WeSpeaker ResNet293 and NVIDIA TitaNet-Large alongside the first one, their matches weighed together; my clear turns of the last 10 minutes count too; a week of recordings to tune on (#21) - it made no difference
   - Benched on 2026-09-28: set aside for now, to come back to later
 - [x] Remove the "System 1" and "System 2" items from the dock. There's no need to show those two items on the dock
+- [x] Remove the connected agents from the dock. There's no need to show them there
+- [ ] The listening model should be able to filter out noise
