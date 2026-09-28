@@ -1,4 +1,5 @@
 import { answerFromWeights, softmax } from '../distribution.ts';
+import { settleReplies } from '../replies.ts';
 import type { CallOptions, EvaluationModelV4, Question, RawAnswer, RawResult, StateInput } from '../types.ts';
 import { dot, type Embedder } from './embedder.ts';
 import { FILLER_WORDS, grammarPhrases } from './grammar.ts';
@@ -409,7 +410,8 @@ export class ReflexEvaluationModel implements EvaluationModelV4 {
         answers[id] = this.score(q, variants);
       }
     }
-    return { answers, warnings: [] };
+    // A reply for sure ("okay", "absolutely not") is read in code, not by likeness.
+    return { answers: settleReplies(state, answers), warnings: [] };
   }
 
   /**

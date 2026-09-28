@@ -3,6 +3,7 @@ import { JEV_DOUBT_FLOOR, readJev } from './handoff.ts';
 import { HeuristicEvaluationModel } from './heuristicModel.ts';
 import { JEV_DEFAULT_MODEL, JevEvaluationModel } from './jev.ts';
 import { LlmEvaluationModel } from './llmEvaluationModel.ts';
+import { settleReplies } from './replies.ts';
 import type { Decision, DecisionEngine, DecisionExample, EvaluationModelV4, Questions, StateInput } from './types.ts';
 
 /** A model object, never a bare id: nothing is resolved behind Nova's back (no gateway, no default provider). */
@@ -61,8 +62,9 @@ export class EvaluationDecisionEngine implements DecisionEngine {
       abortSignal: AbortSignal.timeout(this.timeoutMs),
     });
     const confidence = (result.providerMetadata as any)?.typesafe?.confidence as Record<string, number> | undefined;
+    // Whatever the engine, a reply for sure ("okay", "absolutely not") is read in code: it decides whether something is done.
     return {
-      answers: slot.read ? slot.read(state, result.answers) : result.answers,
+      answers: settleReplies(state, slot.read ? slot.read(state, result.answers) : result.answers),
       engine: slot.name,
       latencyMs: Math.round(performance.now() - started),
       fellBack,
