@@ -5,10 +5,14 @@ import Foundation
 final class EyesServer {
   private let path: String
   private let client: pid_t
+  /// The client is the daemon Nova.app runs (see CallerLock); if not, every request is refused.
+  private let allowed: Bool
 
   init(path: String, client: pid_t) {
     self.path = path
     self.client = client
+    allowed = CallerLock.allows(client: client)
+    if !allowed { FileHandle.standardError.write(Data("nova-eyes: pid \(client) isn't the daemon Nova.app runs - refusing it\n".utf8)) }
   }
 
   func start() throws {
@@ -56,7 +60,8 @@ final class EyesServer {
         buffer = Data(buffer[(newline + 1)...])
         guard let request = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
         Task {
-          var answer = await handle(request)
+          // Refused: said why, so the daemon can tell the user - and nothing is looked at or done.
+          var answer = self.allowed ? await handle(request) : ["error": "not-nova-app"]
           answer["id"] = request["id"] ?? NSNull()
           guard var data = try? JSONSerialization.data(withJSONObject: answer) else { return }
           data.append(0x0a)
@@ -65,6 +70,8 @@ final class EyesServer {
       }
     }
     close(fd)
+    // A refused client went away: there's nothing for this Nova Eyes to do.
+    if !allowed { exit(3) }
   }
 }
 

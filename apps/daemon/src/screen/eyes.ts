@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import type { ScreenService } from '@nova/core';
 import { settingsFile } from '../config.ts';
+import { currentIdentity, needsSigning, signApp } from '../shell/signing.ts';
 
 /**
  * Nova Eyes: a small background app (native/eyes) that tells Nova what's on screen - the app in
@@ -131,6 +132,7 @@ export type EyesAction =
 
 /** What Nova Eyes can't do, said plainly. */
 const PROBLEMS: Record<string, string> = {
+  'not-nova-app': "Nova Eyes answers only the daemon Nova.app runs, and this one was started some other way (a terminal?). Quit it and let Nova.app run it: Settings → Menu bar → Who runs Nova's daemon → Nova.app.",
   'accessibility-permission': 'Nova Eyes needs Accessibility for that: Settings → Hands → Allow, then turn on Nova Eyes in System Settings → Privacy & Security → Accessibility.',
   'screen-permission': 'Nova Eyes needs Screen Recording to see the screen: Settings → Hands → Allow.',
   'secure-field': "That's a password field - Nova never types into those. The user has to type it themselves.",
@@ -166,7 +168,7 @@ const mtime = (path: string) => stat(path).then((s) => s.mtimeMs, () => 0);
 
 let building: Promise<string> | null = null;
 
-/** The app, built and signed on this Mac - again only after its sources change. */
+/** The app, built and signed on this Mac - built again only after its sources change, signed again when the identity does. */
 export function ensureEyes(): Promise<string> {
   building ??= (async () => {
     if (platform() !== 'darwin') throw new Error("Seeing the screen needs macOS.");
@@ -174,7 +176,12 @@ export function ensureEyes(): Promise<string> {
     const binary = join(app, 'Contents', 'MacOS', 'nova-eyes');
     const sources = [join(PACKAGE, 'Package.swift'), join(PACKAGE, 'Info.plist'), ...(await readdir(join(PACKAGE, 'Sources'))).map((f) => join(PACKAGE, 'Sources', f))];
     const newest = Math.max(...(await Promise.all(sources.map(mtime))));
-    if ((await mtime(binary)) >= newest) return app;
+    const identity = await currentIdentity();
+    if ((await mtime(binary)) >= newest) {
+      // A certificate added (or renewed) since: signed again, no rebuild - macOS asks for its permissions once more.
+      if (await needsSigning(app, identity)) await signApp(app, 'eyes', identity);
+      return app;
+    }
     await new Promise<void>((resolve, reject) => {
       const child = spawn('swift', ['build', '-c', 'release', '--package-path', PACKAGE], { stdio: ['ignore', 'pipe', 'pipe'] });
       let log = '';
@@ -186,9 +193,10 @@ export function ensureEyes(): Promise<string> {
     await mkdir(join(app, 'Contents', 'MacOS'), { recursive: true });
     await copyFile(join(PACKAGE, 'Info.plist'), join(app, 'Contents', 'Info.plist'));
     await copyFile(BUILT, binary);
-    // Signed on this Mac, so it has an identity for macOS to grant permissions to. A signing identity of the
-    // user's (NOVA_SIGN_IDENTITY in .env, as for Nova.app) keeps those permissions across rebuilds.
-    await run('codesign', ['--force', '--sign', process.env.NOVA_SIGN_IDENTITY || '-', '--identifier', 'dev.nova.eyes', app]);
+    // Signed on this Mac, hardened, so it has an identity for macOS to grant permissions to. With the user's
+    // Apple certificate (see signing.ts) those permissions survive rebuilds - and Nova Eyes answers only the
+    // daemon Nova.app runs, which it checks by that certificate's team.
+    await signApp(app, 'eyes', identity);
     return app;
   })().finally(() => (building = null));
   return building;
@@ -201,6 +209,8 @@ export class Eyes implements ScreenService {
   private readonly waiting = new Map<number, (answer: any) => void>();
   private seq = 0;
   private failedAt = 0;
+  /** Nova Eyes said it answers only the daemon Nova.app runs, and this isn't it. */
+  private refusedUs = false;
   /** Why it couldn't start, if it couldn't. */
   problem: string | null = null;
   /** What macOS allows it, as it last said. */
@@ -226,6 +236,8 @@ export class Eyes implements ScreenService {
   private async open(): Promise<Socket> {
     if (this.socket) return this.socket;
     // After a failed start, wait a minute before trying (and building) again - or until Restart.
+    // Refused (this isn't the daemon Nova.app runs): that won't change until another daemon runs - or Restart.
+    if (this.refusedUs) throw new Error(this.problem ?? PROBLEMS['not-nova-app']!);
     if (this.problem && Date.now() - this.failedAt < 60_000) throw new Error(this.problem);
     this.connecting ??= (async () => {
       const app = await ensureEyes();
@@ -243,7 +255,8 @@ export class Eyes implements ScreenService {
       createInterface({ input: socket }).on('line', (line) => {
         try {
           const answer = JSON.parse(line);
-          this.waiting.get(answer.id)?.(answer);
+          if (answer.error === 'not-nova-app') this.refused(socket);
+          this.waiting.get(answer.id)?.(answer.error === 'not-nova-app' ? { error: PROBLEMS['not-nova-app'] } : answer);
           this.waiting.delete(answer.id);
         } catch {
           // not an answer
@@ -267,6 +280,16 @@ export class Eyes implements ScreenService {
       })
       .finally(() => (this.connecting = null));
     return this.connecting;
+  }
+
+  /** Nova Eyes won't answer this daemon: say so in Settings, and don't start it again and again. */
+  private refused(socket: Socket) {
+    if (this.refusedUs) return;
+    this.refusedUs = true;
+    this.problem = PROBLEMS['not-nova-app']!;
+    this.failedAt = Date.now();
+    socket.destroy(); // Nova Eyes quits when a refused client goes
+    this.opts.onChange?.();
   }
 
   private remember(permissions: unknown) {
@@ -416,6 +439,7 @@ export class Eyes implements ScreenService {
   restart() {
     this.close();
     this.problem = null;
+    this.refusedUs = false;
     this.warm();
   }
 

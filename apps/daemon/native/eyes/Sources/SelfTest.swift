@@ -12,6 +12,11 @@ enum HandsSelfTest {
     let us = Keys.us
 
     // Keys, read as Nova Eyes presses them.
+    // Who may use Nova Eyes: its parent-process lookup, and a requirement nothing here meets.
+    check("parent of this process", CallerLock.parentPid(of: getpid()) == getppid())
+    check("a pid that isn't running has no parent", CallerLock.parentPid(of: 999_999) == 0)
+    check("Nova.app's requirement names its id and team", CallerLock.requirement(team: "AB12CD34EF") == "identifier \"dev.nova.app\" and anchor apple generic and certificate leaf[subject.OU] = \"AB12CD34EF\"")
+    check("a process that isn't Nova.app doesn't pass", !CallerLock.satisfies(pid: getpid(), requirement: CallerLock.requirement(team: "AB12CD34EF")))
     check("cmd+shift+t", Keys.parse("cmd+shift+t", layout: us) == KeyCombo(code: 17, flags: [.maskCommand, .maskShift]))
     check("Command+L", Keys.parse("Command+L", layout: us) == KeyCombo(code: 37, flags: [.maskCommand]))
     check("return", Keys.parse("return", layout: us) == KeyCombo(code: 36, flags: []))

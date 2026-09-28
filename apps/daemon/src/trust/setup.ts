@@ -20,6 +20,7 @@ export interface SetupInput {
   projects: { name: string; git: boolean }[];
   screen: SettingsSnapshot['screen'];
   hands?: SettingsSnapshot['hands'];
+  signing?: SettingsSnapshot['signing'];
 }
 
 const ACCESS: Record<string, string> = { granted: 'allowed', denied: 'not allowed', undetermined: 'not asked yet', restricted: 'restricted' };
@@ -109,6 +110,26 @@ export function setupSteps(input: SetupInput): SetupStep[] {
         : 'Not installed. It listens with echo cancellation, has the orb and the shortcut, and opens at login.',
     fix: app || input.appInstalled ? { section: 'presence' } : { command: 'npm run app', section: 'presence' },
   });
+  const signing = input.signing;
+  if (signing) {
+    // Built but not signed with the user's certificate (or not hardened): the next build signs it.
+    const behind = signing.apps.filter((a) => a.signed !== 'not built' && (a.signed !== 'yours' || !a.hardened));
+    const soon = signing.expires !== null && signing.expires - Date.now() < 30 * 86_400_000;
+    steps.push({
+      id: 'signing',
+      label: 'Permissions that survive rebuilds',
+      done: !signing.adHoc && behind.length === 0 && !soon,
+      optional: signing.adHoc,
+      detail: signing.adHoc
+        ? 'Nova is signed for this Mac alone, so macOS asks for the microphone, the screen and Accessibility again after every rebuild. Sign in to Xcode (Settings → Accounts) - it makes a free Apple Development certificate - then run npm run app.'
+        : behind.length
+          ? `Your certificate is here (${signing.identity}), but ${list(behind.map((a) => a.name))} ${behind.length === 1 ? "isn't" : "aren't"} signed with it yet: run npm run app - Nova Eyes and the hearing helper follow by themselves. macOS asks for each permission one last time.`
+          : soon
+            ? `${signing.identity} - it runs out soon: renew it in Xcode (Settings → Accounts), then run npm run app. What macOS allows Nova stays.`
+            : `Signed as ${signing.identity}, hardened: what macOS allows Nova survives rebuilds, and Nova Eyes answers only the daemon Nova.app runs.`,
+      fix: signing.adHoc || behind.length || soon ? { command: 'npm run app', section: 'system' } : { section: 'system' },
+    });
+  }
   const access = app?.access;
   steps.push({
     id: 'permissions',

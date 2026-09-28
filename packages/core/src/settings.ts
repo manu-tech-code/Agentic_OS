@@ -558,7 +558,7 @@ export const FIELDS: SettingField[] = [
     key: 'presence.daemon',
     section: 'presence',
     label: "Who runs Nova's daemon",
-    help: 'Nova.app starts the daemon for you and starts it again if it stops. Choose the terminal while you work on Nova itself (npm run dev).',
+    help: "Nova.app starts the daemon for you and starts it again if it stops. Choose the terminal while you work on Nova itself (npm run dev) - but when Nova is signed with your certificate, Nova Eyes (the screen and Nova's hands) answers only the daemon Nova.app runs.",
     type: 'select',
     default: 'app',
     options: [
@@ -1009,6 +1009,19 @@ export interface SettingsSnapshot {
     tasks: TaskRecord[];
     /** Right now: whether the user is away or on a call, and how much news is waiting for them. */
     moment: { away: boolean; call: boolean; waiting: number };
+  };
+  /**
+   * How Nova's own apps are signed. With the user's Apple certificate, what macOS allows them survives
+   * rebuilds and Nova Eyes answers only the daemon Nova.app runs; ad hoc, macOS asks again after each rebuild.
+   */
+  signing: {
+    /** "Apple Development: … (team AB12CD34EF), until 17 September 2027", or the ad hoc warning. */
+    identity: string;
+    team: string | null;
+    expires: number | null;
+    adHoc: boolean;
+    /** Each app as it's signed now: with that certificate ("yours"), ad hoc, by something else, or not built yet. */
+    apps: { name: string; signed: 'yours' | 'ad hoc' | 'other' | 'not built'; hardened: boolean }[];
   };
   /** Nova Eyes: whether it runs, what macOS lets it do, and why not. */
   screen: { available: boolean; running: boolean; permissions: { accessibility: boolean; screen: boolean } | null; message?: string };

@@ -6,6 +6,10 @@ import type { CustomAgentSpec } from './agents/presets.ts';
 import { DEFAULT_PROJECTS_FOLDER, ENV_FILE, settingsFile, settingsInEnv, type Config, type Env, type Settings } from './config.ts';
 import { modelResolver } from './models.ts';
 import type { ReflexRuntime } from './reflex/runtime.ts';
+import { helperBinary } from './hearing/build.ts';
+import { eyesApp } from './screen/eyes.ts';
+import { APP } from './shell/install.ts';
+import { currentIdentity, signingStatus } from './shell/signing.ts';
 import { privacyFlows, setupSteps } from './trust/index.ts';
 
 /** The values in effect, which of them are saved in the settings file, and whether each secret is set - never its value. */
@@ -62,6 +66,19 @@ async function inGit(path: string): Promise<boolean> {
   return git;
 }
 
+let signingCache: { at: number; value: SettingsSnapshot['signing'] } | null = null;
+/** How Nova's apps are signed now - asked of codesign at most once a minute. */
+async function signing(): Promise<SettingsSnapshot['signing']> {
+  if (signingCache && Date.now() - signingCache.at < 60_000) return signingCache.value;
+  const value = await signingStatus(await currentIdentity(), [
+    { name: 'Nova.app', path: APP },
+    { name: 'Nova Eyes', path: eyesApp() },
+    { name: 'the hearing helper', path: helperBinary },
+  ]);
+  signingCache = { at: Date.now(), value };
+  return value;
+}
+
 /** What the Setup and Privacy & trust pages need besides the rest. */
 export interface TrustSnapshotInput {
   onboarded: boolean;
@@ -109,8 +126,10 @@ export async function buildSnapshot(
   const installed = agents.filter((a) => a.path);
   const reflexInstalled = Boolean(reflex.model) || reflex.status.installed;
   const projectList = [...projects].map(([name, path]) => ({ name, path }));
+  const signed = await signing();
   const setup = setupSteps({
     config,
+    signing: signed,
     reflex: { installed: reflexInstalled, learned: reflex.model?.learned.length ?? reflex.status.learned, label: reflex.status.label },
     voice,
     hearing,
@@ -151,6 +170,7 @@ export async function buildSnapshot(
     memory,
     screen,
     hands,
+    signing: signed,
     presence,
     initiative,
     setup: { onboarded: trust.onboarded, steps: setup },

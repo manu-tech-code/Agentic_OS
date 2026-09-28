@@ -62,7 +62,10 @@ final class DaemonHost {
     rotateLog()
     let process = Process()
     process.executableURL = URL(fileURLWithPath: node())
-    process.arguments = ["\(config.repo)/node_modules/tsx/dist/cli.mjs", "src/server.ts"]
+    // tsx's loader inside this one node process - not its command-line wrapper, which would start another:
+    // the daemon must be Nova.app's own child, since that's what Nova Eyes checks before it answers.
+    let tsx = "\(config.repo)/node_modules/tsx/dist"
+    process.arguments = ["--require", "\(tsx)/preflight.cjs", "--import", URL(fileURLWithPath: "\(tsx)/loader.mjs").absoluteString, "src/server.ts"]
     process.currentDirectoryURL = URL(fileURLWithPath: "\(config.repo)/apps/daemon")
     var environment = ProcessInfo.processInfo.environment
     environment["PATH"] = config.path
