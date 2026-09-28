@@ -627,7 +627,7 @@ export default function App() {
         </AnimatePresence>
       </div>
       <div className="side side--right">
-        <Cards cards={state.cards} onDismiss={dismiss} onAnswer={(t) => typed(t)} />
+        <Cards cards={state.cards} closeAfter={state.ui.cardSeconds ?? 8} onDismiss={dismiss} onAnswer={(t) => typed(t)} />
         <AnimatePresence>
           {showInspector && <Inspector trace={state.decision} engine={state.engine} wakeWord={titleCase(state.wakeWords[0] ?? state.name)} />}
         </AnimatePresence>

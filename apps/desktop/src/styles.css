@@ -211,6 +211,11 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .card__countdown { font-family: var(--mono); font-size: 30px; font-weight: 600; margin-top: 4px; letter-spacing: -0.02em; }
 .card__actions { display: flex; gap: 8px; margin-top: 10px; }
 .card__close { position: absolute; top: 8px; right: 10px; border: 0; background: none; color: var(--text-faint); font-size: 18px; line-height: 1; opacity: 0; transition: opacity 0.2s; }
+/* The time a card has left before it closes by itself: it runs down along its foot, and holds while pointed at. */
+.card__life { position: absolute; left: 14px; right: 14px; bottom: 0; height: 2px; border-radius: 2px; background: linear-gradient(90deg, var(--accent), transparent); opacity: 0.55;
+  transform-origin: left; animation: card-life linear forwards; pointer-events: none; }
+.card:hover .card__life { animation-play-state: paused; opacity: 0.9; }
+@keyframes card-life { from { transform: scaleX(1); } to { transform: scaleX(0); } }
 .card:hover .card__close { opacity: 1; }
 
 /* ---------- Inspector ---------- */

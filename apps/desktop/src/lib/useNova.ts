@@ -66,7 +66,7 @@ const initial: NovaState = {
   agents: [],
   projects: [],
   hello: false,
-  ui: { autoListen: true, rate: 1.05, lang: 'en-US', orb: { style: 'particles', colors: 'nova', motion: 'lively', size: 100, floatingSize: 100 }, textSize: 100 },
+  ui: { autoListen: true, rate: 1.05, lang: 'en-US', orb: { style: 'particles', colors: 'nova', motion: 'lively', size: 100, floatingSize: 100 }, textSize: 100, cardSeconds: 8 },
   hearing: { engine: 'browser', state: 'ready' },
   transcript: null,
   bargeIn: 0,

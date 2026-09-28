@@ -229,7 +229,7 @@ describe('live settings', () => {
     await nova.handle('computer open slack');
     expect(opened).toEqual([]); // "computer" isn't a wake word yet
 
-    nova.reconfigure({ wakeWords: ['computer'], requireWakeWord: true, ui: { autoListen: false, rate: 1.2, lang: 'en-GB', orb: { style: 'particles', colors: 'ember', motion: 'calm', size: 120, floatingSize: 150 }, textSize: 125 } });
+    nova.reconfigure({ wakeWords: ['computer'], requireWakeWord: true, ui: { autoListen: false, rate: 1.2, lang: 'en-GB', orb: { style: 'particles', colors: 'ember', motion: 'calm', size: 120, floatingSize: 150 }, textSize: 125, cardSeconds: 15 } });
     await nova.handle('computer open slack');
     expect(opened).toEqual(['Slack']);
     expect(nova.hello()).toMatchObject({ wakeWords: ['computer'], ui: { rate: 1.2, lang: 'en-GB' } });
