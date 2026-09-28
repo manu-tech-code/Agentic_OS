@@ -96,6 +96,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     hudPage.onMessage = { [weak self] in self?.fromPage($0) }
     hudPage.onLoad = { [weak self] in self?.pushState(force: true) }
     hud = HudPanel(web: hudPage.view)
+    hud.onHover = { [weak self] on in self?.hudPage.call("hover", on) }
     hud.title = name
 
     // What Settings said last time, so the microphone behaves correctly from this moment - not
@@ -562,7 +563,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     switch message["type"] as? String {
     case "hud":
       let number = { (key: String) in CGFloat((message[key] as? NSNumber)?.doubleValue ?? 64) }
-      hud.show(message["state"] as? String ?? "hidden", width: number("width"), height: number("height"))
+      hud.show(message["state"] as? String ?? "hidden", width: number("width"), height: number("height"), live: message["live"] as? Bool ?? false)
     case "expand": openWindow()
     case "talk": talkNow()
     case "mute": setMuted(message["on"] as? Bool ?? true)

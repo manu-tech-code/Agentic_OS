@@ -163,6 +163,8 @@ export function loadConfig(settings: Settings, env: Env) {
       style: text('appearance.orbStyle') as UiPrefs['orb']['style'],
       colors: text('appearance.orbColors') as UiPrefs['orb']['colors'],
       motion: text('appearance.orbMotion') as UiPrefs['orb']['motion'],
+      size: num('appearance.orbSize'),
+      floatingSize: num('appearance.floatingOrbSize'),
     },
   };
   return {

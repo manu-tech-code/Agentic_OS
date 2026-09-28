@@ -63,6 +63,15 @@ describe('shortcuts', () => {
     expect(settingProblem('presence.orbSeconds', 1)).toMatch(/at least 2/);
     expect(settingProblem('presence.daemon', 'terminal')).toBeNull();
   });
+
+  it("sizes the orbs within their sliders' ranges", () => {
+    expect(defaultOf('appearance.orbSize')).toBe(100);
+    expect(defaultOf('appearance.floatingOrbSize')).toBe(100);
+    expect(settingProblem('appearance.orbSize', 150)).toBeNull();
+    expect(settingProblem('appearance.orbSize', 250)).toMatch(/at most 200/);
+    expect(settingProblem('appearance.floatingOrbSize', 50)).toMatch(/at least 75/);
+    expect(settingProblem('appearance.floatingOrbSize', '120')).toMatch(/should be a number/);
+  });
 });
 
 function fakeClock() {

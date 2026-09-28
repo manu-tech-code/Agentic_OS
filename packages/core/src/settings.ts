@@ -171,7 +171,7 @@ export const SECTIONS: { id: SettingsSection; label: string; icon: string; blurb
   { id: 'system', label: 'System', icon: '⚙︎', blurb: 'Where settings are kept, and the constants that live in .env.' },
 ];
 
-export type FieldType = 'text' | 'list' | 'number' | 'toggle' | 'select' | 'model' | 'path' | 'kokoro-voice' | 'language' | 'shortcut' | 'time';
+export type FieldType = 'text' | 'list' | 'number' | 'slider' | 'toggle' | 'select' | 'model' | 'path' | 'kokoro-voice' | 'language' | 'shortcut' | 'time';
 
 export interface SettingField {
   /** Where the value lives in the settings file, e.g. "voice.wakeWords". */
@@ -645,6 +645,30 @@ export const FIELDS: SettingField[] = [
     ],
     when: { key: 'appearance.orbStyle', is: ['particles'] },
   },
+  {
+    key: 'appearance.orbSize',
+    section: 'appearance',
+    label: 'Orb size in the window',
+    help: 'Or resize the Orb right there: pinch it, hold ⌥ and scroll over it, or drag the handle that shows when you point at it.',
+    type: 'slider',
+    default: 100,
+    unit: '%',
+    min: 50,
+    max: 200,
+    step: 5,
+  },
+  {
+    key: 'appearance.floatingOrbSize',
+    section: 'appearance',
+    label: 'Floating orb size',
+    help: 'The orb over your other apps. While it shows, pinch it, hold ⌥ and scroll over it, or drag its handle.',
+    type: 'slider',
+    default: 100,
+    unit: '%',
+    min: 75,
+    max: 300,
+    step: 5,
+  },
 
   {
     key: 'decisions.engine',
@@ -829,6 +853,7 @@ function fieldProblem(field: SettingField, v: unknown): string | null {
     case 'toggle':
       return typeof v === 'boolean' ? null : 'should be true or false';
     case 'number':
+    case 'slider':
       if (typeof v !== 'number' || !Number.isFinite(v)) return 'should be a number';
       if (field.min !== undefined && v < field.min) return `should be at least ${field.min}`;
       if (field.max !== undefined && v > field.max) return `should be at most ${field.max}`;

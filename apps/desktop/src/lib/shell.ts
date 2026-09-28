@@ -47,7 +47,7 @@ export function daemonUrl(fallback: string) {
 /** What the page tells the app. */
 export type ToApp =
   /** The orb's content: nothing (hide it), just the orb, or the orb with words; and how big it is. */
-  | { type: 'hud'; state: 'hidden' | 'orb' | 'card'; width: number; height: number }
+  | { type: 'hud'; state: 'hidden' | 'orb' | 'card'; width: number; height: number; live?: boolean }
   /** Open the full window (the orb was clicked). */
   | { type: 'expand' }
   /** Listen now, as if the shortcut were tapped. */
@@ -89,6 +89,8 @@ export const appLevel = { current: 0 };
  * fresh page load, so an already-open window is told directly instead. */
 type OpenPanel = 'settings' | 'welcome';
 const openListeners = new Set<(panel: OpenPanel) => void>();
+/** The pointer is over the floating orb: the app says so, since its panel's page doesn't see hover itself. */
+const hoverListeners = new Set<(on: boolean) => void>();
 
 if (inApp) {
   (window as unknown as { novaShell: unknown }).novaShell = {
@@ -102,7 +104,20 @@ if (inApp) {
     open(panel: OpenPanel) {
       for (const l of openListeners) l(panel);
     },
+    hover(on: boolean) {
+      for (const l of hoverListeners) l(on);
+    },
   };
+}
+
+/** Whether the pointer is over the floating orb, as Nova.app tells it. */
+export function useAppHover(): boolean {
+  const [on, setOn] = useState(false);
+  useEffect(() => {
+    hoverListeners.add(setOn);
+    return () => void hoverListeners.delete(setOn);
+  }, []);
+  return on;
 }
 
 /** The app's state, once it has told the page (null elsewhere). */

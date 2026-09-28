@@ -37,6 +37,8 @@ export function OrbPreview({ snapshot }: { snapshot: SettingsSnapshot }) {
     style: 'particles',
     colors: snapshot.values['appearance.orbColors'] as OrbPrefs['colors'],
     motion: snapshot.values['appearance.orbMotion'] as OrbPrefs['motion'],
+    size: 100, // the preview keeps its own size
+    floatingSize: 100,
   };
   if (snapshot.values['appearance.orbStyle'] === 'glass') return null;
   return (

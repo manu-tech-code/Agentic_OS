@@ -117,9 +117,23 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
 /* ---------- Stage & Orb ---------- */
 .stage { position: relative; z-index: 2; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 36px; padding-bottom: 120px; }
-.orb { --level: 0; --size: clamp(180px, 26vmin, 260px); position: relative; width: var(--size); height: var(--size); border: 0; padding: 0; background: none; border-radius: 50%;
+.orb { --level: 0; --size: min(calc(clamp(180px, 26vmin, 260px) * var(--orb-scale, 1)), 72vmin); position: relative; width: var(--size); height: var(--size); border: 0; padding: 0; background: none; border-radius: 50%;
   transform: scale(calc(1 + var(--level) * 0.22)); transition: transform 0.08s linear; -webkit-tap-highlight-color: transparent; }
 .orb:focus-visible { outline: 2px solid var(--accent); outline-offset: 12px; }
+/* The Orb, resizable by hand: pinch it, hold ⌥ and scroll over it, or drag the handle on its rim (shown on hover). */
+.orb-frame { position: relative; display: grid; place-items: center; }
+.orb-frame.is-resizing .orb { transition: none; }
+.orb-handle { position: absolute; right: calc(14.6% - 9px); bottom: calc(14.6% - 9px); z-index: 3; width: 18px; height: 18px; border-radius: 50%;
+  border: 1px solid rgba(255,255,255,0.5); background: rgba(255,255,255,0.14); box-shadow: 0 2px 10px rgba(0,0,0,0.35);
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); cursor: nwse-resize; touch-action: none;
+  opacity: 0; transition: opacity 0.2s, transform 0.2s var(--spring); }
+.orb-handle::after { content: ''; position: absolute; inset: 5px; border-right: 1.5px solid rgba(255,255,255,0.85); border-bottom: 1.5px solid rgba(255,255,255,0.85); border-radius: 0 0 3px 0; }
+.orb-frame:hover .orb-handle, .orb-frame.is-resizing .orb-handle, .orb-handle:focus-visible { opacity: 1; }
+.orb-handle:hover { transform: scale(1.15); }
+.orb-handle:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.orb-frame__size { position: absolute; right: calc(14.6% - 58px); bottom: calc(14.6% - 34px); padding: 2px 8px; border-radius: 999px; font: 600 11.5px var(--mono);
+  color: var(--text); background: var(--glass); border: 1px solid var(--glass-border); pointer-events: none; opacity: 0; transition: opacity 0.2s; }
+.orb-frame.is-resizing .orb-frame__size { opacity: 1; }
 .orb__glow { position: absolute; inset: -40%; border-radius: 50%; background: radial-gradient(circle, var(--a) 0%, transparent 62%);
   filter: blur(30px); opacity: calc(0.45 + var(--level) * 0.9); transition: background 0.8s; }
 .orb__ring { position: absolute; inset: 0; border-radius: 50%; border: 1.5px solid var(--b); }
@@ -289,6 +303,9 @@ button { font: inherit; color: inherit; cursor: pointer; }
 select.setting__input { width: auto; max-width: 320px; }
 .setting__number { display: inline-flex; align-items: center; gap: 6px; }
 .setting__number .setting__input { width: 92px; text-align: right; }
+.setting__slider { display: inline-flex; align-items: center; gap: 10px; }
+.setting__slider input[type='range'] { width: 190px; accent-color: var(--accent); }
+.setting__slider-value { min-width: 46px; text-align: right; font: 500 12.5px var(--mono); color: var(--text-dim); }
 .setting__unit { font-size: 12px; color: var(--text-dim); min-width: 22px; }
 .setting__secret, .setting__inline { display: inline-flex; align-items: center; gap: 8px; }
 .setting__secret .setting__input { width: 200px; }

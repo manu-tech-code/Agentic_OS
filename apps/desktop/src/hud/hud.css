@@ -9,6 +9,7 @@ html.is-hud #root {
 }
 
 .hud {
+  --hud-orb: 48px; /* the orb's size: set from its setting, or as it's resized by hand */
   position: fixed;
   display: flex;
   align-items: flex-start;
@@ -22,12 +23,35 @@ html.is-hud #root {
 .hud--bottom-left { left: 0; bottom: 0; }
 .hud--top-left { left: 0; top: 0; }
 
-.hud--card { width: 360px; padding: 12px 18px 13px 12px; }
+.hud--card { width: calc(312px + var(--hud-orb)); padding: 12px 18px 13px 12px; }
 .hud--orb,
-.hud--hidden { width: 64px; height: 64px; padding: 8px; }
+.hud--hidden { width: calc(var(--hud-orb) + 16px); height: calc(var(--hud-orb) + 16px); padding: 8px; }
 
-.hud__orb { position: relative; flex: none; width: 48px; height: 48px; }
-.hud .orb { --size: 48px; }
+.hud__orb { position: relative; flex: none; width: var(--hud-orb); height: var(--hud-orb); }
+.hud .orb { --size: var(--hud-orb); }
+.hud.is-resizing .orb { transition: none; }
+
+/* The resize handle, on the orb's side away from its corner: dragging it outward grows the orb into the screen.
+   Nova.app says when the pointer is over the orb (is-hovered) - the panel's page can't tell by itself. */
+.hud__handle {
+  position: absolute;
+  z-index: 2;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  background: rgba(255, 255, 255, 0.16);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.4);
+  touch-action: none;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.hud.is-hovered .hud__handle,
+.hud.is-resizing .hud__handle { opacity: 1; }
+.hud--bottom-right .hud__handle { left: -4px; top: -4px; cursor: nwse-resize; }
+.hud--top-right .hud__handle { left: -4px; bottom: -4px; cursor: nesw-resize; }
+.hud--bottom-left .hud__handle { right: -4px; top: -4px; cursor: nesw-resize; }
+.hud--top-left .hud__handle { right: -4px; bottom: -4px; cursor: nwse-resize; }
 .hud .particle-orb { inset: -30%; }
 .hud .orb__glow { filter: blur(12px); }
 

@@ -7,6 +7,9 @@ import WebKit
 /// the screen your pointer was on when it appeared. It stays out of screenshots and screen shares.
 final class HudPanel: NSPanel {
   var corner = "bottom-right"
+  /// The pointer came over the orb, or left it: the page shows its resize handle then. A panel that never
+  /// becomes key, of an app that's rarely the active one, doesn't see hover in its page by itself.
+  var onHover: (Bool) -> Void = { _ in }
   private let glass = NSVisualEffectView()
   private var mode = "hidden"
   private var screenShown: NSScreen?
@@ -30,13 +33,18 @@ final class HudPanel: NSPanel {
     web.frame = glass.bounds
     web.autoresizingMask = [.width, .height]
     glass.addSubview(web)
+    glass.addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil))
   }
+
+  override func mouseEntered(with event: NSEvent) { onHover(true) }
+  override func mouseExited(with event: NSEvent) { onHover(false) }
 
   override var canBecomeKey: Bool { false }
   override var canBecomeMain: Bool { false }
 
-  /// What the page shows: nothing, the orb alone, or the orb with words - and its size.
-  func show(_ mode: String, width: CGFloat, height: CGFloat) {
+  /// What the page shows: nothing, the orb alone, or the orb with words - and its size. `live`: the user is
+  /// resizing the orb by hand, so the panel follows at once instead of a beat behind.
+  func show(_ mode: String, width: CGFloat, height: CGFloat, live: Bool = false) {
     if mode != self.mode { novaLog.notice("orb: \(mode, privacy: .public) \(Int(width))×\(Int(height))") }
     self.mode = mode
     guard mode != "hidden" else { return disappear() }
@@ -50,6 +58,9 @@ final class HudPanel: NSPanel {
       alphaValue = 0
       orderFrontRegardless()
       NSAnimationContext.runAnimationGroup { $0.duration = 0.16; animator().alphaValue = 1 }
+    } else if live {
+      alphaValue = 1
+      setFrame(place(size), display: true)
     } else {
       alphaValue = 1
       NSAnimationContext.runAnimationGroup { context in

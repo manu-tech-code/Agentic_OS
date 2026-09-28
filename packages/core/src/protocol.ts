@@ -13,6 +13,10 @@ export interface OrbPrefs {
   style: 'particles' | 'glass';
   colors: 'nova' | 'aurora' | 'ember' | 'ice';
   motion: 'lively' | 'calm' | 'still';
+  /** How big the Orb is in Nova's window, as a percent of its usual size (Settings → Appearance, or pinched). */
+  size: number;
+  /** How big the floating orb over other apps is, as a percent of its usual 48 points. */
+  floatingSize: number;
 }
 
 /** Preferences the shell applies itself (browser speech APIs, looks), set in Settings. */

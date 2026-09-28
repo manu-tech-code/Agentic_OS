@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { SettingValue } from '@nova/core/settings';
 
 /** Keys are settings-file paths; null resets one to its default. */
@@ -40,6 +40,59 @@ export function TextInput({
       onBlur={() => draft.trim() !== value && onSave(draft.trim())}
       onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
     />
+  );
+}
+
+/** A value on a slider, shown as it moves and saved when it's let go (or on each arrow key). */
+export function SliderInput({
+  value,
+  onSave,
+  unit,
+  min = 0,
+  max = 100,
+  step = 1,
+  label,
+}: {
+  value: number;
+  onSave: (value: number) => void;
+  unit?: string;
+  min?: number;
+  max?: number;
+  step?: number;
+  label?: string;
+}) {
+  const [draft, setDraft] = useState(value);
+  const sent = useRef<number | null>(null);
+  useEffect(() => {
+    setDraft(value);
+    sent.current = null;
+  }, [value]);
+  const commit = (e: { currentTarget: HTMLInputElement }) => {
+    const n = Number(e.currentTarget.value);
+    if (!Number.isFinite(n) || n === value || n === sent.current) return;
+    sent.current = n;
+    onSave(n);
+  };
+  return (
+    <span className="setting__slider">
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={draft}
+        aria-label={label}
+        aria-valuetext={`${draft}${unit ?? ''}`}
+        onChange={(e) => setDraft(Number(e.target.value))}
+        onPointerUp={commit}
+        onKeyUp={commit}
+        onBlur={commit}
+      />
+      <output className="setting__slider-value">
+        {draft}
+        {unit}
+      </output>
+    </span>
   );
 }
 
