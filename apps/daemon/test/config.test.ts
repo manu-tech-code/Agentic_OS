@@ -15,7 +15,7 @@ describe('config: the settings file, plus constants from .env', () => {
     expect(c.wakeWords).toEqual(['hey nova', 'okay nova', 'nova']);
     expect(c.followUpMs).toBe(30_000);
     expect(c.agents).toBeNull(); // every installed agent
-    expect(c.ui).toEqual({ autoListen: true, rate: 1.05, lang: 'en-US', orb: { style: 'particles', colors: 'nova', motion: 'lively', size: 100, floatingSize: 100 } });
+    expect(c.ui).toEqual({ autoListen: true, rate: 1.05, lang: 'en-US', orb: { style: 'particles', colors: 'nova', motion: 'lively', size: 100, floatingSize: 100 }, textSize: 100 });
     expect(c.warnings).toEqual([]);
   });
 

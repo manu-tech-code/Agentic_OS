@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type RefObject } from 'react';
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type RefObject } from 'react';
 import { FIELDS } from '@nova/core/settings';
 
 /**
@@ -53,6 +53,57 @@ export function keySize(size: number, key: string, range: SizeRange): number | n
   if (key === 'Home') return range.min;
   if (key === 'End') return range.max;
   return null;
+}
+
+/** ⌘+, ⌘− and ⌘0, as in a browser: a step bigger or smaller, or back to normal (100%). Null for any other key. */
+export function zoomKeySize(size: number, key: string, range: SizeRange, step = 10): number | null {
+  if (key === '=' || key === '+') return snapSize(size + step, range);
+  if (key === '-' || key === '_') return snapSize(size - step, range);
+  if (key === '0') return clampSize(100, range);
+  return null;
+}
+
+/**
+ * A setting changed from the page (⌘+, say): shown at once, saved once the changes stop - several presses in a row
+ * save once - and given back to the saved value when that comes back, or after a few seconds if it never does.
+ */
+export function useLiveSetting(saved: number, save: (value: number) => void, delay = 500) {
+  const [live, setLive] = useState<number | null>(null);
+  const liveRef = useRef<number | null>(null);
+  const savedRef = useRef(saved);
+  savedRef.current = saved;
+  const saveRef = useRef(save);
+  saveRef.current = save;
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const settle = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const clear = () => {
+    liveRef.current = null;
+    setLive(null);
+  };
+
+  useEffect(() => {
+    if (liveRef.current !== null && liveRef.current === saved) {
+      clearTimeout(settle.current);
+      clear();
+    }
+  }, [saved]);
+  useEffect(() => () => (clearTimeout(timer.current), clearTimeout(settle.current)), []);
+
+  const set = useCallback(
+    (value: number) => {
+      liveRef.current = value;
+      setLive(value);
+      clearTimeout(timer.current);
+      clearTimeout(settle.current);
+      timer.current = setTimeout(() => {
+        if (value === savedRef.current) return clear();
+        saveRef.current(value);
+        settle.current = setTimeout(clear, 4000);
+      }, delay);
+    },
+    [delay],
+  );
+  return [live ?? saved, set] as const;
 }
 
 export interface Resizable {

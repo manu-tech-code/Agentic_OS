@@ -1,3 +1,4 @@
+import { parseTextSize, TEXT_SIZE, textSizeAfter } from '../appearance.ts';
 import type { UndoStep } from '../protocol.ts';
 import { spokenDuration } from '../when.ts';
 import { cancelling, cancelOnScreen, cancelPrompt, cancelReminders, cancelTier, reminderText, snoozeReminder, snoozesRecent } from './initiative.ts';
@@ -111,6 +112,32 @@ export const builtinSkills: Skill[] = [
     async run({ shell }) {
       shell.openSettings();
       return { say: 'Here are my settings.', activity: 'Opened settings' };
+    },
+  },
+  {
+    id: 'text_size',
+    summary:
+      'The size of the text the assistant shows - what the user said and its replies, in its window and the floating orb: bigger, smaller, a percent ("150 percent"), back to normal, or how big it is now. Put it in request.',
+    tier: 0,
+    examples: ['make the text bigger', 'make the text smaller', 'text size 150 percent', 'reset the text size', 'bigger font please', "what's the text size"],
+    async run({ utterance, prefs }) {
+      if (!prefs) return { say: "I can't change the text size here - Settings → Appearance can.", activity: 'Text size: not here' };
+      const req = parseTextSize(utterance);
+      if (!req) return { say: 'Bigger, smaller, or a size like 150 percent?', activity: 'Text size: how big' };
+      const now = prefs.get('appearance.textSize');
+      const said = (n: number) => (n === TEXT_SIZE.normal ? 'its normal size' : `${n} percent`);
+      if (req.action === 'query') return { say: `The text is at ${said(now)}.`, data: `${now}%`, activity: 'Checked the text size' };
+      const next = textSizeAfter(now, req);
+      if (next === now) {
+        const edge = req.action === 'bigger' && now >= TEXT_SIZE.max ? " - that's as big as it goes" : req.action === 'smaller' && now <= TEXT_SIZE.min ? " - that's as small as it goes" : '';
+        return { say: `The text is already at ${said(now)}${edge}.`, activity: `Text size: already ${now}%` };
+      }
+      await prefs.set('appearance.textSize', next);
+      return {
+        say: next === TEXT_SIZE.normal ? 'The text is back to its normal size.' : `The text is at ${next} percent now.`,
+        activity: `Text size: ${now}% → ${next}%`,
+        undo: { kind: 'pref-set', key: 'appearance.textSize', value: now },
+      };
     },
   },
   {

@@ -141,7 +141,7 @@ export default function Hud() {
     <div
       ref={setBox}
       className={`hud hud--${mode} hud--${corner} ${hovered ? 'is-hovered' : ''} ${orbSize.resizing ? 'is-resizing' : ''}`}
-      style={{ ['--hud-orb' as string]: `${(ORB_PT * orbSize.size) / 100}px` }}
+      style={{ ['--hud-orb' as string]: `${(ORB_PT * orbSize.size) / 100}px`, ['--text-scale' as string]: (state.ui.textSize ?? 100) / 100 }}
       onClick={() => orbSize.justResized() || tellApp({ type: 'expand' })}
       aria-live="polite"
     >

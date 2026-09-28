@@ -26,7 +26,12 @@ export interface UiPrefs {
   rate: number;
   lang: string;
   orb: OrbPrefs;
+  /** What the user said and Nova's replies, in the window and the floating orb: a percent of their usual size. */
+  textSize: number;
 }
+
+/** The preferences a skill may change by voice ("make the text bigger") - these alone, never anything else in Settings. */
+export type PrefKey = 'appearance.textSize';
 
 /** How Nova's Mac app behaves, from Settings → Menu bar. */
 export interface PresenceConfig {
@@ -123,6 +128,8 @@ export type UndoStep =
   | { kind: 'file-untrash'; trashed: string; original: string }
   /** The clipboard as it was before Nova copied something. */
   | { kind: 'clipboard-set'; text: string }
+  /** One of Nova's own looks (the text size) as it was. */
+  | { kind: 'pref-set'; key: PrefKey; value: number }
   | { kind: 'batch'; steps: UndoStep[] };
 
 export interface DecisionTrace {

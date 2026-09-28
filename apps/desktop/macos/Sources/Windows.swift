@@ -50,7 +50,7 @@ final class HudPanel: NSPanel {
     guard mode != "hidden" else { return disappear() }
     // However the page misbehaves (a bug, or a stranger's page it shouldn't have loaded at all), the
     // orb never grows past a small card - never big enough to cover the screen or block what's under it.
-    let size = NSSize(width: HudPanel.clamp(width), height: HudPanel.clamp(height))
+    let size = NSSize(width: HudPanel.clamp(width, max: 640), height: HudPanel.clamp(height))
     glass.maskImage = HudPanel.mask(radius: mode == "orb" ? size.height / 2 : 20)
     if !isVisible {
       screenShown = HudPanel.screenUnderPointer()
@@ -91,8 +91,8 @@ final class HudPanel: NSPanel {
   }
 
   /// However big the page claims to be, never smaller than the collapsed orb or bigger than a card
-  /// comfortably holding a few lines of reply.
-  static func clamp(_ value: CGFloat) -> CGFloat { min(max(40, value), 480) }
+  /// comfortably holding a few lines of reply - a little wider (640) for bigger text and a bigger orb.
+  static func clamp(_ value: CGFloat, max top: CGFloat = 480) -> CGFloat { min(max(40, value), top) }
 
   private static func screenUnderPointer() -> NSScreen? {
     let mouse = NSEvent.mouseLocation

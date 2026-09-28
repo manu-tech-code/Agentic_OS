@@ -223,6 +223,19 @@ describe('undoing', () => {
     expect(d.routines).toEqual({ 'start work': null });
   });
 
+  it('puts the text size back as it was - and says so when it has nothing to change it with', async () => {
+    const d = deps();
+    const set: [string, number][] = [];
+    const withPrefs = new Undoer({ ...(d.undoer as unknown as { deps: ConstructorParameters<typeof Undoer>[0] }).deps, prefs: { get: () => 120, set: async (key, value) => void set.push([key, value]) } });
+    expect(await withPrefs.run({ kind: 'pref-set', key: 'appearance.textSize', value: 100 }, action)).toEqual({ ok: true, message: 'Okay, the text is back to its normal size.' });
+    expect(await withPrefs.run({ kind: 'pref-set', key: 'appearance.textSize', value: 140 }, action)).toEqual({ ok: true, message: 'Okay, the text is back to 140 percent.' });
+    expect(set).toEqual([
+      ['appearance.textSize', 100],
+      ['appearance.textSize', 140],
+    ]);
+    await expect(d.undoer.run({ kind: 'pref-set', key: 'appearance.textSize', value: 100 }, action)).rejects.toThrow(/can't be put back/);
+  });
+
   it("brings back a reminder only while it's still to come", async () => {
     const d = deps();
     const later = { kind: 'reminder-restore', reminder: { text: 'call mum', about: 'to', due: NOW + 3_600_000 } } as UndoStep;

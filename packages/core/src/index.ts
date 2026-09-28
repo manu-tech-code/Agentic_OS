@@ -28,6 +28,7 @@ export { computerBrief, handsSkills, userAsked } from './skills/hands.ts';
 export { actionFrom, computerSkills } from './skills/computer.ts';
 export * from './when.ts';
 export * from './hands.ts';
+export * from './appearance.ts';
 export { buildQuestions, shortlistApps, META_INTENTS } from './brain/questions.ts';
 export { builtinSkills, countdownText, parseDuration, humanDuration } from './skills/builtin.ts';
 export { agentSkills } from './skills/agents.ts';
@@ -46,6 +47,7 @@ export type {
   News,
   NewsService,
   Platform,
+  PrefsService,
   ProjectService,
   Reminder,
   ReminderService,

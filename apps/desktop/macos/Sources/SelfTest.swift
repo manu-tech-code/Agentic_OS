@@ -30,7 +30,7 @@ enum SelfTest {
     check("only http(s) is ever handed to another app", WebHost.isExternal(URL(string: "https://nova.dev")!) && !WebHost.isExternal(URL(string: "file:///etc/passwd")!) && !WebHost.isExternal(URL(string: "javascript:alert(1)")!))
 
     // The HUD never grows past a small card, however the page misbehaves.
-    check("the HUD size is clamped", HudPanel.clamp(5000) == 480 && HudPanel.clamp(4) == 40 && HudPanel.clamp(200) == 200)
+    check("the HUD size is clamped", HudPanel.clamp(5000) == 480 && HudPanel.clamp(4) == 40 && HudPanel.clamp(200) == 200 && HudPanel.clamp(5000, max: 640) == 640)
 
     // The microphone: five 20 ms blocks at 48 kHz become 1600 samples at 16 kHz, just as loud.
     let mono = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 1, interleaved: false)!

@@ -65,6 +65,15 @@ export const REFLEX_GRAMMAR: Record<string, string[]> = {
     '$pre [lock|lock up] [the screen|my screen|the mac|my mac|the computer|the laptop|the macbook] [|now|please|for me|right now]',
     '$pre [put|send] [the mac|my mac|the computer|the laptop|the macbook] to sleep [|now|please|for me]',
   ],
+  text_size: [
+    '$pre [make|get|turn|set|put] [the text|the font|the writing|the words|the letters|the captions|the transcript|your text|your words|the subtitles] [bigger|smaller|larger|a bit bigger|a bit smaller|a lot bigger|a lot smaller|a little bigger|a little smaller|easier to read|more readable|big|small|huge|tiny] $post',
+    '$pre [increase|decrease|reduce|enlarge|shrink|bump up|knock down|scale up|scale down|turn up|turn down] [the text size|the font size|the text|the font|the caption size|the size of the text|the size of the words] [|a bit|a little|a lot|a notch] $post',
+    '$pre [set|put|change|make] [the text size|the font size|the text|the font] [to|at] [80|90|110|120|125|130|140|150|160|175|180|200|a hundred and fifty|a hundred and twenty] [percent|per cent|%] $post',
+    '$pre [reset|restore] [the text size|the font size|the text|the font] [|to normal|to the default|back to normal] $post',
+    '$pre [make|put|set] [the text|the font|the text size] [back to normal|normal again|the default size|its normal size|the usual size] $post',
+    "$ask [the text|the font|the writing|the words|the captions|your text] [is|are|looks|seems] [too small|too big|tiny|hard to read|too large|way too small]",
+    "$ask [what's|what is|how big is|what size is] [the text|the font|the text size|the font size] [|right now|at the moment|set to]",
+  ],
   media_control: [
     '$pre [pause|stop|resume|unpause|restart|continue] [the music|the song|the track|spotify|the podcast|playback|the album|the playlist|the audiobook|what is playing] $post',
     '$pre [skip|skip past|jump past] [this song|this track|this one|the song|the track|ahead] [|please|for me|i hate it|now]',
