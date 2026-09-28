@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { ClientEvent } from '@nova/core/protocol';
 import { personalize, type SettingsSnapshot } from '@nova/core/settings';
-import type { Save } from './Controls';
+import { Info, type Save } from './Controls';
 
 type Props = { snapshot: SettingsSnapshot; name: string; onSave: Save; onAction: (event: ClientEvent) => void };
 
@@ -52,14 +52,9 @@ export function HandsPanel({ snapshot, name, onSave, onAction }: Props) {
       <div className="tile">
         <div className="tile__head">
           <strong>What macOS lets {name} do</strong>
+          <Info label="What macOS lets {name} do" text={personalize("Nova's hands work through Nova Eyes, a small background app that macOS asks you about by name. Anything that changes something is asked about out loud first, unless you asked for it yourself - and \"stop everything\" (⌃⌥⌘.) halts it at once.", name)} />
           {hands.active && <span className="chip chip--accent">using the computer now</span>}
         </div>
-        <span className="muted">
-          {personalize(
-            "Nova's hands work through Nova Eyes, a small background app that macOS asks you about by name. Anything that changes something is asked about out loud first, unless you asked for it yourself - and \"stop everything\" (⌃⌥⌘.) halts it at once.",
-            name,
-          )}
-        </span>
         {!p ? (
           <div className="tile__head">
             <span className="muted">{snapshot.screen.message ?? "Nova Eyes isn't running yet."}</span>

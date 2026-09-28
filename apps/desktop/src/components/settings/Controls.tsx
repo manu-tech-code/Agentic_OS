@@ -1,5 +1,46 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import type { SettingValue } from '@nova/core/settings';
+
+/**
+ * An (i) beside a label, with its description behind it: shown while the pointer is over it or it has the keyboard's
+ * focus, and kept open by a click - until another click (anywhere else, or on it) or Escape.
+ */
+export function Info({ text, label }: { text: ReactNode; label: string }) {
+  const [pinned, setPinned] = useState(false);
+  const id = useId();
+  const box = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!pinned) return;
+    const key = (e: KeyboardEvent) => e.key === 'Escape' && setPinned(false);
+    const away = (e: PointerEvent) => !box.current?.contains(e.target as Node) && setPinned(false);
+    window.addEventListener('keydown', key);
+    window.addEventListener('pointerdown', away);
+    return () => {
+      window.removeEventListener('keydown', key);
+      window.removeEventListener('pointerdown', away);
+    };
+  }, [pinned]);
+  return (
+    <span ref={box} className={`info ${pinned ? 'is-pinned' : ''}`}>
+      <button
+        type="button"
+        className="info__icon"
+        aria-label={`About ${label}`}
+        aria-describedby={id}
+        aria-expanded={pinned}
+        onClick={(e) => {
+          e.stopPropagation();
+          setPinned((p) => !p);
+        }}
+      >
+        i
+      </button>
+      <span role="tooltip" id={id} className="info__tip">
+        {text}
+      </span>
+    </span>
+  );
+}
 
 /** Keys are settings-file paths; null resets one to its default. */
 export type Save = (changes: Record<string, SettingValue | null>) => void;

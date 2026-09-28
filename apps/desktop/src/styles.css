@@ -300,6 +300,19 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .setting__text { min-width: 0; flex: 1; }
 .setting__label { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
 .setting__help { margin-top: 3px; font-size: 12px; color: var(--text-faint); line-height: 1.45; }
+/* A description behind an (i) beside its label: on hover or focus, and pinned open by a click. */
+.info { position: relative; display: inline-flex; align-items: center; flex: none; font-weight: 400; }
+.info__icon { width: 16px; height: 16px; padding: 0; display: grid; place-items: center; border-radius: 50%; border: 1px solid var(--glass-border);
+  background: rgba(255,255,255,0.06); color: var(--text-dim); font: italic 700 10.5px/1 Georgia, 'Times New Roman', serif; cursor: help; transition: background 0.15s, color 0.15s; }
+.info__icon:hover, .info.is-pinned .info__icon { background: rgba(255,255,255,0.16); color: var(--text); }
+.info__icon:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.info__tip { position: absolute; left: -9px; top: calc(100% + 8px); z-index: 40; width: max-content; max-width: min(340px, 70vw); padding: 9px 12px; border-radius: 10px;
+  font: 400 12.5px/1.45 var(--font); color: var(--text); text-align: left; white-space: normal; letter-spacing: normal; text-transform: none;
+  background: var(--glass-strong); border: 1px solid var(--glass-border); box-shadow: var(--shadow); backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur);
+  opacity: 0; visibility: hidden; transform: translateY(-3px); pointer-events: none; transition: opacity 0.15s ease 0.1s, transform 0.15s ease 0.1s, visibility 0s linear 0.25s; }
+.info__tip code { font-size: 11.5px; }
+.info:hover .info__tip, .info__icon:focus-visible + .info__tip, .info.is-pinned .info__tip { opacity: 1; visibility: visible; transform: none; pointer-events: auto; transition-delay: 0.1s, 0.1s, 0s; }
+@media (prefers-color-scheme: light) { .info__icon { background: rgba(0,0,0,0.04); border-color: rgba(0,0,0,0.16); } .info__icon:hover, .info.is-pinned .info__icon { background: rgba(0,0,0,0.1); } }
 .setting__control { display: flex; align-items: center; gap: 8px; flex: none; }
 .setting__input { font: 400 13px var(--font); color: var(--text); background: rgba(0,0,0,0.18); border: 1px solid var(--glass-border); border-radius: 8px; padding: 7px 10px; outline: none; width: 260px; transition: border-color 0.15s, box-shadow 0.15s; }
 .setting__input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(106,168,255,0.25); }
