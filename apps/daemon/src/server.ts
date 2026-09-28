@@ -845,7 +845,11 @@ wss.on('connection', (ws, req) => {
           });
           await voiceId.refresh();
           message = 'Voice ID is ready to learn your voice.';
-        } else if (event.action === 'enroll') message = await voiceId.start();
+        } else if (event.action === 'enroll') {
+          // Voiceprints come from Nova's own hearing: a browser's speech recognition never passes the voice on.
+          if (hearing!.status.engine === 'browser') throw new Error("Voice ID needs Nova's own hearing - Nova.app, or Settings → Hearing on Apple or Parakeet.");
+          message = await voiceId.start();
+        }
         else if (event.action === 'cancel') (voiceId.cancel(), (message = 'Stopped.'));
         else (await voiceId.forget(), await saveSettings({ 'voiceId.enabled': false }), (message = 'Your voiceprint is gone.'));
         broadcastSnapshot();

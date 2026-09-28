@@ -113,6 +113,7 @@ function ModelRow({ name, label, installed, size, busy, onInstall }: { name: str
  */
 export function VoiceIdPanel({ snapshot, name, result, onAction }: ActionProps) {
   const v = snapshot.voiceId;
+  const browser = snapshot.hearing.status.engine === 'browser';
   const [busy, setBusy] = useBusy([v.installed, v.enrolled, v.enrolling?.step], result);
   const act = (action: 'install' | 'enroll' | 'cancel' | 'forget') => (setBusy(true), onAction({ type: 'voiceid', action }));
   return (
@@ -137,7 +138,7 @@ export function VoiceIdPanel({ snapshot, name, result, onAction }: ActionProps) 
           </button>
         )}
         {v.installed && !v.enrolling && (
-          <button type="button" className="btn btn--ghost tile__action" disabled={busy} onClick={() => act('enroll')}>
+          <button type="button" className="btn btn--ghost tile__action" disabled={busy || browser} onClick={() => act('enroll')}>
             {v.enrolled ? 'Learn it again' : 'Set up'}
           </button>
         )}
@@ -158,6 +159,7 @@ export function VoiceIdPanel({ snapshot, name, result, onAction }: ActionProps) 
         </div>
       )}
       {v.message && <span className="muted">{v.message}</span>}
+      {browser && <span className="muted">Voice ID needs Nova's own hearing - Nova.app, or Hearing on Apple or Parakeet: the browser's speech recognition never passes the voice on.</span>}
       <span className="muted">
         {personalize(
           "With Voice ID on, Nova listens to you alone: other voices are ignored, even saying its name, and a TV can't answer its questions. When it can't tell (a very short \"yes\"), it says so - holding the talk shortcut always counts as you. To set it up, read six short phrases where it's quiet. Your voiceprint is made and kept on this Mac, and never leaves it.",
