@@ -209,6 +209,8 @@ export class Eyes implements ScreenService {
   private readonly waiting = new Map<number, (answer: any) => void>();
   private seq = 0;
   private failedAt = 0;
+  /** When Nova Eyes was last started afresh for a Screen Recording grant it may not have seen. */
+  private freshAt = 0;
   /** Nova Eyes said it answers only the daemon Nova.app runs, and this isn't it. */
   private refusedUs = false;
   /** Why it couldn't start, if it couldn't. */
@@ -301,14 +303,22 @@ export class Eyes implements ScreenService {
     if (changed) this.opts.onChange?.();
   }
 
-  private async ask(request: Record<string, unknown>, timeoutMs: number): Promise<any> {
+  private async ask(request: Record<string, unknown>, timeoutMs: number, again = false): Promise<any> {
     const socket = await this.open();
     const id = ++this.seq;
-    return new Promise((resolve) => {
+    const answer = await new Promise<any>((resolve) => {
       const timer = setTimeout(() => (this.waiting.delete(id), resolve({ error: 'Nova Eyes took too long.' })), timeoutMs);
       this.waiting.set(id, (answer) => (clearTimeout(timer), resolve(answer)));
       socket.write(`${JSON.stringify({ ...request, id, skipTitles: this.opts.skipTitles() })}\n`);
     });
+    // macOS applies Screen Recording only to a process started after it was allowed: refused by a Nova Eyes
+    // that may be older than the grant, start a fresh one (once a minute at most) and ask it the same.
+    if (!again && answer?.error === 'screen-permission' && Date.now() - this.freshAt > 60_000) {
+      this.freshAt = Date.now();
+      this.close();
+      return this.ask(request, timeoutMs, true);
+    }
+    return answer;
   }
 
   /** What the user is working in right now (or just before switching to Nova), or null if it can't tell. */

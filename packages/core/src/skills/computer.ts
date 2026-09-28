@@ -1,10 +1,13 @@
+import { weighty } from '../guardian.ts';
 import type { ComputerAction, Skill } from './types.ts';
 
 /**
  * Using the computer, for brains: look at the screen (a picture, and what's on it to click or type
- * in), then click, type, press keys, scroll and drag - one step at a time. Each step that changes
- * something is asked about out loud, with what's about to be clicked shown on screen, unless the
- * user said to go ahead with all of it for this task. Nova Eyes never types into password fields.
+ * in), then click, type, press keys, scroll and drag - one step at a time. A step the user asked for
+ * ("click send", "fill in this form") is done; one they didn't is asked about out loud, with what's
+ * about to be clicked shown on screen, unless they said to go ahead with all of it for this task (or
+ * set Nova to ask first). Money and what can't be taken back ("Place order") are always asked about.
+ * Nova Eyes never types into password fields.
  */
 
 const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v)) ? Number(v) : undefined);
@@ -61,6 +64,8 @@ function step(
     parameters: { properties, required },
     examples: [id.replace(/_/g, ' ')],
     session,
+    // A click on "Place order" or "Pay" is asked about even when the user said to do the task.
+    weighty: (ctx) => weighty(ctx.hands?.computer.describe(actionFrom(kind, ctx.args)) ?? ''),
     preview: (ctx) => ctx.hands?.computer.preview(actionFrom(kind, ctx.args)) ?? Promise.resolve(),
     confirmPrompt: tier >= 2 ? (ctx) => `${ctx.caller ?? 'The brain'} wants to ${ctx.hands?.computer.describe(actionFrom(kind, ctx.args)) ?? kind}. Allow it?` : undefined,
     async run(ctx) {

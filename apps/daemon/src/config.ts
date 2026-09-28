@@ -203,6 +203,8 @@ export function loadConfig(settings: Settings, env: Env) {
       keepDays: text('memory.keepConversations') === 'forever' ? null : Number(text('memory.keepConversations')) || 90,
     },
     screen: { context: values['screen.context'] as boolean, images: values['screen.images'] as boolean },
+    /** Whether Nova asks before doing what the user told it to (Settings → Privacy & trust). */
+    askFirst: values['trust.askFirst'] as boolean,
     /** Nova's hands (Settings → Hands): using the computer, and saved window layouts. */
     hands: {
       computerUse: values['hands.computerUse'] as boolean,

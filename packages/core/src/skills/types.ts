@@ -408,6 +408,11 @@ export interface Skill {
    * so the brain using it doesn't mean the request was just this skill: nothing is learned from it.
    */
   informs?: boolean;
+  /**
+   * Asked about even when the user said to do it: this request spends or moves money, or can't be taken
+   * back (a click on "Place order"). Only ever adds a question - never decided from content to skip one.
+   */
+  weighty?: (ctx: SkillContext) => boolean;
   /** Spoken confirmation prompt for tier >= 2. */
   confirmPrompt?: (ctx: SkillContext) => string;
   /** What Nova says when a request of this skill needs a tap on screen (tier 3): where the user can do it. */

@@ -243,9 +243,16 @@ Nova speaks up by itself now - at the right moment:
 
 ## Trust: undo, "yes, always", the record, privacy
 
-Nova asks before anything risky - and now it can take things back, remember what you let it do, and show you
-everything it did:
+Nova does what you tell it - and it can take things back, remember what you let it do, and show you everything it
+did:
 
+- **Doing what you say**: when you tell Nova to do something - "quit Spotify", "click the Apple TV widget", "run my
+  log water shortcut", "move the invoice to documents" - it does it, once it's sure what you said (a command it may
+  have misheard is asked again, never acted on). It still asks before what you didn't ask for (a brain's own idea,
+  an agent's commands), before a click that spends or moves money or can't be taken back ("Place order", "Pay",
+  "Delete account") - text on a page can only ever add such a question - and paying through a service always needs a
+  tap. To have Nova ask before every change instead: Settings → Privacy & trust → *Ask before doing what you asked
+  for*.
 - **Undo**: "undo that" (or the Undo in the Activity panel, ⌘J) takes back the last thing Nova did: a reminder or
   timer, something it remembered or forgot, a routine, an app it opened (it quits again) or quit (it opens again), the
   project you were on. "Undo what Claude did" takes back that agent's last action. Something from more than an hour
@@ -336,13 +343,14 @@ Nova does what you'd do on the Mac yourself - when you ask, or when a brain or a
 - **Clicking and typing**: your own commands for the app in front - "click send", "type see you at five", "press
   command s", "scroll down".
 - **A whole task on the computer**: "use the computer to book a table", "fill in this form for me". The brain that
-  answers looks at the screen and clicks, types and scrolls one step at a time. Nova asks before each step, with a
-  frame around the button or field it means, or once when you say "go ahead with all of it" - for that task only,
-  never remembered. It holds off while you're using the mouse or keyboard, stops after 60 steps and says what's
+  answers looks at the screen and clicks, types and scrolls one step at a time. What you asked for it just does;
+  a step you didn't ask for - or one that spends money - it asks about first, with a frame around the button or
+  field it means, or once when you say "go ahead with all of it" - for that task only, never remembered. It holds off while you're using the mouse or keyboard, stops after 60 steps and says what's
   left, and the window and the orb show while it's at work. "Stop everything" takes its hands off at once.
 
 The same rules hold whoever asks. You, by voice; brains and agents, as tools, agents at work on a project task
-included. Anything you didn't ask for yourself is asked about first, and so is anything hard to take back. "Undo
+included. What you told Nova to do is done; anything you didn't ask for yourself is asked about first, and so is
+anything that spends money or is hard to take back. "Undo
 that" takes back the volume, the brightness and the other settings, windows moved, a file moved or trashed, or what
 was on the clipboard.
 

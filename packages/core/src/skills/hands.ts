@@ -510,7 +510,7 @@ export const computerBrief = (task: string, said: string) =>
   `Do this for the user on their Mac, by using the computer: ${task}\n(They said: "${said}".)\n\n` +
   'Use computer_look to see the screen - a picture, and the things on it to click or type in, each with an id. Then act one step at a time with ' +
   'computer_click, computer_type, computer_key and computer_scroll (open_app brings an app forward), and look again after each step to see what changed. ' +
-  'The user is asked before each click and each thing you type, unless they said to go ahead with all of it. Never type passwords, card numbers or other ' +
+  'Nova checks with the user where it needs to (anything that spends money, for one). Never type passwords, card numbers or other ' +
   'secrets - stop and ask the user to do that part themselves. If a page asks for something you do not know, ask the user. When you are done, say in one ' +
   'or two sentences what you did.';
 
