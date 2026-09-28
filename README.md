@@ -147,6 +147,11 @@ Settings → Voice → **Voice ID**:
 1. **Install** the model (WeSpeaker v2, 8 MB, from a pinned revision, checked file by file).
 2. **Set up**: read the six short phrases Nova shows, somewhere quiet. It checks each sounds like the others (a
    cough or a TV gets asked again), then switches Voice ID on.
+3. **Test my voice**: say anything, and the panel shows whose voice it sounded like - *That's you*, *Not you* or
+   *Can't tell* (and why) - how closely it matched, on a bar marked with the two thresholds, and what Nova would have
+   done. Have someone else talk, or play a video, to see it tell them apart. While a test runs, nothing said is acted
+   on or learned from; it ends with **Done**, or by itself after a quiet minute. It works with Voice ID switched off,
+   too.
 
 How it works: each finished turn's audio goes, on this Mac, to the hearing helper, which turns it into a voiceprint
 (256 numbers) on the Neural Engine; the daemon compares it with yours (`apps/daemon/src/hearing/voiceid.ts`). Well

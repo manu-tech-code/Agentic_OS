@@ -114,16 +114,16 @@ describe('the hearing service, with a stand-in helper', () => {
   });
 
   /** Voice ID's check, with a hand on it: who it says a turn is, and what it was asked. */
-  function voiceCheck(say: 'you' | 'not-you' | 'unsure', opts: { enrolling?: boolean } = {}) {
+  function voiceCheck(say: 'you' | 'not-you' | 'unsure', opts: { claiming?: boolean } = {}) {
     const asked: { print: number[] | null; seconds: number; learn?: boolean }[] = [];
-    const enrolled: string[] = [];
+    const claimed: string[] = [];
     return {
       asked,
-      enrolled,
+      claimed,
       check: {
         active: () => ({ models: '/models/wespeaker-v2' }),
         decide: (print: number[] | null, seconds: number, o?: { learn?: boolean }) => (asked.push({ print, seconds, learn: o?.learn }), say),
-        enroll: (_p: number[] | null, _s: number, text: string) => (opts.enrolling ? (enrolled.push(text), true) : false),
+        claim: (_p: number[] | null, _s: number, text: string) => (opts.claiming ? (claimed.push(text), true) : false),
       },
     };
   }
@@ -166,9 +166,9 @@ describe('the hearing service, with a stand-in helper', () => {
     hearing.close();
   });
 
-  it('gives setup phrases to Voice ID, never to Nova', async () => {
+  it('gives setup phrases and test turns to Voice ID, never to Nova', async () => {
     const { hearing, utterances, start, quiet, talk, answer } = setup();
-    const voice = voiceCheck('you', { enrolling: true });
+    const voice = voiceCheck('you', { claiming: true });
     hearing.voice = voice.check;
     const helper = start();
     printsWith(hearing, () => [1, 0]);
@@ -177,7 +177,7 @@ describe('the hearing service, with a stand-in helper', () => {
     await vi.advanceTimersByTimeAsync(3000);
     answer(helper, "manuel what's on my calendar today");
     await vi.advanceTimersByTimeAsync(0);
-    expect(voice.enrolled).toEqual(["manuel what's on my calendar today"]);
+    expect(voice.claimed).toEqual(["manuel what's on my calendar today"]);
     expect(utterances).toEqual([]);
     hearing.close();
   });

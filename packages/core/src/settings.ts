@@ -77,6 +77,20 @@ export interface ShellStatus {
 }
 
 /** How Nova hears you right now. */
+/** One thing said while testing Voice ID: whose voice it sounded like, how closely, and what Nova would do. */
+export interface VoiceTestResult {
+  speaker: 'you' | 'not-you' | 'unsure';
+  /** How closely it matched the user's voiceprint (cosine, about 0-1); null when no voiceprint could be made. */
+  score: number | null;
+  seconds: number;
+  heard: string;
+  /** "That's you - Nova would answer." and the like. */
+  verdict: string;
+  /** Why Nova couldn't tell, when it couldn't. */
+  why?: string;
+  at: string;
+}
+
 export interface HearingStatus {
   /** 'browser': the window's own speech recognition. Otherwise the daemon hears the audio the window streams. */
   engine: 'apple' | 'parakeet' | 'browser';
@@ -1048,7 +1062,7 @@ export interface SettingsSnapshot {
     /** Each app as it's signed now: with that certificate ("yours"), ad hoc, by something else, or not built yet. */
     apps: { name: string; signed: 'yours' | 'ad hoc' | 'other' | 'not built'; hardened: boolean }[];
   };
-  /** Voice ID: its model, the user's voiceprint (whether there is one - never the print), and setting it up. */
+  /** Voice ID: its model, the user's voiceprint (whether there is one - never the print), setting it up and testing it. */
   voiceId: {
     installed: boolean;
     label: string;
@@ -1056,6 +1070,10 @@ export interface SettingsSnapshot {
     on: boolean;
     learned: number;
     enrolling: { step: number; of: number; say: string } | null;
+    /** Testing: what each thing said since the test began sounded like, newest first. */
+    testing: { results: VoiceTestResult[] } | null;
+    /** The bars a turn's match (0-1) is judged by: at or above `accept` it's the user, below `reject` it isn't. */
+    bars: { accept: number; reject: number } | null;
     message?: string;
   };
   /** Nova Eyes: whether it runs, what macOS lets it do, and why not. */

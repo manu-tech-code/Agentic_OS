@@ -325,6 +325,10 @@ select.setting__input { width: auto; max-width: 320px; }
 .tile__head .switch { margin-left: auto; }
 .tile__head .chip--accent, .tile__head > .link { margin-left: auto; }
 .tile__head .chip--accent + .switch, .tile__head > .link + .switch { margin-left: 8px; }
+.tile__head > .tile__action + .link { margin-left: 8px; }
+/* A head with several actions: they move under the title rather than squeeze it, each kept on one line. */
+.tile__head--wrap { flex-wrap: wrap; row-gap: 6px; }
+.tile__head--wrap > strong, .tile__head--wrap > .btn, .tile__head--wrap > .link { white-space: nowrap; }
 .tile__glyph { width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; font-weight: 700; background: linear-gradient(160deg, rgba(106,168,255,0.45), rgba(167,139,255,0.25)); flex: none; }
 .tile__title { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .tile__title strong { display: flex; align-items: center; gap: 6px; font-size: 14px; }
@@ -354,6 +358,7 @@ select.setting__input { width: auto; max-width: 320px; }
   .setting__var { background: rgba(0,0,0,0.06); }
   .banner { color: #92400e; }
   .banner--error { color: #b91c1c; }
+  .banner--quiet { color: var(--text-dim); }
 }
 
 /* Integrations */
@@ -417,6 +422,26 @@ select.setting__input { width: auto; max-width: 320px; }
 
 /* ---------- Setup, and Privacy & trust ---------- */
 .dot--warn { background: var(--warn); box-shadow: 0 0 8px var(--warn); }
+.dot--bad { background: var(--bad); box-shadow: 0 0 8px var(--bad); }
+
+/* Voice ID's test: each thing said, and where its match falls between the bars */
+.voice-test { display: grid; gap: 10px; }
+.voice-test__offer { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.voice-test__offer .muted { font-size: 12px; }
+.voice-test__listening { font-size: 12px; animation: voice-test-pulse 1.6s ease-in-out infinite; }
+@keyframes voice-test-pulse { 50% { opacity: 0.45; } }
+.voice-test__row { display: grid; grid-template-columns: auto 1fr; align-items: start; gap: 10px; padding-top: 10px; border-top: 1px solid var(--line, rgba(255,255,255,0.08)); }
+.voice-test__row .dot { margin-top: 5px; }
+.voice-test__text { display: grid; gap: 4px; min-width: 0; }
+.voice-test__text strong { font-size: 13.5px; font-weight: 600; }
+.voice-test__text .muted { font-size: 12px; overflow-wrap: anywhere; }
+.voice-meter { position: relative; height: 8px; margin: 4px 0 2px; border-radius: 999px; background: rgba(255,255,255,0.06); }
+.voice-meter__zone { position: absolute; top: 0; bottom: 0; }
+.voice-meter__zone--not { background: rgba(248,113,113,0.3); border-radius: 999px 0 0 999px; }
+.voice-meter__zone--unsure { background: rgba(251,191,36,0.3); }
+.voice-meter__zone--you { background: rgba(52,211,153,0.34); border-radius: 0 999px 999px 0; }
+.voice-meter__mark { position: absolute; top: -4px; width: 3px; height: 16px; margin-left: -1.5px; border-radius: 2px; background: var(--text); box-shadow: 0 0 6px rgba(0,0,0,0.45); }
+@media (prefers-reduced-motion: reduce) { .voice-test__listening { animation: none; } }
 .setup__bar { height: 6px; border-radius: 999px; background: rgba(255,255,255,0.08); overflow: hidden; }
 .setup__bar span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #5b9dff, var(--ok)); transition: width 0.4s var(--spring); }
 .setup__step { display: grid; grid-template-columns: auto 1fr auto; align-items: start; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line, rgba(255,255,255,0.08)); }

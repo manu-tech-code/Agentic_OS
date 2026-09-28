@@ -40,7 +40,7 @@ const ARMED_AFTER_HOLD_MS = 1500;
 
 /**
  * Voice ID, as hearing uses it: whether to take voiceprints (and with which model), and who a turn's is.
- * While the user sets it up, their turns go to it instead of to Nova.
+ * While the user sets it up or tests it, their turns go to it instead of to Nova.
  */
 export interface VoiceCheck {
   /** The model folder to take voiceprints with, or null when Voice ID is off. */
@@ -50,8 +50,8 @@ export interface VoiceCheck {
    * `learn: false` for a glance at part of a turn (someone talking over Nova), which mustn't teach it.
    */
   decide(print: number[] | null, seconds: number, opts?: { learn?: boolean }): Speaker | undefined;
-  /** Setting up: the turn is a phrase for the voiceprint, not for Nova. True when it took it. */
-  enroll(print: number[] | null, seconds: number, text: string): boolean;
+  /** Setting up or testing Voice ID: the turn is for it, not for Nova. True when it took it. */
+  claim(print: number[] | null, seconds: number, text: string): boolean;
 }
 
 /** Longest Nova waits for a turn's voiceprint before deciding without one (unsure, then). */
@@ -478,8 +478,8 @@ export class Hearing {
     if (!printed) return this.events.utterance(words, explicit);
     void printed.print.then((print) => {
       const voice = this.voice;
-      // Setting up Voice ID: the phrase is for the voiceprint, never a request.
-      if (voice?.enroll(print, printed.seconds, words)) return;
+      // Setting up or testing Voice ID: what's said is for it, never a request.
+      if (voice?.claim(print, printed.seconds, words)) return;
       // Said with the talk shortcut: whoever holds the key down is at this Mac - it counts as the user.
       this.events.utterance(words, explicit, explicit ? undefined : voice?.decide(print, printed.seconds));
     });

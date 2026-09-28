@@ -413,6 +413,7 @@ const voiceId = new VoiceId({
   enabled: () => runtime.config.voiceId.enabled,
   learning: () => runtime.config.voiceId.learn,
   name: () => runtime.config.name,
+  shortcut: () => formatShortcut(runtime.config.presence.shortcut),
   turnOn: () => saveSettings({ 'voiceId.enabled': true }),
   changed: () => snapshotsReady && broadcastSnapshot(),
 });
@@ -847,10 +848,10 @@ wss.on('connection', (ws, req) => {
           });
           await voiceId.refresh();
           message = 'Voice ID is ready to learn your voice.';
-        } else if (event.action === 'enroll') {
+        } else if (event.action === 'enroll' || event.action === 'test') {
           // Voiceprints come from Nova's own hearing: a browser's speech recognition never passes the voice on.
           if (hearing!.status.engine === 'browser') throw new Error("Voice ID needs Nova's own hearing - Nova.app, or Settings → Hearing on Apple or Parakeet.");
-          message = await voiceId.start();
+          message = event.action === 'enroll' ? await voiceId.start() : await voiceId.test();
         }
         else if (event.action === 'cancel') (voiceId.cancel(), (message = 'Stopped.'));
         else (await voiceId.forget(), await saveSettings({ 'voiceId.enabled': false }), (message = 'Your voiceprint is gone.'));

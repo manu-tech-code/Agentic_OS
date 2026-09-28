@@ -170,6 +170,59 @@ describe('Voice ID, set up and at work', () => {
     expect(off.voice.active()).toBeNull();
   });
 
+  it('tests the voice without acting on it or learning from it - with Voice ID off, too', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const { voice, store } = await setup({ enabled: false });
+      await expect(voice.test()).rejects.toThrow(/Set Voice ID up first/);
+      await store.set(enrollFrom([you(), you(), you(), you(), you(), you()], 'wespeaker-v2'));
+      const before = store.current!;
+      expect(voice.active()).toBeNull(); // off: no voiceprints wanted...
+      expect(await voice.test()).toMatch(/only checked, never acted on/);
+      expect(voice.active()).not.toBeNull(); // ...but a test wants them
+      expect(voice.claim(you(), 3, 'what time is it')).toBe(true);
+      expect(voice.claim(other(), 3, 'the TV')).toBe(true);
+      expect(voice.claim(you(), 0.5, 'yes')).toBe(true);
+      expect(voice.claim(null, 2, 'nothing came back')).toBe(true);
+      const { testing, bars } = voice.status();
+      expect(bars).toEqual({ accept: before.accept, reject: before.reject });
+      const results = testing!.results;
+      expect(results.map((r) => r.speaker)).toEqual(['unsure', 'unsure', 'not-you', 'you']); // newest first
+      expect(results[3]).toMatchObject({ heard: 'what time is it', verdict: "That's you - Manuel would answer.", seconds: 3 });
+      expect(results[3]!.score!).toBeGreaterThanOrEqual(before.accept);
+      expect(results[2]!.verdict).toBe('Not you - Manuel would ignore it.');
+      expect(results[1]).toMatchObject({ score: expect.any(Number), why: expect.stringMatching(/Too short/) });
+      expect(results[0]).toMatchObject({ score: null, verdict: expect.stringMatching(/hold the talk shortcut/), why: expect.stringMatching(/No voiceprint came back/) });
+      expect(store.current).toBe(before); // never learned from
+      // A quiet minute ends the test, so Nova isn't left deaf to requests.
+      await vi.advanceTimersByTimeAsync(59_000);
+      expect(voice.status().testing).not.toBeNull();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(voice.status()).toMatchObject({ testing: null, message: expect.stringMatching(/quiet minute/) });
+      expect(voice.claim(you(), 3, 'after')).toBe(false); // what's said goes to Nova again
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the last few results of a test, and ends it for Done, setting up again, or forgetting', async () => {
+    const { voice, store } = await setup({ enabled: true });
+    await store.set(enrollFrom([you(), you(), you(), you()], 'wespeaker-v2'));
+    await voice.test();
+    for (let i = 0; i < 12; i++) voice.claim(you(), 2.5, `turn ${i}`);
+    expect(voice.status().testing!.results.map((r) => r.heard)).toEqual(['turn 11', 'turn 10', 'turn 9', 'turn 8', 'turn 7', 'turn 6', 'turn 5', 'turn 4']);
+    voice.cancel(); // Done
+    expect(voice.status().testing).toBeNull();
+    await voice.test();
+    await voice.start(); // setting up again ends the test
+    expect(voice.status()).toMatchObject({ testing: null, enrolling: { step: 1 } });
+    await expect(voice.test()).rejects.toThrow(/Finish setting up first/);
+    voice.cancel();
+    await voice.test();
+    await voice.forget();
+    expect(voice.status()).toMatchObject({ testing: null, bars: null, enrolled: false });
+  });
+
   it('forgets the voice entirely', async () => {
     const { voice, store } = await setup({ enabled: true });
     await store.set(enrollFrom([you(), you(), you()], 'wespeaker-v2'));

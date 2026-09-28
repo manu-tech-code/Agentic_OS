@@ -1,5 +1,6 @@
 import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import type { SettingsSnapshot, VoiceTestResult } from '@nova/core';
 
 /**
  * Voice ID: whether a turn was said by the user. The hearing helper turns a turn's audio into a voiceprint
@@ -39,6 +40,10 @@ export const MIN_SECONDS = 0.8;
 const SHORT_SECONDS = 1.5;
 /** How much one clear turn moves the voiceprint, as the voice changes (a cold, another microphone). */
 const LEARN_RATE = 0.05;
+/** A voice test ends by itself after this long without a word: Nova mustn't stay deaf if the user walks away. */
+const TEST_QUIET_MS = 60_000;
+/** How many of a test's results are kept to show, newest first. */
+const TEST_RESULTS = 8;
 
 export const cosine = (a: readonly number[], b: readonly number[]) => {
   let dot = 0;
@@ -81,6 +86,14 @@ export function judge(voice: StoredVoiceprint, print: readonly number[], seconds
   // A short turn needs a clearer match: little speech gives a rougher print.
   const bar = seconds < SHORT_SECONDS ? voice.accept + 0.05 : voice.accept;
   return { speaker: score >= bar ? 'you' : 'unsure', score };
+}
+
+/** Why Nova couldn't place a turn, in words (score null: no voiceprint could be made of it). */
+export function unsureWhy(voice: StoredVoiceprint, score: number | null, seconds: number): string {
+  if (seconds < MIN_SECONDS) return 'Too short to tell - say a whole sentence.';
+  if (score === null) return "No voiceprint came back in time - say it again.";
+  if (seconds < SHORT_SECONDS && score >= voice.accept) return 'Close, but short: a short turn needs a clearer match.';
+  return 'Between the two bars: like your voice, but not enough to be sure.';
 }
 
 /** A turn that was clearly the user, long enough to trust: the voiceprint moves a little toward it. */
@@ -146,23 +159,12 @@ export class VoiceprintStore {
   }
 }
 
-export interface VoiceIdStatus {
-  /** The model is on this Mac. */
-  installed: boolean;
-  label: string;
-  /** The user's voiceprint exists (Voice ID can be on). */
-  enrolled: boolean;
-  /** Voice ID is switched on (Settings) and there is a voiceprint: only the user's voice counts. */
-  on: boolean;
-  learned: number;
-  /** Setting up: which phrase, of how many, and what to say now. */
-  enrolling: { step: number; of: number; say: string } | null;
-  message?: string;
-}
+/** What Settings shows of Voice ID: the model, whether there's a voiceprint (never the print), setup, a test. */
+export type VoiceIdStatus = SettingsSnapshot['voiceId'];
 
 /**
- * Voice ID for the daemon: setting it up (the user reads a few phrases), deciding whose each turn is, and
- * learning from the clear ones. Hearing asks it; Settings and the setup checklist read `status()`.
+ * Voice ID for the daemon: setting it up (the user reads a few phrases), deciding whose each turn is,
+ * learning from the clear ones, and testing it. Hearing asks it; Settings and the setup checklist read `status()`.
  */
 export class VoiceId {
   private phrases: string[] = [];
@@ -171,6 +173,9 @@ export class VoiceId {
   /** A setup phrase unlike the rest, kept in case the rest (one phrase so far) was the odd one out. */
   private missed: number[] | null = null;
   private message: string | undefined;
+  /** A voice test: its results so far, newest first - null when none is running. */
+  private testing: VoiceTestResult[] | null = null;
+  private testTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
     private readonly opts: {
@@ -183,6 +188,8 @@ export class VoiceId {
       enabled: () => boolean;
       learning: () => boolean;
       name: () => string;
+      /** The talk shortcut as the user presses it ("⌥Space"), for what a test says Nova would do. */
+      shortcut?: () => string;
       /** A voiceprint was made: switch Voice ID on in Settings. */
       turnOn: () => Promise<void>;
       /** Something changed that Settings shows. */
@@ -200,7 +207,7 @@ export class VoiceId {
 
   active(): { models: string } | null {
     if (!this.models) return null;
-    if (this.enrollingStep !== null) return { models: this.models };
+    if (this.enrollingStep !== null || this.testing) return { models: this.models };
     return this.opts.enabled() && this.opts.store.current ? { models: this.models } : null;
   }
 
@@ -220,6 +227,7 @@ export class VoiceId {
   async start(): Promise<string> {
     await this.refresh();
     if (!this.models) throw new Error('Voice ID needs its model first.');
+    this.endTest();
     this.phrases = ENROLL_PHRASES(this.opts.name());
     this.prints = [];
     this.missed = null;
@@ -230,6 +238,7 @@ export class VoiceId {
   }
 
   cancel() {
+    this.endTest();
     this.enrollingStep = null;
     this.prints = [];
     this.missed = null;
@@ -241,6 +250,73 @@ export class VoiceId {
     this.cancel();
     await this.opts.store.forget();
     this.opts.changed();
+  }
+
+  /** Setting up or testing: the turn is for Voice ID, not for Nova. True when it took it. */
+  claim(print: number[] | null, seconds: number, text: string): boolean {
+    if (this.enrollingStep !== null) return this.enroll(print, seconds, text);
+    if (this.testing) return this.tested(print, seconds, text);
+    return false;
+  }
+
+  /**
+   * Test Voice ID: what's said next is judged and shown - never sent to Nova, never learned from - until the
+   * test is stopped, or a minute goes by without a word. It works with Voice ID switched off, too.
+   */
+  async test(): Promise<string> {
+    await this.refresh();
+    if (!this.models) throw new Error('Voice ID needs its model first.');
+    if (!this.opts.store.current) throw new Error('Set Voice ID up first: a test needs your voice to compare with.');
+    if (this.enrollingStep !== null) throw new Error('Finish setting up first, or stop - then test.');
+    this.testing = [];
+    this.message = undefined;
+    this.quietIn();
+    this.opts.changed();
+    return 'Say something - anything. What you say now is only checked, never acted on.';
+  }
+
+  private tested(print: number[] | null, seconds: number, text: string): boolean {
+    const voice = this.opts.store.current;
+    if (!voice || !this.testing) return false;
+    const { speaker, score } = print ? judge(voice, print, seconds) : { speaker: 'unsure' as const, score: null };
+    const name = this.opts.name();
+    const verdict =
+      speaker === 'you'
+        ? `That's you - ${name} would answer.`
+        : speaker === 'not-you'
+          ? `Not you - ${name} would ignore it.`
+          : `Can't tell - ${name} would ask you to hold ${this.opts.shortcut?.() ?? 'the talk shortcut'} and say it again.`;
+    const result: VoiceTestResult = {
+      speaker,
+      score: score === null ? null : Math.round(score * 1000) / 1000,
+      seconds: Math.round(seconds * 10) / 10,
+      heard: text.trim().slice(0, 140),
+      verdict,
+      ...(speaker === 'unsure' ? { why: unsureWhy(voice, score, seconds) } : {}),
+      at: new Date(this.opts.now?.() ?? Date.now()).toISOString(),
+    };
+    this.testing = [result, ...this.testing].slice(0, TEST_RESULTS);
+    this.quietIn();
+    this.opts.changed();
+    return true;
+  }
+
+  /** The test's quiet minute starts again: at its end the test stops by itself. */
+  private quietIn() {
+    clearTimeout(this.testTimer);
+    this.testTimer = setTimeout(() => {
+      if (!this.testing) return;
+      this.endTest();
+      this.message = 'The voice test ended after a quiet minute.';
+      this.opts.changed();
+    }, TEST_QUIET_MS);
+    this.testTimer.unref?.();
+  }
+
+  private endTest() {
+    clearTimeout(this.testTimer);
+    this.testTimer = undefined;
+    this.testing = null;
   }
 
   enroll(print: number[] | null, seconds: number, _text: string): boolean {
@@ -278,7 +354,7 @@ export class VoiceId {
     this.prints = [];
     await this.opts.store.set(voice);
     await this.opts.turnOn();
-    this.message = 'Voice ID is on: Nova now answers your voice alone.';
+    this.message = `Voice ID is on: ${this.opts.name()} now answers your voice alone. Test my voice shows it at work.`;
     this.opts.changed();
   }
 
@@ -292,6 +368,8 @@ export class VoiceId {
       on: Boolean(voice && this.opts.enabled() && this.models),
       learned: voice?.learned ?? 0,
       enrolling: step === null ? null : { step: step + 1, of: this.phrases.length, say: this.phrases[step] ?? '' },
+      testing: this.testing ? { results: [...this.testing] } : null,
+      bars: voice ? { accept: voice.accept, reject: voice.reject } : null,
       ...(this.message ? { message: this.message } : {}),
     };
   }
