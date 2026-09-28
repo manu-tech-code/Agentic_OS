@@ -1,6 +1,7 @@
 import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { SettingsSnapshot, VoiceTestResult } from '@nova/core';
+import type { Keyword } from './keyword.ts';
 
 /**
  * Voice ID: whether a turn was said by the user. The hearing helper turns a turn's audio into a voiceprint
@@ -9,7 +10,8 @@ import type { SettingsSnapshot, VoiceTestResult } from '@nova/core';
  * never sent anywhere. The arithmetic is here, in code; the helper only listens.
  */
 
-export type Speaker = 'you' | 'not-you' | 'unsure';
+/** Whose voice a turn was - or `anyone`: Voice ID is off, since the master keyword was said. */
+export type Speaker = 'you' | 'not-you' | 'unsure' | 'anyone';
 
 export interface StoredVoiceprint {
   /** 2: the bars come from each setup phrase against the others (1: against an average that included it). */
@@ -113,7 +115,7 @@ export function consistent(prints: readonly number[][], next: readonly number[])
 }
 
 /** Who said a turn: its score against the user's voiceprint, and how long it was. */
-export function judge(voice: StoredVoiceprint, print: readonly number[], seconds: number): { speaker: Speaker; score: number } {
+export function judge(voice: StoredVoiceprint, print: readonly number[], seconds: number): { speaker: Exclude<Speaker, 'anyone'>; score: number } {
   const score = cosine(voice.print, print);
   if (seconds < MIN_SECONDS) return { speaker: 'unsure', score };
   if (score < voice.reject) return { speaker: 'not-you', score };
@@ -141,6 +143,8 @@ export function learnFrom(voice: StoredVoiceprint, print: readonly number[], sco
 export class VoiceprintStore {
   private voice: StoredVoiceprint | null = null;
   private dirty = 0;
+  /** Writes, one after another: two at once would race through the same temporary file. */
+  private writing: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly file: string,
@@ -183,16 +187,22 @@ export class VoiceprintStore {
   async forget() {
     this.voice = null;
     this.dirty = 0;
-    await rm(this.file, { force: true });
+    await this.write();
   }
 
-  private async write() {
+  /** What's kept now goes to disk - after any write still under way, and as it is when its turn comes. */
+  private write() {
     this.dirty = 0;
-    await mkdir(dirname(this.file), { recursive: true, mode: 0o700 });
-    const tmp = `${this.file}.tmp`;
-    await writeFile(tmp, `${JSON.stringify(this.voice)}\n`, { mode: 0o600 });
-    await chmod(tmp, 0o600);
-    await rename(tmp, this.file);
+    const next = this.writing.then(async () => {
+      if (!this.voice) return void (await rm(this.file, { force: true }));
+      await mkdir(dirname(this.file), { recursive: true, mode: 0o700 });
+      const tmp = `${this.file}.tmp`;
+      await writeFile(tmp, `${JSON.stringify(this.voice)}\n`, { mode: 0o600 });
+      await chmod(tmp, 0o600);
+      await rename(tmp, this.file);
+    });
+    this.writing = next.catch(() => {});
+    return next;
   }
 }
 
@@ -231,6 +241,10 @@ export class VoiceId {
       shortcut?: () => string;
       /** Which ear heard the turn ("Nova.app", "a window"), for the log. */
       ear?: () => string;
+      /** The master keyword, when the user set one: said in any voice, it turns Voice ID off until they turn it back on. */
+      keyword?: Keyword;
+      /** The keyword was just said (with what came after it): tell the user - aloud, a notification, the record. */
+      onOverride?: (rest: string) => void;
       /** A voiceprint was made: switch Voice ID on in Settings. */
       turnOn: () => Promise<void>;
       /** Something changed that Settings shows. */
@@ -261,6 +275,10 @@ export class VoiceId {
   decide(print: number[] | null, seconds: number, opts: { learn?: boolean } = {}): Speaker | undefined {
     const voice = this.opts.store.current;
     if (!voice || !this.opts.enabled() || !this.models) return undefined;
+    if (this.overridden()) {
+      if (opts.learn !== false) console.log(`  [voice-id] anyone · ${seconds.toFixed(1)} s · off since the master keyword was said`);
+      return 'anyone';
+    }
     const now = this.opts.now?.() ?? Date.now();
     const judged = print ? judge(voice, print, seconds) : { speaker: 'unsure' as const, score: null };
     const { score } = judged;
@@ -294,6 +312,44 @@ export class VoiceId {
     return speaker;
   }
 
+  /** Voice ID is off: the master keyword was said, and the user hasn't turned it back on yet. */
+  overridden(): boolean {
+    return Boolean(this.opts.keyword?.overriddenAt);
+  }
+
+  /**
+   * The master keyword, said anywhere in a turn, in any voice (only while Voice ID is on - it's what it overrides):
+   * Voice ID goes off until the user turns it back on, and what was said after it goes through. Null when it wasn't said.
+   */
+  unlock(text: string): string | null {
+    const keyword = this.opts.keyword;
+    if (!keyword?.isSet || !this.opts.enabled() || !this.opts.store.current || this.overridden()) return null;
+    const hit = keyword.find(text);
+    if (!hit) return null;
+    console.log('  [voice-id] the master keyword was said: Voice ID is off until it is turned back on');
+    void keyword.override().catch((e) => console.warn(`  [voice-id] couldn't keep that it's off: ${(e as Error).message}`));
+    this.opts.onOverride?.(hit.rest);
+    this.opts.changed();
+    return hit.rest;
+  }
+
+  /** The user turned Voice ID back on (Settings). */
+  async restore() {
+    await this.opts.keyword?.restore();
+    this.opts.changed();
+  }
+
+  async setKeyword(phrase: string) {
+    if (!this.opts.keyword) throw new Error("A master keyword can't be kept here.");
+    await this.opts.keyword.set(phrase);
+    this.opts.changed();
+  }
+
+  async clearKeyword() {
+    await this.opts.keyword?.clear();
+    this.opts.changed();
+  }
+
   /** Start setting up (again): the model must be on this Mac. */
   async start(): Promise<string> {
     await this.refresh();
@@ -320,6 +376,7 @@ export class VoiceId {
   async forget() {
     this.cancel();
     await this.opts.store.forget();
+    await this.opts.keyword?.restore(); // nothing left to be off: a new setup starts with Voice ID on
     this.opts.changed();
   }
 
@@ -424,6 +481,7 @@ export class VoiceId {
     this.enrollingStep = null;
     this.prints = [];
     await this.opts.store.set(voice);
+    await this.opts.keyword?.restore(); // set up again: on, whatever the keyword did before
     await this.opts.turnOn();
     this.message = `Voice ID is on: ${this.opts.name()} now answers your voice alone. Test my voice shows it at work.`;
     this.opts.changed();
@@ -441,6 +499,7 @@ export class VoiceId {
       enrolling: step === null ? null : { step: step + 1, of: this.phrases.length, say: this.phrases[step] ?? '' },
       testing: this.testing ? { results: [...this.testing] } : null,
       bars: voice ? { accept: voice.accept, reject: voice.reject } : null,
+      keyword: { set: Boolean(this.opts.keyword?.isSet), overriddenAt: this.opts.keyword?.overriddenAt ?? null },
       ...(this.message ? { message: this.message } : {}),
     };
   }

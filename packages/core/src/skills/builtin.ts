@@ -147,6 +147,7 @@ export const builtinSkills: Skill[] = [
     examples: ['cancel the timer', 'stop the timer', 'clear my timers'],
     // "Cancel my reminder to call mum" names a reminder: that's confirmed first - all of them at once needs a tap.
     tierFor: (ctx) => (cancelsReminder(ctx) ? cancelTier(ctx) : 0),
+    destructive: (ctx) => cancelsReminder(ctx),
     confirmPrompt: (ctx) => cancelPrompt(ctx),
     tapPrompt: (ctx) => cancelOnScreen(ctx),
     async run(ctx) {

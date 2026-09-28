@@ -471,6 +471,10 @@ select.setting__input { width: auto; max-width: 320px; }
 
 /* Voice ID's test: each thing said, and where its match falls between the bars */
 .voice-test { display: grid; gap: 10px; }
+.voice-keyword { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.voice-keyword .setting__input { width: 250px; }
+.voice-override { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.voice-override > span { flex: 1; min-width: 220px; }
 .voice-test__offer { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .voice-test__offer .muted { font-size: 12px; }
 .voice-test__listening { font-size: 12px; animation: voice-test-pulse 1.6s ease-in-out infinite; }

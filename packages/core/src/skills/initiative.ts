@@ -285,6 +285,7 @@ export const initiativeSkills: Skill[] = [
     summary: 'Cancel a reminder the user names (by what it is about, or its time). Cancelling all of them at once needs the user to tap on screen. Put which one in request.',
     tier: 2,
     tierFor: (ctx) => cancelTier(ctx),
+    destructive: () => true,
     needsRequest: true,
     examples: ['cancel the reminder to call mum', 'delete my reminder about the dentist', 'remove the 5pm reminder', 'cancel all my reminders'],
     confirmPrompt: (ctx) => cancelPrompt(ctx),

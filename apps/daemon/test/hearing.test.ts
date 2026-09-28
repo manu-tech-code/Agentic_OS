@@ -114,7 +114,7 @@ describe('the hearing service, with a stand-in helper', () => {
   });
 
   /** Voice ID's check, with a hand on it: who it says a turn is, and what it was asked. */
-  function voiceCheck(say: 'you' | 'not-you' | 'unsure', opts: { claiming?: boolean } = {}) {
+  function voiceCheck(say: 'you' | 'not-you' | 'unsure', opts: { claiming?: boolean; keyword?: string } = {}) {
     const asked: { print: number[] | null; seconds: number; learn?: boolean }[] = [];
     const claimed: string[] = [];
     return {
@@ -124,6 +124,7 @@ describe('the hearing service, with a stand-in helper', () => {
         active: () => ({ models: '/models/wespeaker-v2' }),
         decide: (print: number[] | null, seconds: number, o?: { learn?: boolean }) => (asked.push({ print, seconds, learn: o?.learn }), say),
         claim: (_p: number[] | null, _s: number, text: string) => (opts.claiming ? (claimed.push(text), true) : false),
+        unlock: (text: string) => (opts.keyword && text.startsWith(opts.keyword) ? text.slice(opts.keyword.length).trim() : null),
       },
     };
   }
@@ -163,6 +164,23 @@ describe('the hearing service, with a stand-in helper', () => {
     answer(helper, 'open slack');
     await vi.advanceTimersByTimeAsync(0);
     expect(heard.at(-1)).toEqual(['open slack', true, undefined]);
+    hearing.close();
+  });
+
+  it('lets what follows the master keyword through, as anyone - whoever said it', async () => {
+    const { hearing, start, quiet, talk, answer } = setup();
+    const heard: [string, boolean, string | undefined][] = [];
+    (hearing as any).events.utterance = (t: string, e: boolean, s?: string) => heard.push([t, e, s]);
+    const voice = voiceCheck('not-you', { keyword: 'pineapple express' });
+    hearing.voice = voice.check;
+    const helper = start();
+    printsWith(hearing, () => [0, 1]);
+    talk(1500);
+    quiet(1000);
+    await vi.advanceTimersByTimeAsync(3000);
+    answer(helper, 'pineapple express open safari');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(heard).toEqual([['open safari', false, 'anyone']]);
     hearing.close();
   });
 

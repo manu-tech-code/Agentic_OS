@@ -379,6 +379,11 @@ export interface Skill {
   /** Example phrasings - passed to Jev as the Choice criteria description. */
   examples: string[];
   tier: RiskTier;
+  /**
+   * Deletes something (a file to the Trash, a memory, reminders), undoes what was done, or changes what Nova may do:
+   * never on the word of a voice that got in past Voice ID with the master keyword.
+   */
+  destructive?: (ctx: SkillContext) => boolean;
   needsApp?: boolean;
   needsProject?: boolean;
   /** With no project named, the one the user is working on will do. */

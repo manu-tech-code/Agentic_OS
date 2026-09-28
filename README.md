@@ -167,6 +167,14 @@ voice** deletes it. Voice ID needs on-device hearing (Nova.app, or a window stre
 browser recognises itself never reaches it, so with Voice ID on it doesn't count as you.
 `nova-hearing --voice-selftest ~/.nova/models/wespeaker-v2` checks the model with two of macOS's own voices.
 
+**The master keyword** (Settings → Voice → Voice ID): a phrase of two words or more that you type once - only a salted
+hash of it is kept, on this Mac. Said in any voice, anywhere in a sentence ("Manuel, *your keyword*, open Safari"),
+it turns Voice ID off until you turn it back on there - for a guest, or a day Nova doesn't know your voice - and what
+followed it goes through. Nova says so aloud, sends a notification and puts it in Activity. Meanwhile any voice is
+heard, but held back: nothing it asks deletes (files to the Trash, memories, reminders, undo), spends or clicks
+anything weighty, and "yes, always" from it counts once, never for good. Typing, and holding the talk shortcut, are
+you as ever.
+
 ## Integrations
 
 Every brain - Claude, Codex, OpenCode, a local model - can use your services through Nova: Settings → Integrations,

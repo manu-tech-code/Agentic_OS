@@ -78,7 +78,7 @@ export function privacyFlows(input: PrivacyInput): PrivacyFlow[] {
     id: 'voiceprint',
     what: 'Your voiceprint (Voice ID), to know your voice from others',
     where: `${THIS_MAC} (~/.nova/voiceprint.json, readable by you alone)`,
-    detail: 'Made on this Mac from what you said when setting it up; it never leaves it. Settings → Voice forgets it.',
+    detail: 'Made on this Mac from what you said when setting it up; it never leaves it. The master keyword, if you set one, is kept only as a hash. Settings → Voice forgets them.',
     leaves: false,
     on: Boolean(input.voiceprint),
     section: 'voice',

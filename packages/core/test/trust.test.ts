@@ -141,6 +141,17 @@ describe('"yes, always"', () => {
     }
   });
 
+  it('allows things just this once for a voice that got in with the master keyword - never for good', async () => {
+    const { nova, quit, said, rules, events } = await setup();
+    await nova.handle('nova quit spotify', 'voice', 'anyone');
+    expect(said().at(-1)).toMatch(/^Quit Spotify\?/);
+    await nova.handle('yes, always', 'voice', 'anyone');
+    expect(quit).toEqual(['Spotify']);
+    expect(said().at(-1)).toMatch(/Just this once - nothing is allowed for good while Voice ID is off\.$/);
+    expect([...rules.keys()]).toEqual([]);
+    expect(events.some((e) => e.type === 'activity' && e.item.label.startsWith('Quit') && e.item.by === 'someone, with the master keyword')).toBe(true);
+  });
+
   it('remembers exactly what was asked, so next time it just happens', async () => {
     const { nova, quit, said, rules, events } = await setup();
     await nova.handle('nova quit spotify');

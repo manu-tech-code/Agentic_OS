@@ -1126,6 +1126,8 @@ export interface SettingsSnapshot {
     testing: { results: VoiceTestResult[] } | null;
     /** The bars a turn's match (0-1) is judged by: at or above `accept` it's the user, below `reject` it isn't. */
     bars: { accept: number; reject: number } | null;
+    /** The master keyword: whether one is set (never what it is), and when it was said - Voice ID off since. */
+    keyword: { set: boolean; overriddenAt: string | null };
     message?: string;
   };
   /** Nova Eyes: whether it runs, what macOS lets it do, and why not. */
