@@ -458,12 +458,8 @@ export default function App() {
   const micOff = () => (inApp ? tellApp({ type: 'mute', on: true }) : sleep());
   // With the microphone off, the Orb and pill don't claim to be listening.
   const shownPhase = !listening && state.phase === 'listening' ? 'idle' : state.phase;
-  // Agent tasks show as live cards; their agents pulse in the dock while they work.
+  // Agent tasks show as live cards, and the pill says which agent is working.
   const working = state.cards.filter((c) => c.kind === 'task');
-  const agentItems: DockItem[] = state.agents.map((a) => {
-    const busy = working.some((c) => c.agent === a.name);
-    return { id: `agent-${a.name}`, label: `${a.label} · ${busy ? 'working' : 'paired'}`, glyph: a.label[0] ?? '•', status: busy ? 'busy' : 'on', onClick: () => setShowTasks(true) };
-  });
   const dock: DockItem[] = [
     {
       id: 'mic',
@@ -483,7 +479,6 @@ export default function App() {
       onClick: () => (handsOff && !inApp ? undefined : listening ? micOff() : micOn()),
     },
     { id: 'type', label: 'Type (⌘K)', glyph: '⌘', onClick: () => setShowCommand(true) },
-    ...(agentItems.length ? [{ id: '|', label: '', glyph: '', onClick: () => {} }, ...agentItems] : []),
     { id: '|', label: '', glyph: '', onClick: () => {} },
     { id: 'inspector', label: 'Decision Inspector (⌘I)', glyph: '◎', active: showInspector, onClick: () => setShowInspector((v) => !v) },
     { id: 'timeline', label: 'Activity (⌘J)', glyph: '☰', active: showTimeline, onClick: () => setShowTimeline((v) => !v) },
