@@ -10,6 +10,12 @@ import { DEFAULT_REFLEX_MODEL, downloadModel, isInstalled, modelsDir, readModelF
 describe('Reflex model files', () => {
   it('pins every model to a revision and checksums', () => {
     for (const spec of Object.values(REFLEX_MODELS)) {
+      if (spec.source === 'github-release') {
+        // A release's tag can move: each file's SHA-256 is what pins it.
+        expect(spec.revision).toMatch(/\S/);
+        for (const check of Object.values(spec.files)) expect(check.sha256).toMatch(/^[0-9a-f]{64}$/);
+        continue;
+      }
       expect(spec.revision).toMatch(/^[0-9a-f]{40}$/);
       for (const check of Object.values(spec.files)) expect(check.sha256 ?? check.gitSha1).toMatch(/^[0-9a-f]{40,64}$/);
     }

@@ -32,7 +32,8 @@ import { createPlatform } from './platform.ts';
 import { createHands } from './hands/index.ts';
 import { Hearing } from './hearing/service.ts';
 import { Keyword } from './hearing/keyword.ts';
-import { VoiceId, VoiceprintStore } from './hearing/voiceid.ts';
+import { VoiceRecordings } from './hearing/recordings.ts';
+import { VoiceId, VoiceprintStore, type VoiceModels } from './hearing/voiceid.ts';
 import { Initiative } from './initiative/index.ts';
 import { IntegrationHub } from './integrations/hub.ts';
 import { Journal, MemoryStore } from './memory/store.ts';
@@ -41,7 +42,7 @@ import { connectionToken, refusal, tokenFile, windowOrigins } from './shell/acce
 import { readClientEvent } from './shell/events.ts';
 import { Presence } from './shell/presence.ts';
 import { serveUi, UI_DIR } from './shell/static.ts';
-import { DEFAULT_REFLEX_MODEL, downloadModel, isInstalled, KOKORO_MODEL, MODELS, modelsDir, PARAKEET_MODEL, SMART_TURN_MODEL, VOICE_ID_MODEL, whereInstalled } from './models/files.ts';
+import { DEFAULT_REFLEX_MODEL, downloadModel, isInstalled, KOKORO_MODEL, MODELS, modelsDir, PARAKEET_MODEL, SMART_TURN_MODEL, VOICE_ID_MODEL, VOICE_ID_MODELS, whereInstalled } from './models/files.ts';
 import { forgetLearned, loadReflex, reflexEmbedder, type ReflexRuntime } from './reflex/runtime.ts';
 import { buildSnapshot, validateChanges } from './snapshot.ts';
 import { Trust } from './trust/index.ts';
@@ -425,11 +426,25 @@ const voiceprints = new VoiceprintStore(join(dirname(settingsFile()), 'voiceprin
 await voiceprints.load();
 // The master keyword (a hash of it): said in any voice, it turns Voice ID off until the user turns it back on.
 const keyword = await new Keyword(join(dirname(settingsFile()), 'voiceid-keyword.json')).load();
+// Recordings of the user's turns - only when they keep them (a week, then gone; all at once when switched off).
+const recordings = new VoiceRecordings(join(dirname(settingsFile()), 'voice-recordings'), { on: () => runtime.config.voiceId.keepRecordings });
+void recordings.sweep().catch(() => {});
+setInterval(() => void recordings.sweep().catch(() => {}), 6 * 3600_000).unref();
+/** Voice ID's models on this Mac: the hearing helper's, and the two the voiceprint worker runs (with how each hears). */
+async function voiceModels(): Promise<VoiceModels | null> {
+  const helper = (await isInstalled(VOICE_ID_MODEL)) ? join(modelsDir(), VOICE_ID_MODEL) : null;
+  const worker = [];
+  for (const [ear, kind] of [['wespeaker-resnet293', 'wespeaker'], ['titanet-large', 'nemo']] as const) {
+    if (await isInstalled(ear)) worker.push({ ear, kind, file: join(modelsDir(), ear, Object.keys(MODELS[ear]!.files)[0]!) });
+  }
+  return helper || worker.length ? { helper, worker, complete: Boolean(helper) && worker.length === 2 } : null;
+}
 const voiceId = new VoiceId({
   store: voiceprints,
-  model: VOICE_ID_MODEL,
-  label: MODELS[VOICE_ID_MODEL]!.label,
-  modelDir: async () => ((await isInstalled(VOICE_ID_MODEL)) ? join(modelsDir(), VOICE_ID_MODEL) : null),
+  label: 'WeSpeaker v2, WeSpeaker ResNet293 and NVIDIA TitaNet-Large',
+  size: `${Math.round(VOICE_ID_MODELS.reduce((n, m) => n + Object.values(MODELS[m]!.files).reduce((s, f) => s + f.size, 0), 0) / 1e6)} MB`,
+  models: voiceModels,
+  recordings,
   enabled: () => runtime.config.voiceId.enabled,
   learning: () => runtime.config.voiceId.learn,
   name: () => runtime.config.name,
@@ -567,6 +582,8 @@ function apply(next: Runtime) {
   presence.configure(next.config.presence);
   // Voice ID switched off in Settings: the master keyword's "off" goes with it, so switching it on is simply on.
   if (!next.config.voiceId.enabled && voiceId.overridden()) void voiceId.restore();
+  // Recordings switched off: every one of them goes, now.
+  if (!next.config.voiceId.keepRecordings) void recordings.clear().catch(() => {});
   initiative!.configure();
   trust.configure();
   broadcast(nova.hello());
@@ -879,19 +896,24 @@ wss.on('connection', (ws, req) => {
         const progress = (message: string) => send(ws, { type: 'settings-result', ok: true, message });
         let message = '';
         if (event.action === 'install') {
-          let shown = -1;
-          await downloadModel(VOICE_ID_MODEL, {
-            onProgress(file, received, total) {
-              const pct = Math.floor((received / total) * 5) * 20;
-              if (file.endsWith('weight.bin') && pct !== shown) progress(`Downloading Voice ID… ${(shown = pct)}%`);
-            },
-          });
+          // Its three models, one after another (each file checked against its checksum), with progress on the big files.
+          for (const [i, name] of VOICE_ID_MODELS.entries()) {
+            let shown = -1;
+            await downloadModel(name, {
+              onProgress(_file, received, total) {
+                const pct = Math.floor((received / total) * 5) * 20;
+                if (total > 1_000_000 && pct !== shown) progress(`Downloading Voice ID (${i + 1} of ${VOICE_ID_MODELS.length})… ${(shown = pct)}%`);
+              },
+            });
+          }
           await voiceId.refresh();
+          hearing?.voiceWanted();
           message = 'Voice ID is ready to learn your voice.';
         } else if (event.action === 'enroll' || event.action === 'improve' || event.action === 'test') {
           // Voiceprints come from Nova's own hearing: a browser's speech recognition never passes the voice on.
           if (hearing!.status.engine === 'browser') throw new Error("Voice ID needs Nova's own hearing - Nova.app, or Settings → Hearing on Apple or Parakeet.");
           message = event.action === 'enroll' ? await voiceId.start() : event.action === 'improve' ? await voiceId.improve() : await voiceId.test();
+          hearing!.voiceWanted(); // every model ready for the first phrase
         }
         else if (event.action === 'cancel') (voiceId.cancel(), (message = 'Stopped.'));
         else if (event.action === 'keyword-set') {
@@ -945,7 +967,7 @@ shutdown = (code) => {
       console.warn(`  [daemon] while stopping: ${why(e)}`);
     }
   }
-  void Promise.race([Promise.all([memory.flushed(), initiative?.flushed(), trust.flushed(), voiceprints.flush()]), new Promise((r) => setTimeout(r, 1000))]).finally(() => process.exit(code));
+  void Promise.race([Promise.all([memory.flushed(), initiative?.flushed(), trust.flushed(), voiceprints.flush(), recordings.flushed()]), new Promise((r) => setTimeout(r, 1000))]).finally(() => process.exit(code));
 };
 for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, () => shutdown(0));
 

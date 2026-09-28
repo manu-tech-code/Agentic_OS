@@ -4,8 +4,9 @@ import { join } from 'node:path';
 import { isInstalled, modelsDir, PARAKEET_MODEL } from '../models/files.ts';
 import { ensureHelper } from './build.ts';
 import { HearingHelper, type HelperEvent } from './helper.ts';
+import { Voiceprinter, type WorkerModel } from './printer.ts';
 import { SmartTurn } from './smart-turn.ts';
-import type { Speaker } from './voiceid.ts';
+import { HELPER_EAR, type Prints, type Speaker, type VoiceModels } from './voiceid.ts';
 
 export type HearingEngine = 'auto' | 'apple' | 'parakeet' | 'browser';
 
@@ -39,21 +40,22 @@ const ARMED_MS = 8000;
 const ARMED_AFTER_HOLD_MS = 1500;
 
 /**
- * Voice ID, as hearing uses it: whether to take voiceprints (and with which model), and who a turn's is.
+ * Voice ID, as hearing uses it: whether to take voiceprints (and with which models), and who a turn's is.
  * While the user sets it up or tests it, their turns go to it instead of to Nova.
  */
 export interface VoiceCheck {
-  /** The model folder to take voiceprints with, or null when Voice ID is off. */
-  active(): { models: string } | null;
+  /** The models to take voiceprints with, or null when Voice ID is off. */
+  active(): VoiceModels | null;
   /**
-   * Whose voice a turn was (null print: none could be made) - undefined when Voice ID decides nothing now.
-   * `learn: false` for a glance at part of a turn (someone talking over Nova), which mustn't teach it.
+   * Whose voice a turn was (null prints: none could be made) - undefined when Voice ID decides nothing now. With the
+   * turn's audio, for the recordings (when the user keeps them). `learn: false` for a glance at part of a turn
+   * (someone talking over Nova), which mustn't teach it.
    */
-  decide(print: number[] | null, seconds: number, opts?: { learn?: boolean; text?: string }): Speaker | undefined;
+  decide(prints: Prints | null, seconds: number, opts?: { learn?: boolean; text?: string; audio?: Int16Array; overlapped?: boolean }): Speaker | undefined;
   /** Setting up or testing Voice ID: the turn is for it, not for Nova (with its audio, to check the recording). True when it took it. */
-  claim(print: number[] | null, seconds: number, text: string, audio?: Int16Array): boolean;
+  claim(prints: Prints | null, seconds: number, text: string, audio?: Int16Array): boolean;
   /** A turn said with the talk shortcut: the user's own - Voice ID may learn from it. */
-  confirmed?(print: number[] | null, seconds: number, text: string): void;
+  confirmed?(prints: Prints | null, seconds: number, text: string, audio?: Int16Array): void;
   /** The master keyword, in any voice: what was said after it (Voice ID is off from now on), or null. */
   unlock?(text: string): string | null;
 }
@@ -131,10 +133,15 @@ export class Hearing {
   /** Voice ID's check, when there is one. */
   voice: VoiceCheck | null = null;
   /** Voiceprints asked of the helper, by request id: a turn's, or the audio so far when someone talks over Nova. */
-  private readonly prints = new Map<number, (print: number[] | null) => void>();
+  private readonly helperPrints = new Map<number, (print: number[] | null) => void>();
   private printSeq = 0;
-  /** The voiceprint of each finished turn, until its words come back. */
-  private readonly turnPrints = new Map<number, { print: Promise<number[] | null>; seconds: number; audio: Int16Array }>();
+  /** The voiceprints of each finished turn, until its words come back. */
+  private readonly turnPrints = new Map<number, { prints: Promise<Prints | null>; seconds: number; audio: Int16Array; overlapped: boolean }>();
+  /** Voice ID's larger models, in their own process - started when Voice ID wants voiceprints, with the models it names. */
+  private printer: Voiceprinter | null = null;
+  private printerFor = '';
+  private printerStarting: Promise<void> | null = null;
+  private printerRestarts = 0;
 
   constructor(private readonly events: HearingEvents) {
     this.turnOpts = {
@@ -162,6 +169,16 @@ export class Hearing {
       this.restarts = 0;
       void this.restart();
     }
+  }
+
+  /**
+   * Voice ID wants voiceprints now (its models just installed, setting up or a test begun): its models are loaded
+   * now rather than on the next turn - which would then have the helper's alone - and tried again if they'd stopped.
+   */
+  voiceWanted() {
+    this.printerRestarts = 0;
+    if (!this.printer?.alive && !this.printerStarting) this.printerFor = '';
+    this.warmVoice();
   }
 
   /** Start the engine afresh (after installing a model it was waiting for). */
@@ -276,6 +293,7 @@ export class Hearing {
     this.helper = null;
     this.smart?.close();
     this.smart = null;
+    this.stopPrinter();
   }
 
   private setStatus(status: HearingStatus) {
@@ -400,7 +418,7 @@ export class Hearing {
         return console.log(`  [hearing] ${event.message}`);
       case 'voiceprint':
         if (event.error && event.error !== 'too short') console.warn(`  [hearing] no voiceprint: ${event.error}`);
-        return this.prints.get(event.id)?.(event.print ?? null);
+        return this.helperPrints.get(event.id)?.(event.print ?? null);
     }
   }
 
@@ -427,8 +445,8 @@ export class Hearing {
       const voice = this.voice?.active();
       const audio = voice ? this.ring.since(this.turnStart) : null;
       if (!voice || !audio || audio.length < RATE) return this.events.bargeIn();
-      void this.voiceprint(audio, voice.models, BARGE_WAIT_MS).then((print) => {
-        if (this.voice?.decide(print, audio.length / RATE, { learn: false }) !== 'not-you') this.events.bargeIn();
+      void this.prints(audio, voice, BARGE_WAIT_MS).then((prints) => {
+        if (this.voice?.decide(prints, audio.length / RATE, { learn: false }) !== 'not-you') this.events.bargeIn();
       });
     }
   }
@@ -437,46 +455,95 @@ export class Hearing {
     const id = ++this.turnId;
     if (this.armed) this.explicitTurns.add(id);
     this.disarm();
-    // Voice ID: the turn's own audio, for its voiceprint - asked for now, while the words are still coming.
+    // Voice ID: the turn's own audio, for its voiceprints - asked for now, while the words are still coming.
     const voice = this.voice?.active();
     if (voice) {
       const audio = this.ring.since(this.turnStart);
-      this.turnPrints.set(id, { print: this.voiceprint(audio, voice.models), seconds: audio.length / RATE, audio });
-    }
+      this.turnPrints.set(id, { prints: this.prints(audio, voice), seconds: audio.length / RATE, audio, overlapped: this.overlapping });
+    } else this.stopPrinter(); // Voice ID is off: its larger models needn't be kept in memory
     this.helper?.command({ type: 'finalize', turn: id });
     this.turn.reset();
   }
 
   /**
-   * With Voice ID on, the voiceprint model is loaded now, with a second of silence - not on the first turn, whose
-   * print would then come too late (and the turn go unplaced).
+   * With Voice ID on, its models are loaded now, with a second of silence - not on the first turn, whose prints
+   * would then come too late (and the turn go unplaced).
    */
   private warmVoice() {
     const voice = this.voice?.active();
     if (!voice) return;
     const started = Date.now();
-    void this.voiceprint(new Int16Array(RATE), voice.models, 15_000).then((print) =>
-      print ? console.log(`  [voice-id] voiceprints ready in ${Date.now() - started} ms`) : console.warn("  [voice-id] the voiceprint model didn't load"),
-    );
+    const wanted = (voice.helper ? 1 : 0) + voice.worker.length;
+    void this.startPrinter(voice.worker)
+      .then(() => this.prints(new Int16Array(RATE), voice, 15_000))
+      .then((prints) => {
+        const got = Object.keys(prints ?? {}).length;
+        if (got) console.log(`  [voice-id] voiceprints ready in ${Date.now() - started} ms (${got} of ${wanted} models)`);
+        else console.warn("  [voice-id] the voiceprint models didn't load");
+      });
   }
 
   /** The helper is going: voiceprints it was asking for won't come, nor will its turns' words. */
   private dropPrints() {
-    for (const done of [...this.prints.values()]) done(null);
+    for (const done of [...this.helperPrints.values()]) done(null);
     this.turnPrints.clear();
   }
 
-  /** A voiceprint of this audio from the helper, or null when it can't make one in time. */
-  private voiceprint(audio: Int16Array, models: string, waitMs = PRINT_WAIT_MS): Promise<number[] | null> {
+  /**
+   * A turn's voiceprints, asked of the helper's model and the worker's at once: those that come within `waitMs`
+   * (null: none did). The worker starts on the first ask, so a turn meanwhile has the helper's alone.
+   */
+  private prints(audio: Int16Array, models: VoiceModels, waitMs = PRINT_WAIT_MS): Promise<Prints | null> {
+    void this.startPrinter(models.worker);
+    const printer = this.printer?.alive ? this.printer : null;
+    return Promise.all([models.helper ? this.helperPrint(audio, models.helper, waitMs) : null, printer ? printer.print(audio, waitMs) : null]).then(([small, large]) => {
+      const prints: Prints = { ...(large ?? {}), ...(small ? { [HELPER_EAR]: small } : {}) };
+      return Object.keys(prints).length ? prints : null;
+    });
+  }
+
+  /** A voiceprint of this audio from the helper's model, or null when it can't make one in time. */
+  private helperPrint(audio: Int16Array, models: string, waitMs: number): Promise<number[] | null> {
     const helper = this.helper;
     if (!helper) return Promise.resolve(null);
     const id = ++this.printSeq;
     return new Promise((resolve) => {
-      const timer = setTimeout(() => (this.prints.delete(id), resolve(null)), waitMs);
-      this.prints.set(id, (print) => (clearTimeout(timer), this.prints.delete(id), resolve(print)));
+      const timer = setTimeout(() => (this.helperPrints.delete(id), resolve(null)), waitMs);
+      this.helperPrints.set(id, (print) => (clearTimeout(timer), this.helperPrints.delete(id), resolve(print)));
       const pcm = Buffer.from(audio.buffer, audio.byteOffset, audio.byteLength).toString('base64');
       helper.command({ type: 'voiceprint', id, models, pcm });
     });
+  }
+
+  /** The worker for these models, started (or started again with others) - a few times at most if it keeps stopping. */
+  private startPrinter(models: WorkerModel[]): Promise<void> {
+    const key = JSON.stringify(models);
+    if (key === this.printerFor && (this.printer?.alive || this.printerStarting)) return this.printerStarting ?? Promise.resolve();
+    if (key === this.printerFor && this.printerRestarts >= MAX_RESTARTS) return Promise.resolve();
+    this.printerRestarts = key === this.printerFor ? this.printerRestarts + 1 : 0;
+    this.stopPrinter();
+    this.printerFor = key;
+    if (!models.length) return Promise.resolve();
+    const starting: Promise<void> = Voiceprinter.start(models, (gone) => {
+      if (this.printer === gone) this.printer = null; // prints go on with the helper's model meanwhile
+    })
+      .then((printer) => {
+        if (this.printerFor === key && this.printerStarting === starting) this.printer = printer;
+        else printer?.close();
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (this.printerStarting === starting) this.printerStarting = null;
+      });
+    this.printerStarting = starting;
+    return starting;
+  }
+
+  private stopPrinter() {
+    this.printer?.close();
+    this.printer = null;
+    this.printerStarting = null;
+    this.printerFor = '';
   }
 
   private onFinal(id: number, text: string) {
@@ -494,19 +561,19 @@ export class Hearing {
     if (!explicit && overlapped && ((words.split(/\s+/).length >= 3 && isEcho(words, recent)) || !this.config?.bargeIn)) return this.events.transcript('', true);
     this.events.transcript(words, true);
     if (!printed) return this.events.utterance(words, explicit);
-    void printed.print.then((print) => {
+    void printed.prints.then((prints) => {
       const voice = this.voice;
       // Setting up or testing Voice ID: what's said is for it, never a request.
-      if (voice?.claim(print, printed.seconds, words, printed.audio)) return;
+      if (voice?.claim(prints, printed.seconds, words, printed.audio)) return;
       // The master keyword, in any voice: Voice ID is off from now on, and what came after it goes through.
       const rest = voice?.unlock?.(words) ?? null;
       if (rest !== null) return rest ? this.events.utterance(rest, explicit, 'anyone') : undefined;
       // Said with the talk shortcut: whoever holds the key down is at this Mac - it counts as the user (and teaches Voice ID).
       if (explicit) {
-        voice?.confirmed?.(print, printed.seconds, words);
+        voice?.confirmed?.(prints, printed.seconds, words, printed.audio);
         return this.events.utterance(words, true);
       }
-      this.events.utterance(words, false, voice?.decide(print, printed.seconds, { text: words }));
+      this.events.utterance(words, false, voice?.decide(prints, printed.seconds, { text: words, audio: printed.audio, overlapped: printed.overlapped }));
     });
   }
 }
