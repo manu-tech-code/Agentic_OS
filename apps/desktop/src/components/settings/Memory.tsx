@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { ClientEvent } from '@nova/core/protocol';
 import { personalize, type SettingsSnapshot } from '@nova/core/settings';
+import { Info } from './Controls';
 
 type Actions = { snapshot: SettingsSnapshot; name: string; onAction: (event: ClientEvent) => void };
 
@@ -104,13 +105,10 @@ export function ScreenPanel({ snapshot, name, onAction, preview }: Actions & { p
   return (
     <div className="integrations">
       <div className="tile">
-        <strong>Nova Eyes</strong>
-        <span className="muted">
-          {personalize(
-            "A small background app that sees for Nova. macOS asks you to allow it by name - not the terminal Nova runs in - and it answers only Nova. It reads the screen only when you ask Nova to look.",
-            name,
-          )}
-        </span>
+        <div className="tile__head">
+          <strong>Nova Eyes</strong>
+          <Info label="Nova Eyes" text={personalize("A small background app that sees for Nova. macOS asks you to allow it by name - not the terminal Nova runs in - and it answers only Nova. It reads the screen only when you ask Nova to look.", name)} />
+        </div>
         {!running && !permissions ? (
           <div className="tile__head">
             <span className="muted">{message ?? "Nova Eyes isn't running."}</span>

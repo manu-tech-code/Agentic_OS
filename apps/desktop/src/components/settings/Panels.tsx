@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ClientEvent, OrbPrefs, Phase } from '@nova/core/protocol';
 import { isEntryName, personalize, type SettingsSnapshot, type VoiceTestResult } from '@nova/core/settings';
 import { ParticleOrb } from '../ParticleOrb';
-import { SecretStatus, Switch, TextInput, type Save } from './Controls';
+import { Info, SecretStatus, Switch, TextInput, type Save } from './Controls';
 
 type ServerEntry = { url?: string; structuredOutputs?: boolean };
 type AgentEntry = { model?: string; args?: string | string[]; bin?: string };
@@ -125,6 +125,7 @@ export function VoiceIdPanel({ snapshot, name, result, onAction }: ActionProps) 
       <div className="tile__head tile__head--wrap">
         <span className={`dot ${v.on ? 'dot--on' : ''}`} />
         <strong>Voice ID</strong>
+        <Info label="Voice ID" text={personalize("With Voice ID on, Nova listens to you alone: other voices are ignored, even saying its name, and a TV can't answer its questions. When it can't tell (a very short \"yes\"), it says so - holding the talk shortcut always counts as you. To set it up, read six short phrases where it's quiet; Test my voice then shows whether it knows you. Your voiceprint is made and kept on this Mac, and never leaves it.", name)} />
         <span className="muted">
           {v.enrolling
             ? `learning your voice · ${v.enrolling.step} of ${v.enrolling.of}`
@@ -175,12 +176,6 @@ export function VoiceIdPanel({ snapshot, name, result, onAction }: ActionProps) 
       {v.testing && <VoiceTest testing={v.testing} bars={v.bars} on={v.on} name={name} />}
       {v.message && <span className="muted">{v.message}</span>}
       {browser && <span className="muted">Voice ID needs Nova's own hearing - Nova.app, or Hearing on Apple or Parakeet: the browser's speech recognition never passes the voice on.</span>}
-      <span className="muted">
-        {personalize(
-          "With Voice ID on, Nova listens to you alone: other voices are ignored, even saying its name, and a TV can't answer its questions. When it can't tell (a very short \"yes\"), it says so - holding the talk shortcut always counts as you. To set it up, read six short phrases where it's quiet; Test my voice then shows whether it knows you. Your voiceprint is made and kept on this Mac, and never leaves it.",
-          name,
-        )}
-      </span>
     </div>
   );
 }
@@ -249,6 +244,7 @@ export function HearingPanel({ snapshot, name, result, onAction }: ActionProps) 
       <div className="tile__head">
         <span className={`dot ${status.engine !== 'browser' && status.state === 'ready' ? 'dot--on' : ''}`} />
         <strong>{engine}</strong>
+        <Info label="Hearing" text={personalize("On-device hearing turns what you say into text on this Mac - nothing you say leaves it - and lets you talk over Nova to stop it. Apple's recognizer needs no download. Parakeet is NVIDIA's open model, the most accurate in a noisy room. Smart Turn hears from your tone when you've finished a sentence.", name)} />
         <span className="muted">{state}</span>
       </div>
       {status.message && <span className="muted">{status.message}</span>}
@@ -274,12 +270,6 @@ export function HearingPanel({ snapshot, name, result, onAction }: ActionProps) 
           onAction({ type: 'hearing-install', model: 'smart-turn' });
         }}
       />
-      <span className="muted">
-        {personalize(
-          "On-device hearing turns what you say into text on this Mac - nothing you say leaves it - and lets you talk over Nova to stop it. Apple's recognizer needs no download. Parakeet is NVIDIA's open model, the most accurate in a noisy room. Smart Turn hears from your tone when you've finished a sentence.",
-          name,
-        )}
-      </span>
     </div>
   );
 }
@@ -293,6 +283,7 @@ export function ReflexPanel({ snapshot, name, result, onAction }: ActionProps) {
       <div className="tile__head">
         <span className={`dot ${reflex.installed ? 'dot--on' : ''}`} />
         <strong>Reflex</strong>
+        <Info label="Reflex" text={personalize("Nova's own decision model. A classifier trained on thousands of phrasings and a search of the closest examples read what you mean; app, project and agent names are matched in code. It answers in about a millisecond, on this Mac, with no language model and nothing sent anywhere. When it isn't sure, the brain answers - and when the brain handles it with one of Nova's skills, Reflex learns that phrasing for next time.", name)} />
         <span className="muted">
           {reflex.installed
             ? [
@@ -322,12 +313,6 @@ export function ReflexPanel({ snapshot, name, result, onAction }: ActionProps) {
               </button>
             )}
       </div>
-      <span className="muted">
-        {personalize(
-          "Nova's own decision model. A classifier trained on thousands of phrasings and a search of the closest examples read what you mean; app, project and agent names are matched in code. It answers in about a millisecond, on this Mac, with no language model and nothing sent anywhere. When it isn't sure, the brain answers - and when the brain handles it with one of Nova's skills, Reflex learns that phrasing for next time.",
-          name,
-        )}
-      </span>
     </div>
   );
 }
@@ -507,10 +492,17 @@ function CustomAgents({ snapshot, onSave }: { snapshot: SettingsSnapshot; onSave
   };
   return (
     <div className="tile tile--add">
-      <strong>Your own agents</strong>
-      <span className="muted">
-        Any agent CLI: give its command and the arguments for a question and for a task. <code>{'{prompt}'}</code> is filled in; without it the prompt goes to stdin.
-      </span>
+      <div className="tile__head">
+        <strong>Your own agents</strong>
+        <Info
+          label="Your own agents"
+          text={
+            <>
+              Any agent CLI: give its command and the arguments for a question and for a task. <code>{'{prompt}'}</code> is filled in; without it the prompt goes to stdin.
+            </>
+          }
+        />
+      </div>
       <textarea
         className="setting__input is-mono setting__code"
         rows={7}

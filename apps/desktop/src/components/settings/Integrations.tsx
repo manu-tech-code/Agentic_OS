@@ -10,7 +10,7 @@ import {
   type SettingsSnapshot,
   type ToolPolicy,
 } from '@nova/core/settings';
-import { SecretStatus, type Save } from './Controls';
+import { Info, SecretStatus, type Save } from './Controls';
 
 type Props = { snapshot: SettingsSnapshot; name: string; onSave: Save; onAction: (event: ClientEvent) => void };
 type Status = SettingsSnapshot['integrations'][number];
@@ -63,13 +63,10 @@ export function IntegrationsPanel({ snapshot, name, onSave, onAction }: Props) {
         </div>
       )}
       <div className="tile tile--add">
-        <strong>Add a service</strong>
-        <span className="muted">
-          {personalize(
-            'Every brain - your paired agents and models alike - can use it through Nova. Services with "sign in" open your browser; you sign in yourself, and Nova keeps only the access it was given.',
-            name,
-          )}
-        </span>
+        <div className="tile__head">
+          <strong>Add a service</strong>
+          <Info label="Add a service" text={personalize('Every brain - your paired agents and models alike - can use it through Nova. Services with "sign in" open your browser; you sign in yourself, and Nova keeps only the access it was given.', name)} />
+        </div>
         <div className="preset-grid">
           {INTEGRATION_PRESETS.map((p) => {
             const has = Object.values(entries).some((e) => e.url === p.url);

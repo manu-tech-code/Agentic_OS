@@ -62,7 +62,8 @@ For Nova in the menu bar - always there, no browser tab - build **Nova.app** wit
 ## Settings
 
 Click ⚙ in the dock or say "open settings" (⌘, works in the native window; browsers keep it for their own settings).
-Everything is configurable there and applies immediately, without a restart:
+Everything is configurable there and applies immediately, without a restart. What a setting does is behind the ⓘ
+beside its name - point at it, or click it to keep it open:
 
 - **Setup** - what's set up and what isn't, with the fix for each, and the first-run walkthrough again.
 - **General** - the assistant's name. It answers to "hey <name>", "okay <name>" and the name, unless you set your own wake words.

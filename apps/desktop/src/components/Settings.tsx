@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import type { ClientEvent } from '@nova/core/protocol';
 import { FIELDS, personalize, SECTIONS, type SettingField, type SettingsSection, type SettingsSnapshot, type SettingValue } from '@nova/core/settings';
 import { previewVoice } from '../voice/voice';
-import { ListInput, NumberInput, Reset, SliderInput, Switch, TextInput, type Save } from './settings/Controls';
+import { Info, ListInput, NumberInput, Reset, SliderInput, Switch, TextInput, type Save } from './settings/Controls';
 import { AgentsPanel, HearingPanel, JevPanel, OrbPreview, ProjectsPanel, ReflexPanel, ServersPanel, SystemPanel, VoiceIdPanel, VoicePanel } from './settings/Panels';
 import { IntegrationsPanel } from './settings/Integrations';
 import { HandsPanel } from './settings/Hands';
@@ -129,8 +129,10 @@ function FieldRow({ field, snapshot, name, onSave, onAction }: { field: SettingF
   return (
     <div className="setting">
       <div className="setting__text">
-        <div className="setting__label">{personalize(field.label, name)}</div>
-        {field.help && <div className="setting__help">{personalize(field.help, name)}</div>}
+        <div className="setting__label">
+          {personalize(field.label, name)}
+          {field.help && <Info label={personalize(field.label, name)} text={personalize(field.help, name)} />}
+        </div>
       </div>
       <div className="setting__control">
         <Control field={field} snapshot={snapshot} name={name} onSave={save} onAction={onAction} />
