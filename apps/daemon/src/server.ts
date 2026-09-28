@@ -6,6 +6,7 @@ import { homedir, platform as osPlatform } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
   createDecisionEngine,
+  formatShortcut,
   LlmReasoningBrain,
   NovaBrain,
   setPath,
@@ -27,6 +28,7 @@ import { modelResolver } from './models.ts';
 import { createPlatform } from './platform.ts';
 import { createHands } from './hands/index.ts';
 import { Hearing } from './hearing/service.ts';
+import { VoiceId, VoiceprintStore } from './hearing/voiceid.ts';
 import { Initiative } from './initiative/index.ts';
 import { IntegrationHub } from './integrations/hub.ts';
 import { Journal, MemoryStore } from './memory/store.ts';
@@ -35,7 +37,7 @@ import { connectionToken, refusal, tokenFile, windowOrigins } from './shell/acce
 import { readClientEvent } from './shell/events.ts';
 import { Presence } from './shell/presence.ts';
 import { serveUi, UI_DIR } from './shell/static.ts';
-import { DEFAULT_REFLEX_MODEL, downloadModel, isInstalled, KOKORO_MODEL, MODELS, PARAKEET_MODEL, SMART_TURN_MODEL, whereInstalled } from './models/files.ts';
+import { DEFAULT_REFLEX_MODEL, downloadModel, isInstalled, KOKORO_MODEL, MODELS, modelsDir, PARAKEET_MODEL, SMART_TURN_MODEL, VOICE_ID_MODEL, whereInstalled } from './models/files.ts';
 import { forgetLearned, loadReflex, reflexEmbedder, type ReflexRuntime } from './reflex/runtime.ts';
 import { buildSnapshot, validateChanges } from './snapshot.ts';
 import { Trust } from './trust/index.ts';
@@ -195,6 +197,7 @@ async function finishRuntime(settings: Settings, fileError: string | undefined, 
       ui: config.ui,
       computerUse: config.hands.computerUse,
       askFirst: config.askFirst,
+      talkShortcut: formatShortcut(config.presence.shortcut),
     },
   };
 }
@@ -409,7 +412,7 @@ hearing = new Hearing({
     broadcastSnapshot();
   },
   transcript: (text, final) => broadcast({ type: 'transcript', text, final }),
-  utterance: (text, explicit) => void nova.handle(text, explicit ? 'shortcut' : 'voice').catch((e) => console.warn(`  [nova] ${why(e)}`)),
+  utterance: (text, explicit, speaker) => void nova.handle(text, explicit ? 'shortcut' : 'voice', speaker).catch((e) => console.warn(`  [nova] ${why(e)}`)),
   bargeIn() {
     broadcast({ type: 'barge-in' }); // windows stop the audio
     speaking = null; // and the rest of the reply isn't synthesized
@@ -417,6 +420,23 @@ hearing = new Hearing({
   },
 });
 hearing.configure(runtime.config.hearing, vocabulary(), runtime.config.wakeWords);
+
+// Voice ID: the user's voiceprint (on this Mac only), and hearing asking whose each turn is.
+const voiceprints = new VoiceprintStore(join(dirname(settingsFile()), 'voiceprint.json'), VOICE_ID_MODEL);
+await voiceprints.load();
+const voiceId = new VoiceId({
+  store: voiceprints,
+  model: VOICE_ID_MODEL,
+  label: MODELS[VOICE_ID_MODEL]!.label,
+  modelDir: async () => ((await isInstalled(VOICE_ID_MODEL)) ? join(modelsDir(), VOICE_ID_MODEL) : null),
+  enabled: () => runtime.config.voiceId.enabled,
+  learning: () => runtime.config.voiceId.learn,
+  name: () => runtime.config.name,
+  turnOn: () => saveSettings({ 'voiceId.enabled': true }),
+  changed: () => broadcastSnapshot(),
+});
+await voiceId.refresh();
+hearing.voice = voiceId;
 
 const voiceStatus = () => ({ model: KOKORO_MODEL, label: MODELS[KOKORO_MODEL]!.label, installed: runtime.voiceInstalled, bundled: runtime.voiceBundled });
 const hearingStatus = () => ({
@@ -456,6 +476,7 @@ const snapshot = async () =>
     await memoryStatus(),
     await screenStatus(),
     await handsStatus(),
+    voiceId.status(),
     { app: presence.status },
     initiative!.snapshot(),
     {
@@ -666,7 +687,9 @@ wss.on('connection', (ws, req) => {
 
   /** One event from this client, already checked to be one Nova understands. */
   const onEvent = async (event: ClientEvent) => {
-    if (event.type === 'utterance') await nova.handle(event.text, event.source);
+    // Speech a window recognised itself never reached Voice ID's ear: with Voice ID on it can't count as the
+    // user (the talk shortcut still does). Typing is the user at the keyboard.
+    if (event.type === 'utterance') await nova.handle(event.text, event.source, event.source === 'voice' && voiceId.status().on ? 'unsure' : undefined);
     else if (event.type === 'audio-start') {
       // The latest window to start its microphone hears for Nova - unless the Mac app does.
       if (presence.mayListen(ws)) micOwner = ws;
@@ -807,6 +830,29 @@ wss.on('connection', (ws, req) => {
       } catch (error) {
         send(ws, { type: 'settings-result', ok: false, message: (error as Error).message });
       }
+    } else if (event.type === 'voiceid') {
+      // Voice ID: its model (pinned, checked), learning the user's voice, stopping, forgetting it.
+      try {
+        const progress = (message: string) => send(ws, { type: 'settings-result', ok: true, message });
+        let message = '';
+        if (event.action === 'install') {
+          let shown = -1;
+          await downloadModel(VOICE_ID_MODEL, {
+            onProgress(file, received, total) {
+              const pct = Math.floor((received / total) * 5) * 20;
+              if (file.endsWith('weight.bin') && pct !== shown) progress(`Downloading Voice ID… ${(shown = pct)}%`);
+            },
+          });
+          await voiceId.refresh();
+          message = 'Voice ID is ready to learn your voice.';
+        } else if (event.action === 'enroll') message = await voiceId.start();
+        else if (event.action === 'cancel') (voiceId.cancel(), (message = 'Stopped.'));
+        else (await voiceId.forget(), await saveSettings({ 'voiceId.enabled': false }), (message = 'Your voiceprint is gone.'));
+        broadcastSnapshot();
+        send(ws, { type: 'settings-result', ok: true, message });
+      } catch (error) {
+        send(ws, { type: 'settings-result', ok: false, message: (error as Error).message });
+      }
     } else if (event.type === 'reflex-install' || event.type === 'reflex-forget' || event.type === 'hearing-install') {
       try {
         const progress = (message: string) => send(ws, { type: 'settings-result', ok: true, message });
@@ -847,7 +893,7 @@ shutdown = (code) => {
       console.warn(`  [daemon] while stopping: ${why(e)}`);
     }
   }
-  void Promise.race([Promise.all([memory.flushed(), initiative?.flushed(), trust.flushed()]), new Promise((r) => setTimeout(r, 1000))]).finally(() => process.exit(code));
+  void Promise.race([Promise.all([memory.flushed(), initiative?.flushed(), trust.flushed(), voiceprints.flush()]), new Promise((r) => setTimeout(r, 1000))]).finally(() => process.exit(code));
 };
 for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, () => shutdown(0));
 

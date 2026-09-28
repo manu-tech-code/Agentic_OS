@@ -1,0 +1,298 @@
+import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
+
+/**
+ * Voice ID: whether a turn was said by the user. The hearing helper turns a turn's audio into a voiceprint
+ * (256 numbers, unit length); this compares it with the user's own - the average of what they said when
+ * setting it up, refined only by turns that were clearly them - kept in one file on this Mac (0600) and
+ * never sent anywhere. The arithmetic is here, in code; the helper only listens.
+ */
+
+export type Speaker = 'you' | 'not-you' | 'unsure';
+
+export interface StoredVoiceprint {
+  version: 1;
+  /** The model the prints come from: prints of another model can't be compared with it. */
+  model: string;
+  print: number[];
+  /** At or above this, it's the user; below `reject`, it isn't; between, Nova can't tell. */
+  accept: number;
+  reject: number;
+  enrolled: number;
+  learned: number;
+  updated: string;
+}
+
+/** What the user reads while Nova learns their voice: short and long, a question, a yes. */
+export const ENROLL_PHRASES = (name: string) => [
+  `${name}, what's on my calendar today?`,
+  'Open Safari and find the weather for this weekend.',
+  'Remind me to call my sister at six this evening.',
+  'Play some music I like while I work.',
+  'Yes, go ahead with all of it.',
+  'What did I ask you to do yesterday?',
+];
+
+/** Too little speech to tell anyone apart: a voiceprint of it proves nothing either way. */
+export const MIN_SECONDS = 0.8;
+/** A turn this short is only ever "you" when it's clearly them - a quick "yes" is easy to mistake. */
+const SHORT_SECONDS = 1.5;
+/** How much one clear turn moves the voiceprint, as the voice changes (a cold, another microphone). */
+const LEARN_RATE = 0.05;
+
+export const cosine = (a: readonly number[], b: readonly number[]) => {
+  let dot = 0;
+  for (let i = 0; i < a.length && i < b.length; i++) dot += a[i]! * b[i]!;
+  return dot;
+};
+
+const unit = (v: number[]) => {
+  const norm = Math.sqrt(v.reduce((s, x) => s + x * x, 0));
+  return norm > 0 ? v.map((x) => x / norm) : v;
+};
+
+const mean = (prints: readonly number[][]) => unit(prints[0]!.map((_, i) => prints.reduce((s, p) => s + p[i]!, 0) / prints.length));
+
+/**
+ * The user's voiceprint from their setup phrases, with thresholds set by how alike those came out: a
+ * steady voice gets a higher bar, a varied one a lower - never below what tells people apart.
+ */
+export function enrollFrom(prints: readonly number[][], model: string, now = new Date()): StoredVoiceprint {
+  if (prints.length < 3) throw new Error('Too few phrases to know a voice by.');
+  const print = mean(prints);
+  const self = prints.map((p) => cosine(p, print));
+  const typical = self.reduce((s, x) => s + x, 0) / self.length;
+  const accept = Math.min(0.75, Math.max(0.5, typical - 0.15));
+  const reject = Math.min(0.45, Math.max(0.25, accept - 0.2));
+  return { version: 1, model, print, accept, reject, enrolled: prints.length, learned: 0, updated: now.toISOString() };
+}
+
+/** Whether a setup phrase sounds like the others so far (not a cough, a TV, another person). */
+export function consistent(prints: readonly number[][], next: readonly number[]): boolean {
+  if (prints.length === 0) return true;
+  return cosine(mean(prints), next) >= 0.5;
+}
+
+/** Who said a turn: its score against the user's voiceprint, and how long it was. */
+export function judge(voice: StoredVoiceprint, print: readonly number[], seconds: number): { speaker: Speaker; score: number } {
+  const score = cosine(voice.print, print);
+  if (seconds < MIN_SECONDS) return { speaker: 'unsure', score };
+  if (score < voice.reject) return { speaker: 'not-you', score };
+  // A short turn needs a clearer match: little speech gives a rougher print.
+  const bar = seconds < SHORT_SECONDS ? voice.accept + 0.05 : voice.accept;
+  return { speaker: score >= bar ? 'you' : 'unsure', score };
+}
+
+/** A turn that was clearly the user, long enough to trust: the voiceprint moves a little toward it. */
+export function learnFrom(voice: StoredVoiceprint, print: readonly number[], score: number, seconds: number): StoredVoiceprint | null {
+  if (seconds < SHORT_SECONDS || score < voice.accept + 0.05) return null;
+  const next = unit(voice.print.map((x, i) => (1 - LEARN_RATE) * x + LEARN_RATE * print[i]!));
+  return { ...voice, print: next, learned: voice.learned + 1, updated: new Date().toISOString() };
+}
+
+/** The user's voiceprint on disk: read once, written as it changes (at most every so often while learning). */
+export class VoiceprintStore {
+  private voice: StoredVoiceprint | null = null;
+  private dirty = 0;
+
+  constructor(
+    private readonly file: string,
+    private readonly model: string,
+  ) {}
+
+  async load(): Promise<StoredVoiceprint | null> {
+    try {
+      const v = JSON.parse(await readFile(this.file, 'utf8')) as StoredVoiceprint;
+      // A voiceprint of another model (or a broken file) can't be compared with what the helper makes now.
+      this.voice = v?.version === 1 && v.model === this.model && Array.isArray(v.print) && v.print.length > 0 ? v : null;
+    } catch {
+      this.voice = null;
+    }
+    return this.voice;
+  }
+
+  get current() {
+    return this.voice;
+  }
+
+  async set(voice: StoredVoiceprint) {
+    this.voice = voice;
+    await this.write();
+  }
+
+  /** A learned change: kept in memory now, on disk every tenth. */
+  async learned(voice: StoredVoiceprint) {
+    this.voice = voice;
+    if (++this.dirty >= 10) await this.write();
+  }
+
+  async flush() {
+    if (this.dirty && this.voice) await this.write();
+  }
+
+  async forget() {
+    this.voice = null;
+    this.dirty = 0;
+    await rm(this.file, { force: true });
+  }
+
+  private async write() {
+    this.dirty = 0;
+    await mkdir(dirname(this.file), { recursive: true, mode: 0o700 });
+    const tmp = `${this.file}.tmp`;
+    await writeFile(tmp, `${JSON.stringify(this.voice)}\n`, { mode: 0o600 });
+    await chmod(tmp, 0o600);
+    await rename(tmp, this.file);
+  }
+}
+
+export interface VoiceIdStatus {
+  /** The model is on this Mac. */
+  installed: boolean;
+  label: string;
+  /** The user's voiceprint exists (Voice ID can be on). */
+  enrolled: boolean;
+  /** Voice ID is switched on (Settings) and there is a voiceprint: only the user's voice counts. */
+  on: boolean;
+  learned: number;
+  /** Setting up: which phrase, of how many, and what to say now. */
+  enrolling: { step: number; of: number; say: string } | null;
+  message?: string;
+}
+
+/**
+ * Voice ID for the daemon: setting it up (the user reads a few phrases), deciding whose each turn is, and
+ * learning from the clear ones. Hearing asks it; Settings and the setup checklist read `status()`.
+ */
+export class VoiceId {
+  private phrases: string[] = [];
+  private prints: number[][] = [];
+  private enrollingStep: number | null = null;
+  /** A setup phrase unlike the rest, kept in case the rest (one phrase so far) was the odd one out. */
+  private missed: number[] | null = null;
+  private message: string | undefined;
+
+  constructor(
+    private readonly opts: {
+      store: VoiceprintStore;
+      model: string;
+      label: string;
+      /** Where the model is (null: not on this Mac). */
+      modelDir: () => Promise<string | null>;
+      /** Voice ID switched on in Settings, and keep learning. */
+      enabled: () => boolean;
+      learning: () => boolean;
+      name: () => string;
+      /** A voiceprint was made: switch Voice ID on in Settings. */
+      turnOn: () => Promise<void>;
+      /** Something changed that Settings shows. */
+      changed: () => void;
+      now?: () => number;
+    },
+  ) {}
+
+  private models: string | null = null;
+
+  /** Find the model (after an install, say). */
+  async refresh() {
+    this.models = await this.opts.modelDir();
+  }
+
+  active(): { models: string } | null {
+    if (!this.models) return null;
+    if (this.enrollingStep !== null) return { models: this.models };
+    return this.opts.enabled() && this.opts.store.current ? { models: this.models } : null;
+  }
+
+  decide(print: number[] | null, seconds: number, opts: { learn?: boolean } = {}): Speaker | undefined {
+    const voice = this.opts.store.current;
+    if (!voice || !this.opts.enabled() || !this.models) return undefined;
+    if (!print) return 'unsure';
+    const { speaker, score } = judge(voice, print, seconds);
+    if (speaker === 'you' && opts.learn !== false && this.opts.learning()) {
+      const next = learnFrom(voice, print, score, seconds);
+      if (next) void this.opts.store.learned(next).catch((e) => console.warn(`  [voice-id] couldn't keep what it learned: ${(e as Error).message}`));
+    }
+    return speaker;
+  }
+
+  /** Start setting up (again): the model must be on this Mac. */
+  async start(): Promise<string> {
+    await this.refresh();
+    if (!this.models) throw new Error('Voice ID needs its model first.');
+    this.phrases = ENROLL_PHRASES(this.opts.name());
+    this.prints = [];
+    this.missed = null;
+    this.enrollingStep = 0;
+    this.message = undefined;
+    this.opts.changed();
+    return `Say: "${this.phrases[0]}"`;
+  }
+
+  cancel() {
+    this.enrollingStep = null;
+    this.prints = [];
+    this.missed = null;
+    this.message = undefined;
+    this.opts.changed();
+  }
+
+  async forget() {
+    this.cancel();
+    await this.opts.store.forget();
+    this.opts.changed();
+  }
+
+  enroll(print: number[] | null, seconds: number, _text: string): boolean {
+    if (this.enrollingStep === null) return false;
+    if (!print || seconds < 1.2) {
+      this.message = 'That was too short to learn from - say the whole phrase.';
+    } else if (consistent(this.prints, print)) {
+      this.take([...this.prints, print]);
+    } else if (this.prints.length === 1 && this.missed && consistent([this.missed], print)) {
+      // Twice in a row alike, and unlike the first phrase: that one was the odd one out (a cough, a TV).
+      this.take([this.missed, print]);
+    } else {
+      this.missed = print;
+      this.message = "That didn't sound like the others - somewhere quieter, and just you, then say it again.";
+    }
+    this.opts.changed();
+    return true;
+  }
+
+  private take(prints: number[][]) {
+    this.prints = prints;
+    this.missed = null;
+    this.message = undefined;
+    this.enrollingStep = prints.length;
+    if (prints.length < this.phrases.length) return;
+    void this.finish().catch((e) => {
+      this.message = `Couldn't keep your voiceprint: ${(e as Error).message}`;
+      this.opts.changed();
+    });
+  }
+
+  private async finish() {
+    const voice = enrollFrom(this.prints, this.opts.model, new Date(this.opts.now?.() ?? Date.now()));
+    this.enrollingStep = null;
+    this.prints = [];
+    await this.opts.store.set(voice);
+    await this.opts.turnOn();
+    this.message = 'Voice ID is on: Nova now answers your voice alone.';
+    this.opts.changed();
+  }
+
+  status(): VoiceIdStatus {
+    const voice = this.opts.store.current;
+    const step = this.enrollingStep;
+    return {
+      installed: this.models !== null,
+      label: this.opts.label,
+      enrolled: voice !== null,
+      on: Boolean(voice && this.opts.enabled() && this.models),
+      learned: voice?.learned ?? 0,
+      enrolling: step === null ? null : { step: step + 1, of: this.phrases.length, say: this.phrases[step] ?? '' },
+      ...(this.message ? { message: this.message } : {}),
+    };
+  }
+}

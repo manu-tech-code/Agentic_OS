@@ -113,6 +113,94 @@ describe('the hearing service, with a stand-in helper', () => {
     hearing.close();
   });
 
+  /** Voice ID's check, with a hand on it: who it says a turn is, and what it was asked. */
+  function voiceCheck(say: 'you' | 'not-you' | 'unsure', opts: { enrolling?: boolean } = {}) {
+    const asked: { print: number[] | null; seconds: number; learn?: boolean }[] = [];
+    const enrolled: string[] = [];
+    return {
+      asked,
+      enrolled,
+      check: {
+        active: () => ({ models: '/models/wespeaker-v2' }),
+        decide: (print: number[] | null, seconds: number, o?: { learn?: boolean }) => (asked.push({ print, seconds, learn: o?.learn }), say),
+        enroll: (_p: number[] | null, _s: number, text: string) => (opts.enrolling ? (enrolled.push(text), true) : false),
+      },
+    };
+  }
+  /** The stand-in helper answers each voiceprint it's asked for at once, as the real one does, with `print()`. */
+  const printsWith = (hearing: any, print: () => number[]) => {
+    const helper = hearing.helper;
+    const command = helper.command;
+    helper.command = (c: Record<string, any>) => {
+      command(c);
+      if (c.type === 'voiceprint') queueMicrotask(() => hearing.onHelper('parakeet', { type: 'voiceprint', id: c.id, print: print() }));
+    };
+  };
+
+  it("asks whose voice each turn was, and passes it on - a turn said with the shortcut is always the user's", async () => {
+    const { hearing, start, quiet, talk, answer } = setup();
+    const heard: [string, boolean, string | undefined][] = [];
+    (hearing as any).events.utterance = (t: string, e: boolean, s?: string) => heard.push([t, e, s]);
+    const voice = voiceCheck('not-you');
+    hearing.voice = voice.check;
+    const helper = start();
+    printsWith(hearing, () => [1, 0, 0]);
+    talk(1200);
+    quiet(1000);
+    await vi.advanceTimersByTimeAsync(3000);
+    const asked = helper.filter((c) => c.type === 'voiceprint').at(-1)!;
+    expect(asked).toMatchObject({ models: '/models/wespeaker-v2' });
+    expect(Buffer.from(asked.pcm, 'base64').length / 2 / 16_000).toBeGreaterThan(1.2); // the turn's own audio
+    answer(helper, 'manuel open slack');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(heard).toEqual([['manuel open slack', false, 'not-you']]);
+    expect(voice.asked[0]).toMatchObject({ print: [1, 0, 0] });
+
+    hearing.hold(); // the shortcut: whoever holds it is at this Mac
+    talk(900);
+    hearing.release(true);
+    await vi.advanceTimersByTimeAsync(100);
+    answer(helper, 'open slack');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(heard.at(-1)).toEqual(['open slack', true, undefined]);
+    hearing.close();
+  });
+
+  it('gives setup phrases to Voice ID, never to Nova', async () => {
+    const { hearing, utterances, start, quiet, talk, answer } = setup();
+    const voice = voiceCheck('you', { enrolling: true });
+    hearing.voice = voice.check;
+    const helper = start();
+    printsWith(hearing, () => [1, 0]);
+    talk(1500);
+    quiet(1000);
+    await vi.advanceTimersByTimeAsync(3000);
+    answer(helper, "manuel what's on my calendar today");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(voice.enrolled).toEqual(["manuel what's on my calendar today"]);
+    expect(utterances).toEqual([]);
+    hearing.close();
+  });
+
+  it("isn't talked over by another voice - the user still can", async () => {
+    for (const [who, stops] of [['not-you', false], ['you', true]] as const) {
+      const { hearing, start, talk } = setup();
+      const bargeIn = vi.fn();
+      (hearing as any).events.bargeIn = bargeIn;
+      const voice = voiceCheck(who);
+      hearing.voice = voice.check;
+      start();
+      printsWith(hearing, () => [1, 0]);
+      hearing.setSpoken('Here is the weather for today and tomorrow in Accra');
+      talk(1300);
+      (hearing as any).onHelper('parakeet', { type: 'partial', text: 'stop stop that please' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(bargeIn).toHaveBeenCalledTimes(stops ? 1 : 0);
+      expect(voice.asked[0]?.learn).toBe(false); // a glance at part of a turn teaches nothing
+      hearing.close();
+    }
+  });
+
   it('makes a turn Nova’s after the shortcut only while it follows closely', () => {
     const { hearing, utterances, start, quiet, talk, answer } = setup();
     const helper = start();

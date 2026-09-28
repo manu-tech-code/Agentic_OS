@@ -107,6 +107,67 @@ function ModelRow({ name, label, installed, size, busy, onInstall }: { name: str
   );
 }
 
+/**
+ * Voice ID: its model, learning the user's voice (the phrase to say now, and how far along), and forgetting it.
+ * The voiceprint itself never reaches a window - only whether there is one.
+ */
+export function VoiceIdPanel({ snapshot, name, result, onAction }: ActionProps) {
+  const v = snapshot.voiceId;
+  const [busy, setBusy] = useBusy([v.installed, v.enrolled, v.enrolling?.step], result);
+  const act = (action: 'install' | 'enroll' | 'cancel' | 'forget') => (setBusy(true), onAction({ type: 'voiceid', action }));
+  return (
+    <div className="tile">
+      <div className="tile__head">
+        <span className={`dot ${v.on ? 'dot--on' : ''}`} />
+        <strong>Voice ID</strong>
+        <span className="muted">
+          {v.enrolling
+            ? `learning your voice · ${v.enrolling.step} of ${v.enrolling.of}`
+            : v.on
+              ? `on${v.learned ? ` · learned from ${v.learned} of your turns` : ''}`
+              : v.enrolled
+                ? 'your voice is learned · switched off'
+                : v.installed
+                  ? 'not set up'
+                  : 'not installed'}
+        </span>
+        {!v.installed && (
+          <button type="button" className="btn btn--ghost tile__action" disabled={busy} onClick={() => act('install')}>
+            {busy ? 'Installing…' : 'Install · 8 MB'}
+          </button>
+        )}
+        {v.installed && !v.enrolling && (
+          <button type="button" className="btn btn--ghost tile__action" disabled={busy} onClick={() => act('enroll')}>
+            {v.enrolled ? 'Learn it again' : 'Set up'}
+          </button>
+        )}
+        {v.enrolling && (
+          <button type="button" className="link tile__action" onClick={() => act('cancel')}>
+            Stop
+          </button>
+        )}
+        {v.enrolled && !v.enrolling && (
+          <button type="button" className="link tile__action" onClick={() => act('forget')}>
+            Forget my voice
+          </button>
+        )}
+      </div>
+      {v.enrolling && (
+        <div className="banner">
+          Say: <strong>“{v.enrolling.say}”</strong>
+        </div>
+      )}
+      {v.message && <span className="muted">{v.message}</span>}
+      <span className="muted">
+        {personalize(
+          "With Voice ID on, Nova listens to you alone: other voices are ignored, even saying its name, and a TV can't answer its questions. When it can't tell (a very short \"yes\"), it says so - holding the talk shortcut always counts as you. To set it up, read six short phrases where it's quiet. Your voiceprint is made and kept on this Mac, and never leaves it.",
+          name,
+        )}
+      </span>
+    </div>
+  );
+}
+
 /** How Nova hears: the engine in use (and why, when the browser listens instead), and the models hearing can use. */
 export function HearingPanel({ snapshot, name, result, onAction }: ActionProps) {
   const { status, parakeet, smartTurn } = snapshot.hearing;

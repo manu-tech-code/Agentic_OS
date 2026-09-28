@@ -103,6 +103,7 @@ export async function buildSnapshot(
   memory: SettingsSnapshot['memory'],
   screen: SettingsSnapshot['screen'],
   hands: SettingsSnapshot['hands'],
+  voiceId: SettingsSnapshot['voiceId'],
   presence: SettingsSnapshot['presence'],
   initiative: SettingsSnapshot['initiative'],
   trust: TrustSnapshotInput,
@@ -130,6 +131,7 @@ export async function buildSnapshot(
   const setup = setupSteps({
     config,
     signing: signed,
+    voiceId,
     reflex: { installed: reflexInstalled, learned: reflex.model?.learned.length ?? reflex.status.learned, label: reflex.status.label },
     voice,
     hearing,
@@ -152,6 +154,7 @@ export async function buildSnapshot(
     hearing: hearing.status,
     voiceInstalled: voice.installed,
     isLocal: modelResolver(config.localProviders).isLocal,
+    voiceprint: voiceId.enrolled,
   });
   return {
     ...settingValues(settings, config, env),
@@ -171,6 +174,7 @@ export async function buildSnapshot(
     screen,
     hands,
     signing: signed,
+    voiceId,
     presence,
     initiative,
     setup: { onboarded: trust.onboarded, steps: setup },

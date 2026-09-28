@@ -111,6 +111,8 @@ export interface NovaOptions {
   hands?: HandsService | null;
   /** Whether brains may use the computer (look, click, type); the user's own "click send" works either way. */
   computerUse?: boolean;
+  /** The talk shortcut as the user presses it ("⌥Space"), for what Nova says about it. */
+  talkShortcut?: string;
   /**
    * Whether Nova asks before doing what the user told it to (unset: it does). Off, what the user says to do
    * is done once Nova is sure what was said - a brain's steps for it too - and only what nobody asked for,
@@ -333,9 +335,9 @@ export class NovaBrain implements ToolHost {
    * Something the user said or typed. `shortcut`: said while they held (or right after they tapped)
    * the talk shortcut, so it's meant for Nova whether or not it has the wake word.
    */
-  async handle(raw: string, source: 'voice' | 'keyboard' | 'shortcut' = 'voice'): Promise<void> {
+  async handle(raw: string, source: 'voice' | 'keyboard' | 'shortcut' = 'voice', speaker?: 'you' | 'not-you' | 'unsure'): Promise<void> {
     try {
-      await this.process(raw, source);
+      await this.process(raw, source, 'you', speaker);
     } finally {
       // A routine waiting on an answer goes on; an agent kept waiting gets its question.
       if (!this.pending && this.routineRest) await this.continueRoutine();
@@ -551,7 +553,7 @@ export class NovaBrain implements ToolHost {
 
   // ---------------------------------------------------------------------------
 
-  private async process(raw: string, source: 'voice' | 'keyboard' | 'shortcut' | 'routine', by = 'you') {
+  private async process(raw: string, source: 'voice' | 'keyboard' | 'shortcut' | 'routine', by = 'you', speaker?: 'you' | 'not-you' | 'unsure') {
     const text = raw.trim();
     if (!text) return;
     const wake = this.stripWake(text);
@@ -561,6 +563,10 @@ export class NovaBrain implements ToolHost {
     const explicit = wake.found || source !== 'voice';
 
     if (!explicit && !inWindow) return; // not for us
+    // Voice ID: another voice is ignored entirely, even saying Nova's name - nothing opens, nothing is kept.
+    // One Nova can't place (a very short "yes") is told how to be sure: the talk shortcut counts as the user.
+    if (source === 'voice' && speaker === 'not-you') return;
+    if (source === 'voice' && speaker === 'unsure') return this.cantPlace();
     if (wake.found && !wake.rest) {
       this.openWindow();
       return;
@@ -1282,6 +1288,14 @@ export class NovaBrain implements ToolHost {
     this.history.push({ user, nova: text });
     if (this.history.length > 20) this.history.shift();
     this.opts.onTurn?.({ user, nova: text });
+  }
+
+  private placedAt = 0;
+  /** Voice ID couldn't tell it was the user: say how once in a while - the question waiting stays open. */
+  private cantPlace() {
+    if (this.now() - this.placedAt < 20_000) return;
+    this.placedAt = this.now();
+    this.announce(`I couldn't tell that was you. Hold ${this.opts.talkShortcut ?? 'the talk shortcut'} and say it again.`);
   }
 
   /**

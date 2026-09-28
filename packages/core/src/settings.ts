@@ -560,6 +560,23 @@ export const FIELDS: SettingField[] = [
     max: 60,
     step: 1,
   },
+  {
+    key: 'voiceId.enabled',
+    section: 'voice',
+    label: 'Voice ID - only your voice',
+    help: "Nova listens to you alone: other voices are ignored, even saying its name, and a TV can't answer its questions. Holding the talk shortcut always counts as you. Set it up below; your voiceprint stays on this Mac.",
+    type: 'toggle',
+    default: false,
+  },
+  {
+    key: 'voiceId.learn',
+    section: 'voice',
+    label: 'Keep learning your voice',
+    help: 'Turns that were clearly you refine your voiceprint a little, so a cold, another microphone or a noisy room still works.',
+    type: 'toggle',
+    default: true,
+    when: { key: 'voiceId.enabled', is: [true] },
+  },
   { key: 'presence.sounds', section: 'presence', label: 'Chime when Nova starts listening', type: 'toggle', default: true },
   { key: 'presence.launchAtLogin', section: 'presence', label: 'Open Nova at login', type: 'toggle', default: true },
   {
@@ -1030,6 +1047,16 @@ export interface SettingsSnapshot {
     adHoc: boolean;
     /** Each app as it's signed now: with that certificate ("yours"), ad hoc, by something else, or not built yet. */
     apps: { name: string; signed: 'yours' | 'ad hoc' | 'other' | 'not built'; hardened: boolean }[];
+  };
+  /** Voice ID: its model, the user's voiceprint (whether there is one - never the print), and setting it up. */
+  voiceId: {
+    installed: boolean;
+    label: string;
+    enrolled: boolean;
+    on: boolean;
+    learned: number;
+    enrolling: { step: number; of: number; say: string } | null;
+    message?: string;
   };
   /** Nova Eyes: whether it runs, what macOS lets it do, and why not. */
   screen: { available: boolean; running: boolean; permissions: { accessibility: boolean; screen: boolean } | null; message?: string };

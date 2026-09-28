@@ -7,7 +7,9 @@ export type HelperEvent =
   | { type: 'partial'; text: string }
   | { type: 'final'; turn: number; text: string; ms: number }
   | { type: 'error'; message: string; fatal: boolean }
-  | { type: 'log'; message: string };
+  | { type: 'log'; message: string }
+  /** A voiceprint (Voice ID), or why there isn't one. */
+  | { type: 'voiceprint'; id: number; print?: number[]; error?: string };
 
 /** One message for the helper's stdin: [type: 1 = audio, 2 = JSON command][length, 4 bytes little endian][payload]. */
 export function frame(type: 1 | 2, payload: Buffer): Buffer {

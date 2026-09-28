@@ -5,6 +5,7 @@ import { isInstalled, modelsDir, PARAKEET_MODEL } from '../models/files.ts';
 import { ensureHelper } from './build.ts';
 import { HearingHelper, type HelperEvent } from './helper.ts';
 import { SmartTurn } from './smart-turn.ts';
+import type { Speaker } from './voiceid.ts';
 
 export type HearingEngine = 'auto' | 'apple' | 'parakeet' | 'browser';
 
@@ -21,8 +22,11 @@ export interface HearingEvents {
   status(status: HearingStatus): void;
   /** Words heard so far (`final` false), or the finished turn. */
   transcript(text: string, final: boolean): void;
-  /** A finished turn, for Nova to act on - `explicit` when it was said to Nova with the talk shortcut. */
-  utterance(text: string, explicit: boolean): void;
+  /**
+   * A finished turn, for Nova to act on - `explicit` when it was said to Nova with the talk shortcut, and
+   * with Voice ID on, whose voice it was.
+   */
+  utterance(text: string, explicit: boolean, speaker?: Speaker): void;
   /** The user started talking over Nova. */
   bargeIn(): void;
 }
@@ -33,6 +37,27 @@ const MAX_RESTARTS = 3;
 const ARMED_MS = 8000;
 /** Let go without a word: a moment for the speech detector to catch up, then the turn lapses. */
 const ARMED_AFTER_HOLD_MS = 1500;
+
+/**
+ * Voice ID, as hearing uses it: whether to take voiceprints (and with which model), and who a turn's is.
+ * While the user sets it up, their turns go to it instead of to Nova.
+ */
+export interface VoiceCheck {
+  /** The model folder to take voiceprints with, or null when Voice ID is off. */
+  active(): { models: string } | null;
+  /**
+   * Whose voice a turn was (null print: none could be made) - undefined when Voice ID decides nothing now.
+   * `learn: false` for a glance at part of a turn (someone talking over Nova), which mustn't teach it.
+   */
+  decide(print: number[] | null, seconds: number, opts?: { learn?: boolean }): Speaker | undefined;
+  /** Setting up: the turn is a phrase for the voiceprint, not for Nova. True when it took it. */
+  enroll(print: number[] | null, seconds: number, text: string): boolean;
+}
+
+/** Longest Nova waits for a turn's voiceprint before deciding without one (unsure, then). */
+const PRINT_WAIT_MS = 1500;
+/** Talking over Nova: how long the voice check may hold the interruption up. */
+const BARGE_WAIT_MS = 600;
 
 /** The hearing helper, as the service uses it. */
 type Helper = Pick<HearingHelper, 'command' | 'audio' | 'close'>;
@@ -99,6 +124,13 @@ export class Hearing {
   private readonly explicitTurns = new Set<number>();
   /** Bumped on every (re)start, so a replaced helper's events are ignored. */
   private generation = 0;
+  /** Voice ID's check, when there is one. */
+  voice: VoiceCheck | null = null;
+  /** Voiceprints asked of the helper, by request id: a turn's, or the audio so far when someone talks over Nova. */
+  private readonly prints = new Map<number, (print: number[] | null) => void>();
+  private printSeq = 0;
+  /** The voiceprint of each finished turn, until its words come back. */
+  private readonly turnPrints = new Map<number, { print: Promise<number[] | null>; seconds: number }>();
 
   constructor(private readonly events: HearingEvents) {
     this.turnOpts = {
@@ -235,6 +267,7 @@ export class Hearing {
   close() {
     this.generation++;
     this.disarm();
+    this.dropPrints();
     this.helper?.close();
     this.helper = null;
     this.smart?.close();
@@ -286,6 +319,7 @@ export class Hearing {
 
   private async restart() {
     const generation = ++this.generation;
+    this.dropPrints();
     this.helper?.close();
     this.helper = null;
     this.turn.reset();
@@ -359,6 +393,9 @@ export class Hearing {
         return console.warn(`  [hearing] ${event.message}`);
       case 'log':
         return console.log(`  [hearing] ${event.message}`);
+      case 'voiceprint':
+        if (event.error && event.error !== 'too short') console.warn(`  [hearing] no voiceprint: ${event.error}`);
+        return this.prints.get(event.id)?.(event.print ?? null);
     }
   }
 
@@ -378,10 +415,16 @@ export class Hearing {
     if (!this.turn.open) return; // murmurs below the speech threshold: not a turn
     this.turn.text(text);
     this.events.transcript(text, false);
-    // Talking over Nova stops it (once per turn).
+    // Talking over Nova stops it (once per turn) - with Voice ID, only the user does: a TV or another person
+    // doesn't. Too little said yet to tell, or no answer in time, it stops: stopping is never harmful.
     if (this.spoken !== null && this.config?.bargeIn && !this.interrupted && isBargeIn(text, this.spoken, this.wakeWords)) {
       this.interrupted = true;
-      this.events.bargeIn();
+      const voice = this.voice?.active();
+      const audio = voice ? this.ring.since(this.turnStart) : null;
+      if (!voice || !audio || audio.length < RATE) return this.events.bargeIn();
+      void this.voiceprint(audio, voice.models, BARGE_WAIT_MS).then((print) => {
+        if (this.voice?.decide(print, audio.length / RATE, { learn: false }) !== 'not-you') this.events.bargeIn();
+      });
     }
   }
 
@@ -389,12 +432,39 @@ export class Hearing {
     const id = ++this.turnId;
     if (this.armed) this.explicitTurns.add(id);
     this.disarm();
+    // Voice ID: the turn's own audio, for its voiceprint - asked for now, while the words are still coming.
+    const voice = this.voice?.active();
+    if (voice) {
+      const audio = this.ring.since(this.turnStart);
+      this.turnPrints.set(id, { print: this.voiceprint(audio, voice.models), seconds: audio.length / RATE });
+    }
     this.helper?.command({ type: 'finalize', turn: id });
     this.turn.reset();
   }
 
+  /** The helper is going: voiceprints it was asking for won't come, nor will its turns' words. */
+  private dropPrints() {
+    for (const done of [...this.prints.values()]) done(null);
+    this.turnPrints.clear();
+  }
+
+  /** A voiceprint of this audio from the helper, or null when it can't make one in time. */
+  private voiceprint(audio: Int16Array, models: string, waitMs = PRINT_WAIT_MS): Promise<number[] | null> {
+    const helper = this.helper;
+    if (!helper) return Promise.resolve(null);
+    const id = ++this.printSeq;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => (this.prints.delete(id), resolve(null)), waitMs);
+      this.prints.set(id, (print) => (clearTimeout(timer), this.prints.delete(id), resolve(print)));
+      const pcm = Buffer.from(audio.buffer, audio.byteOffset, audio.byteLength).toString('base64');
+      helper.command({ type: 'voiceprint', id, models, pcm });
+    });
+  }
+
   private onFinal(id: number, text: string) {
     const explicit = this.explicitTurns.delete(id);
+    const printed = this.turnPrints.get(id);
+    this.turnPrints.delete(id);
     if (id !== this.turnId) return;
     const words = text.trim();
     const overlapped = this.overlapping && !this.interrupted;
@@ -405,6 +475,13 @@ export class Hearing {
     // Never what the user said with the shortcut: that was them.
     if (!explicit && overlapped && ((words.split(/\s+/).length >= 3 && isEcho(words, recent)) || !this.config?.bargeIn)) return this.events.transcript('', true);
     this.events.transcript(words, true);
-    this.events.utterance(words, explicit);
+    if (!printed) return this.events.utterance(words, explicit);
+    void printed.print.then((print) => {
+      const voice = this.voice;
+      // Setting up Voice ID: the phrase is for the voiceprint, never a request.
+      if (voice?.enroll(print, printed.seconds, words)) return;
+      // Said with the talk shortcut: whoever holds the key down is at this Mac - it counts as the user.
+      this.events.utterance(words, explicit, explicit ? undefined : voice?.decide(print, printed.seconds));
+    });
   }
 }
