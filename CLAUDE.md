@@ -24,3 +24,4 @@ This folder is for building an agentic OS, right, and should have everything tha
 - Rules: never call Jev directly outside `DecisionEngine`; risk tier is declared in code, never inferred from untrusted content; arithmetic/dates/parsing stay in code.
 - Git: `develop` is the default branch. Branch from it as `feature/…`, `bugfix/…` or `hotfix/…`, open a PR into `develop`, review it and fix what the review finds, then auto-merge (squash) once CI passes; the branch is deleted. Only `develop` merges into `main` (merge commit), and only when the user asks for a release; each merge cuts `release/v<version>` from `main`. Nobody pushes to `main` or `develop` directly. See CONTRIBUTING.md.
 - Verify with `npm test` and `npm run typecheck`.
+- TODO: at the start of every session, read `TODO.md`; if it has unchecked items (`- [ ]`), tell the user which ones are open and work through them, checking each off (`- [x]`) in `TODO.md` once it's done and verified.
