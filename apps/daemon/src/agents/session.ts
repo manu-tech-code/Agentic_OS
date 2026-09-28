@@ -116,7 +116,7 @@ export class AgentSession implements ReasoningBrain {
           };
           const stop = () => {
             out.end(new Error('Stopped.'));
-            this.close(); // the only way to stop a turn mid-answer; the next question starts a new process
+            this.stop(); // the only way to stop a turn mid-answer; the next question starts a new process
           };
           signal?.addEventListener('abort', stop, { once: true });
           this.turn = { out, wrote: false, done: finish };
@@ -136,15 +136,24 @@ export class AgentSession implements ReasoningBrain {
   refresh() {
     this.queue = this.queue.then(() => {
       if (!this.child) return;
-      this.close();
+      this.stop();
       this.start();
     });
   }
 
-  close() {
+  /**
+   * Just the process goes - a stopped turn, a refresh. Never close(): whoever owns the brain may hang its
+   * own ending on that (the agent host retires the brain's tools token there), and the brain lives on.
+   */
+  private stop() {
     const child = this.child;
     this.child = null;
     child?.kill();
     this.settle(new Error(`${this.name} was stopped.`)); // a question in progress doesn't wait for an answer that won't come
+  }
+
+  /** The brain is done with. */
+  close() {
+    this.stop();
   }
 }

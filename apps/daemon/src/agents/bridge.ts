@@ -45,6 +45,7 @@ export async function startBridge(tools: ToolHost) {
   const approvers = new Map<string, Approver>();
   /** Token -> who is calling (e.g. "Claude") and where their calls go. */
   const callers = new Map<string, { caller: string; host: ToolHost }>();
+  let refusedAt = 0;
   const handle = async (req: IncomingMessage, res: ServerResponse) => {
     const body = req.method === 'POST' ? await readJson(req) : null;
     if (res.destroyed) return; // the agent went away mid-request
@@ -64,6 +65,11 @@ export async function startBridge(tools: ToolHost) {
       const output = await hooked.host.call(String(body.name), body.arguments ?? {}, hooked.caller).catch((e) => `That didn't work: ${(e as Error).message}`);
       // A picture (a screenshot) goes along for agents that can see.
       return reply({ text: outputText(output), image: typeof output === 'object' ? output.image : undefined });
+    }
+    // An agent asking with a token that isn't live (a session outliving its hookup): say so, once a minute.
+    if (token && (req.url === '/tools' || req.url === '/call') && Date.now() - refusedAt > 60_000) {
+      refusedAt = Date.now();
+      console.warn(`  [bridge] refused an agent's ${req.url.slice(1)}: its token isn't live (a session that outlived its hookup?)`);
     }
     res.writeHead(403).end();
   };

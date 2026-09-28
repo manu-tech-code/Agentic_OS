@@ -5,7 +5,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { startBridge } from '../src/agents/bridge.ts';
 import { agentEnv } from '../src/agents/host.ts';
 import { describeAction, tooLongToSay } from '../src/agents/parsers.ts';
@@ -45,9 +45,14 @@ describe("Nova's tools, for any agent", () => {
     const result = await rpc('tools/call', { name: 'open_app', arguments: { app: 'Slack' } });
     expect(result.content[0].text).toBe('Opening Slack.');
     expect(calls).toEqual([['open_app', { app: 'Slack' }, 'Codex']]);
+    const said: string[] = [];
+    child.stderr.on('data', (d) => said.push(String(d)));
     server.close();
     const refused = await rpc('tools/call', { name: 'open_app', arguments: { app: 'Slack' } });
     expect(refused.content[0].text).toMatch(/couldn't/);
+    // No tools with a dead token - and it says so, where the agent CLI keeps its MCP logs.
+    expect((await rpc('tools/list')).tools).toEqual([]);
+    await vi.waitFor(() => expect(said.join('')).toMatch(/no tools from Nova \(Nova answered 403\)/));
     child.kill();
   });
 
@@ -186,6 +191,26 @@ describe('an agent kept running as the brain', () => {
     // A new process, told what was said before.
     expect(await session.reply('after', [{ user: 'hi', nova: 'Turn 1: hello there.' }])).toBe('Turn 1: I remember. hello there.');
     session.close();
+  });
+
+  it('keeps its tools across a refresh and a stopped turn - only closing the brain ends them', async () => {
+    const session = new AgentSession({ preset, bin: process.execPath, extraArgs: [] }, { cwd: tmpdir(), assistant: 'Nova', env: () => process.env });
+    // What the agent host does: closing the brain retires its tools token.
+    let retired = 0;
+    const close = session.close.bind(session);
+    session.close = () => (retired++, close());
+    session.warm();
+    session.refresh(); // an integration connected: a fresh process, to see its tools
+    expect(await session.reply('hi', [])).toBe('Turn 1: hello there.');
+    const stop = new AbortController();
+    const hanging = collect(session.stream('hang on', [], stop.signal));
+    await new Promise((r) => setTimeout(r, 50));
+    stop.abort(); // the user talked over it
+    await expect(hanging).rejects.toThrow(/Stopped/);
+    expect(await session.reply('after', [])).toMatch(/hello there/);
+    expect(retired).toBe(0);
+    session.close();
+    expect(retired).toBe(1);
   });
 
   it("isn't cut off by the process a refresh replaced", async () => {

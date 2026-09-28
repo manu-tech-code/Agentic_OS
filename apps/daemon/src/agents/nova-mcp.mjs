@@ -31,8 +31,10 @@ async function tools() {
     try {
       const { tools } = await (await post('/tools', { token: toolsToken })).json();
       for (const t of tools) list.push({ name: t.name, description: t.description, inputSchema: t.parameters });
-    } catch {
-      // Nova isn't reachable: no tools to offer
+    } catch (e) {
+      // Nova isn't reachable, or doesn't know this session's token: no tools to offer - said where the
+      // agent CLI keeps its MCP logs, so an agent without Nova's tools is never a mystery.
+      process.stderr.write(`nova-mcp: no tools from Nova (${e.message})\n`);
     }
   }
   return list;
