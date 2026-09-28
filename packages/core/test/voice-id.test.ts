@@ -49,6 +49,13 @@ describe('Voice ID in the brain', () => {
     expect(t.said()).toHaveLength(2);
   });
 
+  it("says plainly when a window's own hearing heard it - that can't be checked - rather than that it's unsure", async () => {
+    const t = await setup({ talkShortcut: '⌥Space' });
+    await t.nova.handle('nova quit spotify', 'voice', 'unchecked');
+    expect(t.quit).toEqual([]);
+    expect(t.said()).toEqual(["I can't check voices this window hears - only Nova.app's hearing can. Hold ⌥Space and say it, or type it."]);
+  });
+
   it('counts the talk shortcut and typing as the user, whatever the voice check said', async () => {
     const t = await setup();
     await t.nova.handle('quit spotify', 'shortcut', 'not-you');

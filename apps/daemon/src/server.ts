@@ -431,6 +431,7 @@ const voiceId = new VoiceId({
   learning: () => runtime.config.voiceId.learn,
   name: () => runtime.config.name,
   shortcut: () => formatShortcut(runtime.config.presence.shortcut),
+  ear: () => (presence.status ? 'Nova.app' : 'a window'),
   turnOn: () => saveSettings({ 'voiceId.enabled': true }),
   changed: () => snapshotsReady && broadcastSnapshot(),
 });
@@ -709,7 +710,7 @@ wss.on('connection', (ws, req) => {
   const onEvent = async (event: ClientEvent) => {
     // Speech a window recognised itself never reached Voice ID's ear: with Voice ID on it can't count as the
     // user (the talk shortcut still does). Typing is the user at the keyboard.
-    if (event.type === 'utterance') await nova.handle(event.text, event.source, event.source === 'voice' && voiceId.status().on ? 'unsure' : undefined);
+    if (event.type === 'utterance') await nova.handle(event.text, event.source, event.source === 'voice' && voiceId.status().on ? 'unchecked' : undefined);
     else if (event.type === 'audio-start') {
       // The latest window to start its microphone hears for Nova - unless the Mac app does.
       if (presence.mayListen(ws)) micOwner = ws;

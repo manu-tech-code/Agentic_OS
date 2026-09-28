@@ -55,7 +55,7 @@ export interface VoiceCheck {
 }
 
 /** Longest Nova waits for a turn's voiceprint before deciding without one (unsure, then). */
-const PRINT_WAIT_MS = 1500;
+const PRINT_WAIT_MS = 2000;
 /** Talking over Nova: how long the voice check may hold the interruption up. */
 const BARGE_WAIT_MS = 600;
 
@@ -383,6 +383,7 @@ export class Hearing {
       case 'ready':
         this.restarts = 0;
         console.log(`  [hearing] ${engine === 'apple' ? "Apple's recognizer" : 'Parakeet'} ready in ${event.ms} ms`);
+        this.warmVoice();
         return this.setStatus({ engine, state: 'ready' });
       case 'partial':
         return this.onWords(event.text);
@@ -440,6 +441,19 @@ export class Hearing {
     }
     this.helper?.command({ type: 'finalize', turn: id });
     this.turn.reset();
+  }
+
+  /**
+   * With Voice ID on, the voiceprint model is loaded now, with a second of silence - not on the first turn, whose
+   * print would then come too late (and the turn go unplaced).
+   */
+  private warmVoice() {
+    const voice = this.voice?.active();
+    if (!voice) return;
+    const started = Date.now();
+    void this.voiceprint(new Int16Array(RATE), voice.models, 15_000).then((print) =>
+      print ? console.log(`  [voice-id] voiceprints ready in ${Date.now() - started} ms`) : console.warn("  [voice-id] the voiceprint model didn't load"),
+    );
   }
 
   /** The helper is going: voiceprints it was asking for won't come, nor will its turns' words. */

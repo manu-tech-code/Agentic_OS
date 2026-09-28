@@ -42,6 +42,12 @@ import type {
 import { buildQuestions } from './questions.ts';
 import type { ReasoningBrain, Turn } from './reasoning.ts';
 
+/**
+ * Whose voice a turn was, with Voice ID on: the user's, someone else's, one it couldn't place, or one it couldn't
+ * check at all (a window's own speech recognition heard it, and never passes the voice on).
+ */
+export type Speaker = 'you' | 'not-you' | 'unsure' | 'unchecked';
+
 export interface NovaOptions {
   /** The assistant's name (default "Nova"). Wake words default to "hey <name>", "okay <name>", "<name>". */
   name?: string;
@@ -338,7 +344,7 @@ export class NovaBrain implements ToolHost {
    * Something the user said or typed. `shortcut`: said while they held (or right after they tapped)
    * the talk shortcut, so it's meant for Nova whether or not it has the wake word.
    */
-  async handle(raw: string, source: 'voice' | 'keyboard' | 'shortcut' = 'voice', speaker?: 'you' | 'not-you' | 'unsure'): Promise<void> {
+  async handle(raw: string, source: 'voice' | 'keyboard' | 'shortcut' = 'voice', speaker?: Speaker): Promise<void> {
     try {
       await this.process(raw, source, 'you', speaker);
     } finally {
@@ -556,7 +562,7 @@ export class NovaBrain implements ToolHost {
 
   // ---------------------------------------------------------------------------
 
-  private async process(raw: string, source: 'voice' | 'keyboard' | 'shortcut' | 'routine', by = 'you', speaker?: 'you' | 'not-you' | 'unsure') {
+  private async process(raw: string, source: 'voice' | 'keyboard' | 'shortcut' | 'routine', by = 'you', speaker?: Speaker) {
     const text = raw.trim();
     if (!text) return;
     const wake = this.stripWake(text);
@@ -569,7 +575,7 @@ export class NovaBrain implements ToolHost {
     // Voice ID: another voice is ignored entirely, even saying Nova's name - nothing opens, nothing is kept.
     // One Nova can't place (a very short "yes") is told how to be sure: the talk shortcut counts as the user.
     if (source === 'voice' && speaker === 'not-you') return;
-    if (source === 'voice' && speaker === 'unsure') return this.cantPlace();
+    if (source === 'voice' && (speaker === 'unsure' || speaker === 'unchecked')) return this.cantPlace(speaker);
     if (wake.found && !wake.rest) {
       this.openWindow();
       return;
@@ -1295,11 +1301,19 @@ export class NovaBrain implements ToolHost {
   }
 
   private placedAt = 0;
-  /** Voice ID couldn't tell it was the user: say how once in a while - the question waiting stays open. */
-  private cantPlace() {
+  /**
+   * Voice ID couldn't tell it was the user: say how once in a while - the question waiting stays open. `unchecked`:
+   * a window's own speech recognition heard it, which never passes the voice on - say so, not that it's unsure.
+   */
+  private cantPlace(why: 'unsure' | 'unchecked') {
     if (this.now() - this.placedAt < 20_000) return;
     this.placedAt = this.now();
-    this.announce(`I couldn't tell that was you. Hold ${this.opts.talkShortcut ?? 'the talk shortcut'} and say it again.`);
+    const hold = this.opts.talkShortcut ?? 'the talk shortcut';
+    this.announce(
+      why === 'unchecked'
+        ? `I can't check voices this window hears - only Nova.app's hearing can. Hold ${hold} and say it, or type it.`
+        : `I couldn't tell that was you. Hold ${hold} and say it again.`,
+    );
   }
 
   /**
