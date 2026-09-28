@@ -81,6 +81,26 @@ describe('hearing on the Mac', () => {
     expect(vad.active).toBe(false);
   });
 
+  it("lets only a voice start a turn when a speech model gives its say - and says where each change was", () => {
+    const vad = new SpeechActivity();
+    expect(vad.push(tone(500, 20), 0.01)).toBe(null); // a quiet room
+    expect(vad.push(tone(500, 20), 0.97)).toBe(null); // a voice, but too faint to be anyone talking to Nova
+    expect(vad.push(tone(400, 8000), 0.05)).toBe(null); // loud, but no voice: typing, music, a door
+    expect(vad.push(tone(200, 8000), 0.9)).toBe('start');
+    expect(vad.changedAt).toBe(1400 * 16 + 3 * 320); // three frames into the voice
+    expect(vad.push(tone(200, 8000), 0.4)).toBe(null); // less sure mid-word: it goes on
+    expect(vad.push(tone(400, 8000), 0.1)).toBe('end'); // as loud, but the voice has stopped
+    expect(vad.changedAt).toBe(1800 * 16 + 12 * 320);
+  });
+
+  it('with a speech model, lets a voice stand out from steady noise by less', () => {
+    const vad = new SpeechActivity();
+    vad.push(tone(30_000, 1000), 0.02); // a fan: the room's own sound, which the floor learns
+    const voice = tone(300, 3000); // about 10 dB over it
+    expect(vad.push(voice)).toBe(null); // by loudness alone, not enough
+    expect(vad.push(voice, 0.9)).toBe('start');
+  });
+
   it('ends a turn soon after a finished sentence, and waits when it trails off', async () => {
     const { clock, advance } = fakeClock();
     const ended: number[] = [];

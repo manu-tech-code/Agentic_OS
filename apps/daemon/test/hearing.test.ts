@@ -10,7 +10,8 @@ import type { WorkerModel } from '../src/hearing/printer.ts';
 import { Hearing } from '../src/hearing/service.ts';
 import type { Prints } from '../src/hearing/voiceid.ts';
 import { SmartTurn } from '../src/hearing/smart-turn.ts';
-import { isInstalled, modelsDir, PARAKEET_MODEL, SMART_TURN_MODEL } from '../src/models/files.ts';
+import { SPEECH_CHUNK, SpeechDetector } from '../src/hearing/speech-detector.ts';
+import { isInstalled, modelsDir, PARAKEET_MODEL, SMART_TURN_MODEL, SPEECH_MODEL } from '../src/models/files.ts';
 
 describe('the hearing helper, in pieces', () => {
   it('frames audio and commands for its stdin', () => {
@@ -113,6 +114,56 @@ describe('the hearing service, with a stand-in helper', () => {
     expect(second.find((c) => c.type === 'speech' && c.active)!.at).toBe(2000);
     expect(second.find((c) => c.type === 'cancel')!.at).toBe(1760);
     hearing.close();
+  });
+
+  /** A stand-in speech detector: it takes the audio while `taking`, and gives its say when the test does. */
+  function detector(hearing: Hearing) {
+    const stand = { taking: true, push: () => stand.taking, reset() {}, close: vi.fn() };
+    (hearing as any).speech = stand;
+    /** Its say, the same for each 32 ms it hasn't answered yet. */
+    const say = (p: number) => (hearing as any).onVoice(stand, Array(Math.floor((hearing as any).unheard.length / 512)).fill(p));
+    return { stand, say };
+  }
+
+  it('lets only a voice start a turn when the speech detector listens - placed where the voice began, however late its say', () => {
+    const { hearing, start, quiet, talk } = setup();
+    const commands = start();
+    const { say } = detector(hearing);
+    /** Audio 100 ms at a time, with the detector's say on it after each, as the real one keeps up. */
+    const hear = (feed: (ms: number) => void, ms: number, p: number) => {
+      for (let t = 0; t < ms; t += 100) {
+        feed(100);
+        say(p);
+      }
+    };
+    hear(quiet, 2000, 0.01);
+    hear(talk, 600, 0.03); // loud, but no voice: typing, music, a door
+    hear(quiet, 1000, 0.01);
+    expect(commands.some((c) => c.type === 'speech')).toBe(false);
+    hear(talk, 600, 0.9);
+    expect(commands.find((c) => c.type === 'speech' && c.active)!.at).toBe(3600);
+    hearing.close();
+  });
+
+  it('goes on by loudness alone when the speech detector falls behind or stops, reading what it never answered first', () => {
+    const lagging = setup();
+    const commands = lagging.start();
+    const { stand } = detector(lagging.hearing);
+    lagging.quiet(300);
+    lagging.talk(600); // no say comes back: half a second behind, it's let go
+    expect(stand.close).toHaveBeenCalled();
+    expect(commands.find((c) => c.type === 'speech' && c.active)!.at).toBe(300);
+    lagging.hearing.close();
+
+    const stopped = setup();
+    const again = stopped.start();
+    const second = detector(stopped.hearing);
+    stopped.quiet(300);
+    stopped.talk(100);
+    second.stand.taking = false; // its process went
+    stopped.talk(300);
+    expect(again.find((c) => c.type === 'speech' && c.active)!.at).toBe(300);
+    stopped.hearing.close();
   });
 
   /** Voice ID's check, with a hand on it: who it says a turn is, and what it was asked. */
@@ -282,6 +333,7 @@ const onMac = platform() === 'darwin';
 const built = onMac && (await helperIsCurrent());
 const parakeet = await isInstalled(PARAKEET_MODEL);
 const smartTurn = await isInstalled(SMART_TURN_MODEL);
+const speechModel = await isInstalled(SPEECH_MODEL);
 const dir = mkdtempSync(join(tmpdir(), 'nova-hearing-'));
 
 /** 16 kHz 16-bit speech from the Mac's own voice. */
@@ -341,7 +393,7 @@ describe.skipIf(!built)('hearing with the helper', () => {
   it('turns streamed speech into finished turns, waiting through a mid-sentence pause', async () => {
     const utterances: string[] = [];
     const hearing = new Hearing({ status: () => {}, transcript: () => {}, utterance: (t) => utterances.push(t), bargeIn: () => {} });
-    hearing.configure({ engine: 'apple', language: 'en-US', patience: 'normal', smartTurn, bargeIn: true }, ['Nova'], ['nova']);
+    hearing.configure({ engine: 'apple', language: 'en-US', patience: 'normal', smartTurn, speechOnly: false, bargeIn: true }, ['Nova'], ['nova']);
     for (let i = 0; i < 200 && !hearing.listening; i++) await new Promise((r) => setTimeout(r, 50));
     expect(hearing.listening).toBe(true);
     const first = speech('Nova, in my current project I want to');
@@ -376,7 +428,7 @@ describe.skipIf(!built)('hearing with the helper', () => {
       const heard = utterances.length;
       for (let i = 0; i < 100 && utterances.length === heard; i++) await new Promise((r) => setTimeout(r, 50));
     };
-    hearing.configure({ engine: 'parakeet', language: 'en-US', patience: 'quick', smartTurn: false, bargeIn: true }, ['Nova'], ['nova']);
+    hearing.configure({ engine: 'parakeet', language: 'en-US', patience: 'quick', smartTurn: false, speechOnly: false, bargeIn: true }, ['Nova'], ['nova']);
     await ready();
     await say(speech('Nova, open Figma please.'));
     hearing.retry(); // a new helper process, counting its audio from zero
@@ -397,5 +449,81 @@ describe.skipIf(!smartTurn || !onMac)('Smart Turn', () => {
     turn!.close();
     expect(done).toBeGreaterThan(0.5);
     expect(trailing).toBeLessThan(0.5);
+  }, 30_000);
+});
+
+describe.skipIf(!speechModel || !onMac)('the speech detector', () => {
+  /** Its say on each 32 ms of this audio, streamed 20 ms at a time as a window would. */
+  async function listen(detector: SpeechDetector, audio: Int16Array) {
+    const voices: number[] = [];
+    detector.onVoice = (p) => voices.push(...p);
+    for (let i = 0; i < audio.length; i += 320) detector.push(audio.slice(i, i + 320));
+    for (let i = 0; i < 300 && voices.length < Math.floor(audio.length / SPEECH_CHUNK); i++) await new Promise((r) => setTimeout(r, 10));
+    return voices;
+  }
+  /** Noise without a voice in it, 16 kHz: typing, a fan, then a few bars of chords. */
+  function noise() {
+    let seed = 1;
+    const random = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff) * 2 - 1;
+    const audio = new Int16Array(16_000 * 6);
+    for (let at = 0; at < 32_000; at += 2400 + Math.round(1600 * Math.abs(random()))) for (let i = 0; i < 80; i++) audio[at + i] = Math.round(12_000 * random() * Math.exp(-i / 12));
+    let fan = 0;
+    for (let i = 32_000; i < 64_000; i++) audio[i] = Math.round(20_000 * (fan = (fan + 0.02 * random()) / 1.02));
+    const notes = [220, 277.2, 329.6, 440, 293.7, 349.2];
+    for (let i = 64_000; i < audio.length; i++) {
+      const t = i / 16_000;
+      const bar = Math.floor(t / 0.5);
+      let chord = 0;
+      for (let k = 0; k < 3; k++) for (let h = 1; h <= 4; h++) chord += Math.sin(2 * Math.PI * notes[(bar + 2 * k) % 6]! * h * t + 0.3 * Math.sin(10 * Math.PI * t)) / h;
+      audio[i] = Math.round(1500 * Math.exp(-(t % 0.5) * 4) * chord);
+    }
+    return audio;
+  }
+  /** How many turns this audio would start, with the detector's say on each 32 ms of it. */
+  const turns = (audio: Int16Array, voices: (number | undefined)[]) => {
+    const vad = new SpeechActivity();
+    return voices.filter((p, i) => vad.push(audio.subarray(i * SPEECH_CHUNK, (i + 1) * SPEECH_CHUNK), p) === 'start').length;
+  };
+
+  it('hears a voice as speech, and never starts a turn for typing, a fan or music', async () => {
+    const detector = await SpeechDetector.start();
+    expect(detector).not.toBeNull();
+    const words = speech('Nova, set a timer for ten minutes and then open Figma please.');
+    const voices = await listen(detector!, words);
+    // Of the 32 ms that have a voice in them (not the gaps between words), nearly all are heard as speech.
+    const spoken = voices.filter((_, i) => words.subarray(i * SPEECH_CHUNK, (i + 1) * SPEECH_CHUNK).some((s) => Math.abs(s) > 1000));
+    expect(spoken.filter((p) => p > 0.5).length / spoken.length).toBeGreaterThan(0.9);
+    expect(turns(words, voices)).toBeGreaterThan(0);
+    detector!.reset(); // a new stream: from nothing, and its say on the last one is gone
+    const sounds = noise();
+    const heard = await listen(detector!, sounds);
+    detector!.close();
+    expect(heard).toHaveLength(Math.floor(sounds.length / SPEECH_CHUNK));
+    expect(turns(sounds, heard)).toBe(0);
+    expect(turns(sounds, heard.map(() => undefined))).toBeGreaterThan(0); // by loudness alone, it would
+  }, 30_000);
+
+  it('keeps up with a streaming microphone in the hearing service: the noise starts no turn, the words do', async () => {
+    const hearing = new Hearing({ status: () => {}, transcript: () => {}, utterance: () => {}, bargeIn: () => {} });
+    (hearing as any).config = { engine: 'parakeet', language: 'en-US', patience: 'normal', smartTurn: false, speechOnly: true, bargeIn: true };
+    const commands: Record<string, any>[] = [];
+    (hearing as any).use('parakeet', { command: (c: Record<string, any>) => commands.push(c), audio: () => {}, close: () => {} });
+    (hearing as any).onHelper('parakeet', { type: 'ready', engine: 'parakeet', ms: 1 });
+    (hearing as any).startSpeech();
+    for (let i = 0; i < 200 && !(hearing as any).speech; i++) await new Promise((r) => setTimeout(r, 10));
+    const stream = async (audio: Int16Array) => {
+      for (let i = 0; i < audio.length; i += 320) {
+        hearing.audio(Buffer.from(audio.slice(i, i + 320).buffer));
+        await new Promise((r) => setTimeout(r, 5)); // 4x real time
+      }
+      await new Promise((r) => setTimeout(r, 200)); // its say on the last of it
+    };
+    await stream(noise());
+    expect(commands.some((c) => c.type === 'speech')).toBe(false);
+    await stream(speech('Nova, open Figma please.'));
+    const detector = (hearing as any).speech;
+    hearing.close();
+    expect(detector).not.toBeNull(); // it kept up the whole time
+    expect(commands.filter((c) => c.type === 'speech' && c.active)).toHaveLength(1);
   }, 30_000);
 });

@@ -12,6 +12,8 @@ interface FileCheck {
   sha256?: string;
   /** For small files: their git blob id, as Hugging Face lists it. */
   gitSha1?: string;
+  /** Where the file is in its source, when that isn't its name here. */
+  from?: string;
 }
 
 interface ModelSpec {
@@ -20,15 +22,19 @@ interface ModelSpec {
   /** Pinned, so a changed upload can't slip in. */
   revision: string;
   license: string;
-  /** Where the files come from when it isn't Hugging Face: a GitHub release's downloads (`revision` is its tag, and the checksums pin each file). */
-  source?: 'github-release';
+  /**
+   * Where the files come from when it isn't Hugging Face: a GitHub release's downloads (`revision` is its tag, and
+   * the checksums pin each file), or a GitHub repository at a commit (`revision`).
+   */
+  source?: 'github-release' | 'github';
   files: Record<string, FileCheck>;
 }
 
 /**
  * Models Nova downloads: Reflex's embedding model (a lookup table of word meanings, not a
  * language model), Kokoro (the voice), Parakeet (hearing, on the Neural Engine), Smart Turn
- * (hearing when you've finished) and Voice ID's three. Each is pinned to a revision and checked file by file.
+ * (hearing when you've finished), Silero VAD (hearing what's speech) and Voice ID's three. Each is
+ * pinned to a revision and checked file by file.
  */
 export const MODELS: Record<string, ModelSpec> = {
   'potion-base-8M': {
@@ -107,6 +113,18 @@ export const MODELS: Record<string, ModelSpec> = {
       'smart-turn-v3.2-cpu.onnx': { size: 8_679_182, sha256: '2bb026316b14a660486a75b1733cd3fbab8c2fd0314dc9af7be49f8cca967e4f' },
     },
   },
+  // Silero VAD: whether each 32 ms is someone speaking, so typing, music or a fan don't start a turn. In ONNX Runtime
+  // (speech-worker.ts). It's kept in its repository rather than a release: v6.2.3's commit.
+  'silero-vad-v6.2': {
+    label: 'Silero VAD v6.2 · 2 MB',
+    repo: 'snakers4/silero-vad',
+    revision: '5cd7945676eb32225748052e2e6a0580e4686a08',
+    source: 'github',
+    license: 'MIT',
+    files: {
+      'silero_vad.onnx': { size: 2_327_524, sha256: '1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3', from: 'src/silero_vad/data/silero_vad.onnx' },
+    },
+  },
   // Voice ID: a voiceprint of who is speaking (WeSpeaker v2), on the Neural Engine. Its licence isn't confirmed:
   // the repository's NOTICE.md leaves this legacy export out of its CC-BY-4.0 scope. Before Nova goes to anyone
   // else, switch to that repository's Community-1 Embedding + FBank pair (CC-BY-4.0) behind the same voiceprint.
@@ -155,6 +173,7 @@ export const SENTENCE_MODEL = 'all-MiniLM-L6-v2';
 export const KOKORO_MODEL = 'kokoro-82M';
 export const PARAKEET_MODEL = 'parakeet-tdt-0.6b-v2';
 export const SMART_TURN_MODEL = 'smart-turn-v3.2';
+export const SPEECH_MODEL = 'silero-vad-v6.2';
 export const VOICE_ID_MODEL = 'wespeaker-v2';
 /** Every model Voice ID hears with: the hearing helper's, then the two in ONNX Runtime. */
 export const VOICE_ID_MODELS = [VOICE_ID_MODEL, 'wespeaker-resnet293', 'titanet-large'] as const;
@@ -224,6 +243,13 @@ export async function bundleModel(name: string, from: string, dir: string) {
   }
 }
 
+/** Where a model's file downloads from: its pinned revision on Hugging Face, or on GitHub. */
+function sourceUrl(spec: Pick<ModelSpec, 'repo' | 'revision' | 'source'>, path: string) {
+  if (spec.source === 'github-release') return `https://github.com/${spec.repo}/releases/download/${spec.revision}/${path}`;
+  if (spec.source === 'github') return `https://raw.githubusercontent.com/${spec.repo}/${spec.revision}/${path}`;
+  return `https://huggingface.co/${spec.repo}/resolve/${spec.revision}/${path}`;
+}
+
 /** No bytes at all for this long fails a download - not a cap on the whole transfer, which can take a while for a big model on a slow (but steady) connection. */
 const IDLE_TIMEOUT_MS = 60_000;
 
@@ -246,7 +272,7 @@ export async function downloadModel(name: string, opts: { dir?: string; onProgre
       idleTimer = setTimeout(stalled, IDLE_TIMEOUT_MS);
     };
     try {
-      const url = spec.source === 'github-release' ? `https://github.com/${spec.repo}/releases/download/${spec.revision}/${file}` : `https://huggingface.co/${spec.repo}/resolve/${spec.revision}/${file}`;
+      const url = sourceUrl(spec, check.from ?? file);
       const res = await fetch(url, { signal: controller.signal });
       if (!res.ok || !res.body) throw new Error(`Couldn't download ${file} (HTTP ${res.status}).`);
       // Straight to disk, checking (and capping at the expected size) as it goes: big models never sit in memory.

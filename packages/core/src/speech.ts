@@ -72,6 +72,11 @@ export class UtteranceAssembler {
  * Speech or silence, from the audio's loudness against the room's own noise. Takes 16 kHz 16-bit
  * PCM in any size of chunk and reads it in 20 ms frames: speech starts after a few loud frames and
  * ends after a short run of quiet ones, so a word's small gaps don't split it.
+ *
+ * With a speech model listening too, each push carries its say - the probability that the audio is
+ * someone speaking - and a frame counts only when it's loud and a voice: typing, music, a door or a
+ * fan never start a turn. A voice then needs to stand out from the room less, since the model already
+ * tells it from the noise.
  */
 export class SpeechActivity {
   private floor = -70;
@@ -80,37 +85,45 @@ export class SpeechActivity {
   private pending: number[] = [];
   /** Loudness of the latest frame, 0 to 1, for level meters. */
   level = 0;
+  /** Where the latest start or end happened: the samples read up to it, counted from the first push. */
+  changedAt = 0;
+  private read = 0;
 
-  constructor(private readonly opts = { onset: 3, hangover: 12, margin: 14, minimum: -50 }) {}
+  constructor(private readonly opts = { onset: 3, hangover: 12, margin: 14, minimum: -50, voiceMargin: 8 }) {}
 
   get active() {
     return this.speaking;
   }
 
-  /** Feed audio; returns 'start' or 'end' when speech starts or stops within it. */
-  push(samples: Int16Array): 'start' | 'end' | null {
+  /** Feed audio (and, with a speech model, its probability that this is a voice); returns 'start' or 'end' when speech starts or stops within it. */
+  push(samples: Int16Array, voice?: number): 'start' | 'end' | null {
     let change: 'start' | 'end' | null = null;
     for (let i = 0; i < samples.length; i++) {
       this.pending.push(samples[i]!);
       if (this.pending.length < 320) continue;
       const frame = this.pending;
       this.pending = [];
-      const event = this.frame(frame);
-      if (event) change = change && change !== event ? null : event; // started and stopped within one chunk: no change
+      this.read += frame.length;
+      const event = this.frame(frame, voice);
+      if (!event) continue;
+      change = change && change !== event ? null : event; // started and stopped within one chunk: no change
+      this.changedAt = this.read;
     }
     return change;
   }
 
-  private frame(frame: number[]): 'start' | 'end' | null {
+  private frame(frame: number[], voice?: number): 'start' | 'end' | null {
     let sum = 0;
     for (const s of frame) sum += s * s;
     const db = 10 * Math.log10(sum / frame.length / 1_073_741_824 + 1e-12);
     this.level = Math.min(1, Math.max(0, (db + 60) / 45));
     // The noise floor follows quiet quickly and steady noise slowly, and holds still during speech.
     if (!this.speaking) this.floor = db < this.floor ? 0.8 * this.floor + 0.2 * db : 0.998 * this.floor + 0.002 * db;
-    const threshold = Math.max(this.floor + this.opts.margin, this.opts.minimum);
-    const loud = db > (this.speaking ? threshold - 4 : threshold);
-    if (loud === this.speaking) {
+    const threshold = Math.max(this.floor + (voice === undefined ? this.opts.margin : this.opts.voiceMargin), this.opts.minimum);
+    // A voice, by the model's say: sure of it to start, less so to go on (Silero's own thresholds).
+    const voiced = voice === undefined || voice >= (this.speaking ? 0.35 : 0.5);
+    const speech = voiced && db > (this.speaking ? threshold - 4 : threshold);
+    if (speech === this.speaking) {
       this.run = 0;
       return null;
     }

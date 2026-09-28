@@ -516,7 +516,7 @@ describe('the setup checklist', () => {
       config: loadConfig({}, {}),
       reflex: { installed: false, learned: 0, label: 'potion-base-8M · English · 31 MB' },
       voice: { installed: false, label: 'Kokoro 82M · natural voices · 326 MB' },
-      hearing: { status: { engine: 'apple', state: 'ready' }, parakeet: {} as never, smartTurn: {} as never },
+      hearing: { status: { engine: 'apple', state: 'ready' }, parakeet: {} as never, smartTurn: {} as never, speech: {} as never },
       app: null,
       appInstalled: false,
       agents: [{ name: 'claude', label: 'Claude' }],

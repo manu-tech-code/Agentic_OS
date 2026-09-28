@@ -394,9 +394,10 @@ function VoiceTestRow({ result: r, bars }: { result: VoiceTestResult; bars: Sett
 
 /** How Nova hears: the engine in use (and why, when the browser listens instead), and the models hearing can use. */
 export function HearingPanel({ snapshot, name, result, onAction }: ActionProps) {
-  const { status, parakeet, smartTurn } = snapshot.hearing;
+  const { status, parakeet, smartTurn, speech } = snapshot.hearing;
   const [busyParakeet, setBusyParakeet] = useBusy([parakeet.installed], result);
   const [busyTurn, setBusyTurn] = useBusy([smartTurn.installed], result);
+  const [busySpeech, setBusySpeech] = useBusy([speech.installed], result);
   const engine = status.engine === 'apple' ? "Apple's on-device recognizer" : status.engine === 'parakeet' ? 'Parakeet, on this Mac' : "The browser's speech recognition";
   const state = status.state === 'ready' ? 'hearing you' : status.state === 'starting' ? 'getting ready…' : "can't hear";
   return (
@@ -404,7 +405,7 @@ export function HearingPanel({ snapshot, name, result, onAction }: ActionProps) 
       <div className="tile__head">
         <span className={`dot ${status.engine !== 'browser' && status.state === 'ready' ? 'dot--on' : ''}`} />
         <strong>{engine}</strong>
-        <Info label="Hearing" text={personalize("On-device hearing turns what you say into text on this Mac - nothing you say leaves it - and lets you talk over Nova to stop it. Apple's recognizer needs no download. Parakeet is NVIDIA's open model, the most accurate in a noisy room. Smart Turn hears from your tone when you've finished a sentence.", name)} />
+        <Info label="Hearing" text={personalize("On-device hearing turns what you say into text on this Mac - nothing you say leaves it - and lets you talk over Nova to stop it. Apple's recognizer needs no download. Parakeet is NVIDIA's open model, the most accurate in a noisy room. Smart Turn hears from your tone when you've finished a sentence. The speech detector tells a voice from other sounds, so typing, music or a fan don't start a turn.", name)} />
         <span className="muted">{state}</span>
       </div>
       {status.message && <span className="muted">{status.message}</span>}
@@ -428,6 +429,17 @@ export function HearingPanel({ snapshot, name, result, onAction }: ActionProps) 
         onInstall={() => {
           setBusyTurn(true);
           onAction({ type: 'hearing-install', model: 'smart-turn' });
+        }}
+      />
+      <ModelRow
+        name="Speech detector"
+        label={speech.label}
+        installed={speech.installed}
+        size="2 MB"
+        busy={busySpeech}
+        onInstall={() => {
+          setBusySpeech(true);
+          onAction({ type: 'hearing-install', model: 'speech' });
         }}
       />
     </div>

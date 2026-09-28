@@ -231,7 +231,7 @@ export type ClientEvent =
   | { type: 'reflex-forget' }
   /** Download Kokoro, the natural voice. */
   /** Download a model for hearing: Parakeet (speech to text) or Smart Turn (when you've finished). */
-  | { type: 'hearing-install'; model: 'parakeet' | 'smart-turn' }
+  | { type: 'hearing-install'; model: 'parakeet' | 'smart-turn' | 'speech' }
   /** Change or forget a memory, forget them all, or clear the conversation history. */
   | { type: 'memory-edit'; id: string; text: string }
   | { type: 'memory-delete'; id: string }

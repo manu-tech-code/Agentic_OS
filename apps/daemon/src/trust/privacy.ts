@@ -242,8 +242,8 @@ export function privacyFlows(input: PrivacyInput): PrivacyFlow[] {
   });
   flows.push({
     id: 'downloads',
-    what: 'Model downloads - Reflex, Kokoro, Parakeet, Smart Turn, Voice ID',
-    where: 'huggingface.co, only when you install one',
+    what: 'Model downloads - Reflex, Kokoro, Parakeet, Smart Turn, the speech detector, Voice ID',
+    where: 'huggingface.co and github.com, only when you install one',
     detail: 'Nothing about you goes with them; each file is checked against a pinned checksum.',
     leaves: true,
     on: true,

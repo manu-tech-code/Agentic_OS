@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { agentSkills, buildQuestions, builtinSkills, handsSkills, initiativeSkills, memorySkills, ReflexEvaluationModel, StaticEmbedder, trustSkills } from '@nova/core';
 import { EVAL_AGENTS, EVAL_APPS, EVAL_PROJECTS, REPLIES, SET_A, SET_B, SET_C, SET_D, SET_E } from '../src/reflex/evalSet.ts';
-import { DEFAULT_REFLEX_MODEL, downloadModel, isInstalled, modelsDir, readModelFiles, REFLEX_MODELS } from '../src/models/files.ts';
+import { DEFAULT_REFLEX_MODEL, downloadModel, isInstalled, modelsDir, readModelFiles, REFLEX_MODELS, SPEECH_MODEL } from '../src/models/files.ts';
 import { sentenceEncoder } from '../src/reflex/sentences.ts';
 
 describe('Reflex model files', () => {
@@ -41,6 +41,14 @@ describe('downloading a model', () => {
     const dir = mkdtempSync(join(tmpdir(), 'nova-models-'));
     await expect(downloadModel(DEFAULT_REFLEX_MODEL, { dir })).rejects.toThrow(/checksum/);
     expect(await isInstalled(DEFAULT_REFLEX_MODEL, dir)).toBe(false);
+  });
+
+  it('fetches a file kept in a GitHub repository from its pinned commit, by its path there', async () => {
+    const urls: string[] = [];
+    vi.stubGlobal('fetch', async (url: string) => (urls.push(url), new Response(new Uint8Array(10) as BodyInit, { status: 200 })));
+    const dir = mkdtempSync(join(tmpdir(), 'nova-models-'));
+    await expect(downloadModel(SPEECH_MODEL, { dir })).rejects.toThrow(/checksum/);
+    expect(urls).toEqual([`https://raw.githubusercontent.com/snakers4/silero-vad/${REFLEX_MODELS[SPEECH_MODEL]!.revision}/src/silero_vad/data/silero_vad.onnx`]);
   });
 
   it.skipIf(!installed)('saves verified files from the pinned revision', async () => {
