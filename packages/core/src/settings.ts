@@ -658,6 +658,21 @@ export const FIELDS: SettingField[] = [
     step: 5,
   },
   {
+    key: 'appearance.cardsClose',
+    section: 'appearance',
+    label: 'Cards close by themselves',
+    help: 'The cards that show beside a reply ("Opened Figma", an answer) go after this long - pointing at one keeps it until you move away. Questions, running timers and agents\' tasks stay until they are done.',
+    type: 'select',
+    default: '8',
+    options: [
+      { value: '5', label: 'After 5 seconds' },
+      { value: '8', label: 'After 8 seconds' },
+      { value: '15', label: 'After 15 seconds' },
+      { value: '30', label: 'After 30 seconds' },
+      { value: 'never', label: 'Never - I close them' },
+    ],
+  },
+  {
     key: 'appearance.orbSize',
     section: 'appearance',
     label: 'Orb size in the window',

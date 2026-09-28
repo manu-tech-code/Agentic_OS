@@ -55,6 +55,27 @@ export function keySize(size: number, key: string, range: SizeRange): number | n
   return null;
 }
 
+/**
+ * Whether the window's Orb is as big as it gets: at the top of its range, or held back by the window (its size is
+ * clamp(180px, 26vmin, 260px) times the scale, never more than 72vmin - styles.css).
+ */
+export function orbAtLargest(size: number, range: SizeRange, viewport: { width: number; height: number }): boolean {
+  const vmin = Math.min(viewport.width, viewport.height) / 100;
+  const base = Math.min(260, Math.max(180, 26 * vmin));
+  return size >= range.max || (base * size) / 100 >= 72 * vmin - 0.5;
+}
+
+/** The window's size, kept up to date. */
+export function useViewport() {
+  const [viewport, setViewport] = useState(() => ({ width: window.innerWidth, height: window.innerHeight }));
+  useEffect(() => {
+    const onResize = () => setViewport({ width: window.innerWidth, height: window.innerHeight });
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  return viewport;
+}
+
 /** ⌘+, ⌘− and ⌘0, as in a browser: a step bigger or smaller, or back to normal (100%). Null for any other key. */
 export function zoomKeySize(size: number, key: string, range: SizeRange, step = 10): number | null {
   if (key === '=' || key === '+') return snapSize(size + step, range);

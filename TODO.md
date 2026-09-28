@@ -4,7 +4,7 @@
 - [ ] When the orb is resized to its maximum size, centre it on the screen in app window only
 - [x] Make the transcript text size adjustable
 - [x] Add a "Test my voice" option in Settings → Voice → Voice ID so after setting up, I can check it recognises my voice
-- [ ] In Settings, hide each label's description behind an info icon next to the label, and show the description when I hover over the icon
+- [x] In Settings, hide each label's description behind an info icon next to the label, and show the description when I hover over the icon
 - [ ] Give Voice ID a master override keyword that works anywhere, from any voice, and overrides any Voice ID that's already set up
 - [ ] Make the response cards that show on screen after a reply close by themselves after a few seconds
 - [ ] Make Voice ID recognise my voice reliably — it's hit or miss and often says it couldn't tell it was me, even though I set it up with my own voice. Leads:

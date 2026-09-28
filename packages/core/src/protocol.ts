@@ -28,6 +28,8 @@ export interface UiPrefs {
   orb: OrbPrefs;
   /** What the user said and Nova's replies, in the window and the floating orb: a percent of their usual size. */
   textSize: number;
+  /** How long a reply's card stays in the window before it closes by itself, in seconds; 0 keeps it until closed. */
+  cardSeconds: number;
 }
 
 /** The preferences a skill may change by voice ("make the text bigger") - these alone, never anything else in Settings. */

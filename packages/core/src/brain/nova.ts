@@ -128,7 +128,7 @@ export interface NovaOptions {
 /** What Settings can change while Nova runs. */
 export type NovaSettings = Omit<NovaOptions, 'platform' | 'emit' | 'clock'>;
 
-const DEFAULT_UI: UiPrefs = { autoListen: true, rate: 1.05, lang: 'en-US', orb: { style: 'particles', colors: 'nova', motion: 'lively', size: 100, floatingSize: 100 }, textSize: 100 };
+const DEFAULT_UI: UiPrefs = { autoListen: true, rate: 1.05, lang: 'en-US', orb: { style: 'particles', colors: 'nova', motion: 'lively', size: 100, floatingSize: 100 }, textSize: 100, cardSeconds: 8 };
 
 /** What System 1 resolved for the slots a skill may need. */
 interface Resolved {

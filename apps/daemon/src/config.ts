@@ -167,6 +167,7 @@ export function loadConfig(settings: Settings, env: Env) {
       floatingSize: num('appearance.floatingOrbSize'),
     },
     textSize: num('appearance.textSize'),
+    cardSeconds: text('appearance.cardsClose') === 'never' ? 0 : Number(text('appearance.cardsClose')) || 8,
   };
   return {
     name,

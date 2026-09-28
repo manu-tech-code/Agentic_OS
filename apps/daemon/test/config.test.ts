@@ -15,8 +15,13 @@ describe('config: the settings file, plus constants from .env', () => {
     expect(c.wakeWords).toEqual(['hey nova', 'okay nova', 'nova']);
     expect(c.followUpMs).toBe(30_000);
     expect(c.agents).toBeNull(); // every installed agent
-    expect(c.ui).toEqual({ autoListen: true, rate: 1.05, lang: 'en-US', orb: { style: 'particles', colors: 'nova', motion: 'lively', size: 100, floatingSize: 100 }, textSize: 100 });
+    expect(c.ui).toEqual({ autoListen: true, rate: 1.05, lang: 'en-US', orb: { style: 'particles', colors: 'nova', motion: 'lively', size: 100, floatingSize: 100 }, textSize: 100, cardSeconds: 8 });
     expect(c.warnings).toEqual([]);
+  });
+
+  it("keeps a reply's cards for as long as chosen - or until they are closed", () => {
+    expect(loadConfig({ appearance: { cardsClose: '15' } }, {}).ui.cardSeconds).toBe(15);
+    expect(loadConfig({ appearance: { cardsClose: 'never' } }, {}).ui.cardSeconds).toBe(0);
   });
 
   it('reads nested settings in friendly units, and secrets from the environment', () => {
