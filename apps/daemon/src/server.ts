@@ -42,7 +42,7 @@ import { connectionToken, refusal, tokenFile, windowOrigins } from './shell/acce
 import { readClientEvent } from './shell/events.ts';
 import { Presence } from './shell/presence.ts';
 import { serveUi, UI_DIR } from './shell/static.ts';
-import { DEFAULT_REFLEX_MODEL, downloadModel, isInstalled, KOKORO_MODEL, MODELS, modelsDir, PARAKEET_MODEL, SMART_TURN_MODEL, VOICE_ID_MODEL, VOICE_ID_MODELS, whereInstalled } from './models/files.ts';
+import { DEFAULT_REFLEX_MODEL, downloadModel, isInstalled, KOKORO_MODEL, MODELS, modelsDir, PARAKEET_MODEL, SENTENCE_MODEL, SMART_TURN_MODEL, VOICE_ID_MODEL, VOICE_ID_MODELS, whereInstalled } from './models/files.ts';
 import { forgetLearned, loadReflex, reflexEmbedder, type ReflexRuntime } from './reflex/runtime.ts';
 import { buildSnapshot, validateChanges } from './snapshot.ts';
 import { Trust } from './trust/index.ts';
@@ -616,16 +616,18 @@ function saveSettings(changes: unknown) {
   });
 }
 
-/** Download Reflex's embedding model (checked against its pinned checksums) and switch to it. */
+/** Download Reflex's embedding model and its sentence model (each checked against its pinned checksums) and switch to them. */
 function installReflex(progress: (message: string) => void) {
   return queue(async () => {
-    let shown = -1;
-    await downloadModel(DEFAULT_REFLEX_MODEL, {
-      onProgress(file, received, total) {
-        const pct = Math.floor((received / total) * 5) * 20;
-        if (file === 'model.safetensors' && pct !== shown) progress(`Downloading Reflex… ${(shown = pct)}%`);
-      },
-    });
+    for (const name of [DEFAULT_REFLEX_MODEL, SENTENCE_MODEL]) {
+      let shown = -1;
+      await downloadModel(name, {
+        onProgress(_file, received, total) {
+          const pct = Math.floor((received / total) * 5) * 20;
+          if (total > 1_000_000 && pct !== shown) progress(`Downloading Reflex${name === SENTENCE_MODEL ? "'s sentence model" : ''}… ${(shown = pct)}%`);
+        },
+      });
+    }
     apply(await buildRuntime(runtime));
     return runtime.reflex.model ? 'Reflex is installed and making decisions.' : "Reflex downloaded, but it didn't load - see the daemon log.";
   });

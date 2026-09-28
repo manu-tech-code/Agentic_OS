@@ -1,7 +1,7 @@
 import { answerFromWeights, softmax } from '../distribution.ts';
 import { settleReplies } from '../replies.ts';
 import type { CallOptions, EvaluationModelV4, Question, RawAnswer, RawResult, StateInput } from '../types.ts';
-import { dot, type Embedder } from './embedder.ts';
+import { dot, type Embedder, type SentenceEncoder } from './embedder.ts';
 import { FILLER_WORDS, grammarPhrases } from './grammar.ts';
 import { DEFAULT_TRAIN_OPTIONS, fingerprint, HEAD_VERSION, ReflexHead, trainHead, type HeadData, type TrainOptions } from './head.ts';
 import { aliasesFor, COMMON, matchName, nameTokens, NONE_SCORE, type NameMatch } from './names.ts';
@@ -13,14 +13,15 @@ import { REFLEX_PHRASES } from './phrases.ts';
  *  - names (apps, projects, agents) are matched in code, including speech-recognition slips;
  *  - intents are matched by meaning against many example phrasings, with named things masked
  *    ("pull up notes" reads as "pull up app"), plus what Nova is waiting for;
- *  - a classifier trained on thousands of phrasings weighs in on every intent;
+ *  - a classifier trained on thousands of phrasings weighs in on every intent - on the word meanings, and (when its
+ *    model is installed) on how a sentence model reads the whole utterance;
  *  - "was that for me?" follows from the intent and the conversation state.
  * Answers are calibrated probabilities, so the Guardian's confidence thresholds keep working.
  */
 
 type ChoiceQuestion = Extract<Question, { type: 'choice' }>;
-/** One reading of the utterance: its meaning as a whole, and of its opening words. */
-type Variant = { full: Float32Array; lead: Float32Array };
+/** One reading of the utterance: its meaning as a whole, of its opening words, and as the sentence model reads it. */
+type Variant = { full: Float32Array; lead: Float32Array; sentence?: Float32Array };
 
 export interface LearnedExample {
   utterance: string;
@@ -35,6 +36,8 @@ export interface LearnedExample {
 
 export interface ReflexOptions {
   embedder: Embedder;
+  /** A model that reads whole sentences, for the classifier (next to the word meanings) - when it's installed. */
+  sentences?: SentenceEncoder;
   /**
    * Identifies the embedder's exact weights for `trainingKey()` (e.g. its file revision and
    * checksums), when that matters more precisely than `embedder.id`. Defaults to `embedder.id`.
@@ -86,15 +89,31 @@ interface Tuning {
    * 1: it can also lift an intent it's sure of over that floor. Measured relative to "no idea".
    */
   headCenter: number;
+  /**
+   * 1: the classifier lifts an intent only when the closest examples point to it too - two readings must agree
+   * before a doubtful match is done rather than handed to the brain; 0: it lifts whatever it's sure of.
+   */
+  headAgree: number;
 }
 
-const TUNING: Tuning = { temperature: 0.04, otherFloor: 0.2, rejectFloor: 0.6, topK: 2, topWeight: 0.65, leadWeight: 0.35, leadWords: 3, headWeight: 0.08, headCenter: 0 };
+const TUNING: Tuning = { temperature: 0.04, otherFloor: 0.2, rejectFloor: 0.6, topK: 2, topWeight: 0.65, leadWeight: 0.35, leadWords: 3, headWeight: 0.08, headCenter: 0, headAgree: 0 };
+/**
+ * With its sentence model, the classifier reads new wordings well enough to count for twice as much, and to lift a
+ * match over the brain's floor when it's sure - but only when the closest examples pick the same intent (headAgree):
+ * two readings must agree before a doubtful match is done. Chosen on the development sets (A, B, D; 573 phrasings, as
+ * Nova runs with a brain), over three training seeds: right 528-533 -> 544-550, wrong actions 9 -> 7-9, handed to the
+ * brain 31-36 -> 16-21. (Lifting without agreeing got 557-562 right but 9-14 wrong: more wrong actions, which do the
+ * wrong thing, where the brain can still use the skill.)
+ */
+const SENTENCE_TUNING: Partial<Tuning> = { headWeight: 0.16, headCenter: 1, headAgree: 1 };
 
 const FALLBACK_KEYS = new Set(['other', 'none', 'unknown', 'no_match']);
 const NAME_TEMPERATURE = 0.05;
 /** A name this sure gets masked for intent matching. */
 const MASK_SCORE = 0.85;
 const MAX_LEARNED = 2000;
+/** Texts asked of the sentence model at once, while training. */
+const SENTENCE_BATCH = 64;
 /** Words that show an app is being talked about as an app, so a name that's also an everyday word ("Weather") can be masked. */
 const APP_CONTEXT = new Set(
   'open launch start run fire bring pull switch show get go focus load boot quit close exit kill shut terminate end dismiss use using need want wanna app application'.split(' '),
@@ -242,7 +261,7 @@ export class ReflexEvaluationModel implements EvaluationModelV4 {
   private readonly tuning: Tuning;
 
   constructor(private readonly opts: ReflexOptions) {
-    this.tuning = { ...TUNING, ...opts.tuning };
+    this.tuning = { ...TUNING, ...(opts.sentences ? SENTENCE_TUNING : {}), ...opts.tuning };
     this.embedder = opts.embedder;
     this.modelId = `reflex (${opts.embedder.id})`;
     this.phrases = opts.phrases ?? REFLEX_PHRASES;
@@ -293,9 +312,14 @@ export class ReflexEvaluationModel implements EvaluationModelV4 {
     return this.head !== null;
   }
 
-  /** Use a classifier trained earlier, or none. One trained for another embedding model is ignored. */
+  /** Use a classifier trained earlier, or none. One trained for other models (or without the sentence model) is ignored. */
   useHead(data: HeadData | null) {
-    this.head = data && data.version === HEAD_VERSION && data.dim === this.embedder.dim * 2 ? new ReflexHead(data) : null;
+    this.head = data && data.version === HEAD_VERSION && data.dim === this.featureDim ? new ReflexHead(data) : null;
+  }
+
+  /** The classifier's input size: the word meanings of the whole and of its opening words, and the sentence model's reading. */
+  private get featureDim() {
+    return this.embedder.dim * 2 + (this.opts.sentences?.dim ?? 0);
   }
 
   /** Everything the classifier learns from: the phrase bank, the grammar's phrasings, and what was learned in use. */
@@ -326,7 +350,7 @@ export class ReflexEvaluationModel implements EvaluationModelV4 {
    */
   trainingKey() {
     return fingerprint(
-      JSON.stringify([HEAD_VERSION, this.opts.modelKey ?? this.embedder.id, this.tuning.leadWords, [...FILLERS].sort(), DEFAULT_TRAIN_OPTIONS, this.trainingExamples()]),
+      JSON.stringify([HEAD_VERSION, this.opts.modelKey ?? this.embedder.id, this.opts.sentences?.id ?? null, this.tuning.leadWords, [...FILLERS].sort(), DEFAULT_TRAIN_OPTIONS, this.trainingExamples()]),
     );
   }
 
@@ -337,23 +361,34 @@ export class ReflexEvaluationModel implements EvaluationModelV4 {
     const at = new Map(classes.map((c, i) => [c, i]));
     const inputs: Float32Array[] = [];
     let lastPause = Date.now();
-    for (const e of examples) {
-      inputs.push(this.features(this.embedder.embed(e.text), this.embedder.embed(lead(e.text, this.tuning.leadWords))));
+    const breathe = async () => {
       if (opts.pause && Date.now() - lastPause > 12) {
         await opts.pause();
         lastPause = Date.now();
       }
+    };
+    // The sentence model's reading of each, asked in batches (it runs in a process of its own).
+    const sentences: Float32Array[] = [];
+    const encoder = this.opts.sentences;
+    for (let i = 0; encoder && i < examples.length; i += SENTENCE_BATCH) {
+      sentences.push(...(await encoder.encode(examples.slice(i, i + SENTENCE_BATCH).map((e) => e.text))));
+      await breathe();
+    }
+    for (const [i, e] of examples.entries()) {
+      inputs.push(this.features(this.embedder.embed(e.text), this.embedder.embed(lead(e.text, this.tuning.leadWords)), sentences[i]));
+      await breathe();
     }
     const data = await trainHead(inputs, examples.map((e) => at.get(e.label)!), classes, opts);
     this.useHead(data);
     return data;
   }
 
-  /** The classifier's input: the meaning of the whole utterance, then of its opening words. */
-  private features(full: Float32Array, leadVector: Float32Array) {
-    const x = new Float32Array(full.length * 2);
+  /** The classifier's input: the meaning of the whole utterance, then of its opening words, then the sentence model's reading (zeros when it didn't answer). */
+  private features(full: Float32Array, leadVector: Float32Array, sentence?: Float32Array) {
+    const x = new Float32Array(this.featureDim);
     x.set(full);
     x.set(leadVector, full.length);
+    if (sentence && this.opts.sentences) x.set(sentence.subarray(0, this.opts.sentences.dim), full.length * 2);
     return x;
   }
 
@@ -361,17 +396,29 @@ export class ReflexEvaluationModel implements EvaluationModelV4 {
   private addOpinion(keys: string[], scores: number[], variants: Variant[]) {
     const head = this.head;
     if (!head) return;
+    // The closest examples' own pick (a real intent, not "none of these"), for `headAgree`.
+    let examplesPick = -1;
+    keys.forEach((k, i) => {
+      if (!FALLBACK_KEYS.has(k) && (examplesPick < 0 || scores[i]! > scores[examplesPick]!)) examplesPick = i;
+    });
     const sums = keys.map(() => 0);
     const known = keys.map((k) => head.has(k));
     if (!known.some(Boolean)) return;
     for (const v of variants) {
-      head.logProbs(this.features(v.full, v.lead), keys).forEach((p, i) => {
+      head.logProbs(this.features(v.full, v.lead, v.sentence), keys).forEach((p, i) => {
         if (p !== null) sums[i]! += p / variants.length;
       });
     }
     const knownSums = sums.filter((_, i) => known[i]);
     const neutral = knownSums.reduce((a, b) => a + b, 0) / knownSums.length;
-    const unsure = this.tuning.headCenter * Math.log(1 / knownSums.length);
+    // Lifting over the brain's floor (headCenter) - with headAgree, only when the classifier's own pick is the examples'
+    // too: two readings disagreeing, a doubtful match goes to the brain, and the classifier only takes away.
+    let headPick = -1;
+    keys.forEach((_, i) => {
+      if (known[i] && (headPick < 0 || sums[i]! > sums[headPick]!)) headPick = i;
+    });
+    const agree = this.tuning.headAgree < 0.5 || headPick === examplesPick;
+    const unsure = agree ? this.tuning.headCenter * Math.log(1 / knownSums.length) : 0;
     keys.forEach((_, i) => (scores[i]! += this.tuning.headWeight * ((known[i] ? sums[i]! : neutral) - unsure)));
   }
 
@@ -393,7 +440,13 @@ export class ReflexEvaluationModel implements EvaluationModelV4 {
     if (found.app && found.agent && found.app.start < found.agent.end && found.agent.start < found.app.end && APP_WORDS.has(words[found.app.end] ?? '')) delete found.agent;
     const masked = maskedTexts(words, found);
     this.remember(s.utterance, masked);
-    const variants = [s.utterance, ...masked].map((t) => ({ full: this.embedder.embed(t), lead: this.embedder.embed(lead(t, this.tuning.leadWords)) }));
+    const texts = [s.utterance, ...masked];
+    const variants: Variant[] = texts.map((t) => ({ full: this.embedder.embed(t), lead: this.embedder.embed(lead(t, this.tuning.leadWords)) }));
+    // The sentence model's reading, for the classifier - when there's a classifier to read it, and it answers.
+    if (this.opts.sentences && this.head) {
+      const read = await this.opts.sentences.encode(texts).catch(() => null);
+      read?.forEach((v, i) => variants[i] && (variants[i]!.sentence = v));
+    }
 
     // The intent as it would be without handing doubt to a brain: whether speech was meant for Nova doesn't depend on that.
     let plainIntent: RawAnswer | undefined;

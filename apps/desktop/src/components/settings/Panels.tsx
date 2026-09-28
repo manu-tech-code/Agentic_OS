@@ -437,13 +437,13 @@ export function HearingPanel({ snapshot, name, result, onAction }: ActionProps) 
 /** Reflex, Nova's own decision model: installed or not, and what it has learned. */
 export function ReflexPanel({ snapshot, name, result, onAction }: ActionProps) {
   const { reflex } = snapshot;
-  const [busy, setBusy] = useBusy([reflex.installed, reflex.learned], result);
+  const [busy, setBusy] = useBusy([reflex.installed, reflex.sentences, reflex.learned], result);
   return (
     <div className="tile">
       <div className="tile__head">
         <span className={`dot ${reflex.installed ? 'dot--on' : ''}`} />
         <strong>Reflex</strong>
-        <Info label="Reflex" text={personalize("Nova's own decision model. A classifier trained on thousands of phrasings and a search of the closest examples read what you mean; app, project and agent names are matched in code. It answers in about a millisecond, on this Mac, with no language model and nothing sent anywhere. When it isn't sure, the brain answers - and when the brain handles it with one of Nova's skills, Reflex learns that phrasing for next time.", name)} />
+        <Info label="Reflex" text={personalize("Nova's own decision model. A classifier trained on thousands of phrasings - reading word meanings and, with its sentence model, whole sentences - and a search of the closest examples read what you mean; app, project and agent names are matched in code; yes and no are read in code. It answers in about a millisecond, on this Mac, with no language model and nothing sent anywhere. When it isn't sure, the brain answers - and when the brain handles it with one of Nova's skills, Reflex learns that phrasing for next time.", name)} />
         <span className="muted">
           {reflex.installed
             ? [
@@ -453,6 +453,19 @@ export function ReflexPanel({ snapshot, name, result, onAction }: ActionProps) {
               ].join(' · ')
             : 'not installed'}
         </span>
+        {reflex.installed && reflex.sentences === false && (
+          <button
+            type="button"
+            className="btn btn--ghost tile__action"
+            disabled={busy}
+            onClick={() => {
+              setBusy(true);
+              onAction({ type: 'reflex-install' });
+            }}
+          >
+            {busy ? 'Installing…' : 'Add its sentence model · 24 MB'}
+          </button>
+        )}
         {reflex.installed
           ? reflex.learned > 0 && (
               <button type="button" className="link tile__action" onClick={() => onAction({ type: 'reflex-forget' })}>
@@ -469,7 +482,7 @@ export function ReflexPanel({ snapshot, name, result, onAction }: ActionProps) {
                   onAction({ type: 'reflex-install' });
                 }}
               >
-                {busy ? 'Installing…' : 'Install · 31 MB'}
+                {busy ? 'Installing…' : 'Install · 55 MB'}
               </button>
             )}
       </div>

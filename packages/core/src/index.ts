@@ -8,7 +8,7 @@ export * from './decision/distribution.ts';
 export { HeuristicEvaluationModel } from './decision/heuristicModel.ts';
 export { LlmEvaluationModel } from './decision/llmEvaluationModel.ts';
 export { ReflexEvaluationModel, type LearnedExample, type ReflexOptions } from './decision/reflex/model.ts';
-export { StaticEmbedder, WordPieceTokenizer, readSafetensor, type Embedder } from './decision/reflex/embedder.ts';
+export { StaticEmbedder, WordPieceTokenizer, readSafetensor, type Embedder, type SentenceEncoder } from './decision/reflex/embedder.ts';
 export { aliasesFor, matchName, nameTokens } from './decision/reflex/names.ts';
 export { REFLEX_PHRASES } from './decision/reflex/phrases.ts';
 export { REFLEX_GRAMMAR, expand, grammarPhrases } from './decision/reflex/grammar.ts';

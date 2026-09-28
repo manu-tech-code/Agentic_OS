@@ -1094,6 +1094,8 @@ export interface SettingsSnapshot {
     model: string;
     label: string;
     installed: boolean;
+    /** Its sentence model is on this Mac too (false: word meanings alone - installing adds it). */
+    sentences?: boolean;
     /** Examples learned in use, and how many of them the brain taught. */
     learned: number;
     taught?: number;
