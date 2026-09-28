@@ -2,7 +2,7 @@ import type { AgentHost, AgentStep, ApprovalRequest } from '../agents.ts';
 import { topProbability } from '../decision/distribution.ts';
 import { aliasesFor, matchName, nameTokens } from '../decision/reflex/names.ts';
 import type { DecisionEngine } from '../decision/types.ts';
-import { gateFor, MIN_CONFIDENCE } from '../guardian.ts';
+import { asksToAct, gateFor, MIN_CONFIDENCE } from '../guardian.ts';
 import { mayRememberTool, toolRisk } from '../integrations.ts';
 import type { ActivityItem, Card, Phase, ServerEvent, UiPrefs, UndoStep } from '../protocol.ts';
 import type { HearingStatus } from '../settings.ts';
@@ -111,6 +111,12 @@ export interface NovaOptions {
   hands?: HandsService | null;
   /** Whether brains may use the computer (look, click, type); the user's own "click send" works either way. */
   computerUse?: boolean;
+  /**
+   * Whether Nova asks before doing what the user told it to (unset: it does). Off, what the user says to do
+   * is done once Nova is sure what was said - a brain's steps for it too - and only what nobody asked for,
+   * and weighty things (money, what can't be taken back), are asked about.
+   */
+  askFirst?: boolean;
   clock?: () => number;
 }
 
@@ -472,6 +478,8 @@ export class NovaBrain implements ToolHost {
       const session = own && from.task ? { ...own, key: `${own.key}@${from.task}` } : own;
       if (session && this.sessionAllows(session.key)) {
         // "Go ahead with all of it", for this task: no need to ask again.
+      } else if (this.toldTo(skill, context, from)) {
+        // The user's own words asked for this ("click send"): the brain's steps for it are what they asked for.
       } else if (!(remember && this.opts.trust?.allows(remember.key))) {
         const prompt = skill.confirmPrompt?.(context) ?? `${caller} wants to ${name.replace(/_/g, ' ')}. Allow it?`;
         if (this.over(from)) return 'That answer is over, so it was not done.';
@@ -718,6 +726,8 @@ export class NovaBrain implements ToolHost {
       this.ask({ kind: 'slot', id: uid(), prompt: 'Which project?', slot: 'project', skill, resolved, utterance, by });
       return this.say(utterance, 'Which project?');
     }
+    // The user said to do it (and Nova is sure what they said, above): done - unless it's weighty.
+    if (gateFor(tier) === 'confirm' && this.opts.askFirst === false && !skill.weighty?.(ctx)) return this.execute(skill, utterance, resolved, utterance, by);
     if (gateFor(tier) === 'confirm') {
       // Something the user said "yes, always" to: no need to ask.
       const remember = skill.rememberAs?.(ctx);
@@ -894,6 +904,15 @@ export class NovaBrain implements ToolHost {
   /** The answer a tool call came from has ended (or been stopped) since: nobody is waiting on its question. */
   private over(from: ToolFrom) {
     return from.thinking !== undefined && (from.thinking.signal.aborted || this.thinking !== from.thinking);
+  }
+
+  /**
+   * A brain's step the user asked for: they said to do something (in their own words, read in code - never
+   * the brain's request), Nova isn't set to ask first, and it isn't weighty. An agent working on a task on
+   * its own was told nothing, so it's always asked.
+   */
+  private toldTo(skill: Skill, context: SkillContext, from: ToolFrom) {
+    return this.opts.askFirst === false && !from.task && asksToAct(context.heard ?? '') && !skill.weighty?.(context);
   }
 
   /** What "go ahead with all of it" allows right now. */

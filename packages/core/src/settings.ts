@@ -321,6 +321,14 @@ export const FIELDS: SettingField[] = [
   },
 
   {
+    key: 'trust.askFirst',
+    section: 'privacy',
+    label: 'Ask before doing what you asked for',
+    help: "Off: when you tell Nova to do something - click, type, quit an app, run a shortcut, move a file - it does it, once it's sure what you said. It still asks before what you didn't ask for (a brain's own idea, an agent's commands), before anything that spends money or can't be undone, and paying always needs a tap. On: a yes for every change.",
+    type: 'toggle',
+    default: false,
+  },
+  {
     key: 'trust.keepActivity',
     section: 'privacy',
     label: 'Keep the record of actions',
@@ -395,7 +403,7 @@ export const FIELDS: SettingField[] = [
     key: 'hands.computerUse',
     section: 'hands',
     label: 'Let brains use the computer',
-    help: 'Whoever answers can look at your screen and click, type and scroll for you - asking before each step, or once when you say "go ahead with all of it". Off: only your own commands, like "click send".',
+    help: 'Whoever answers can look at your screen and click, type and scroll for you: what you asked for it just does (unless Privacy & trust says to ask first), and anything else it asks about - each step, or once when you say "go ahead with all of it". Off: only your own commands, like "click send".',
     type: 'toggle',
     default: true,
   },

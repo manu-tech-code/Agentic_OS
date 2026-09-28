@@ -194,6 +194,7 @@ async function finishRuntime(settings: Settings, fileError: string | undefined, 
       replyTimeoutMs: config.replyTimeoutMs,
       ui: config.ui,
       computerUse: config.hands.computerUse,
+      askFirst: config.askFirst,
     },
   };
 }

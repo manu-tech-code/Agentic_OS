@@ -32,7 +32,8 @@ beforeAll(async () => {
   home = await mkdtemp(join(tmpdir(), 'nova-daemon-'));
   await writeFile(
     join(home, 'settings.json'),
-    JSON.stringify({ decisions: { engine: 'heuristic' }, hearing: { engine: 'browser', smartTurn: false }, screen: { context: false }, agents: { enabled: [] } }),
+    // Nova asks first here: the "yes, always" test needs a question to answer.
+    JSON.stringify({ decisions: { engine: 'heuristic' }, hearing: { engine: 'browser', smartTurn: false }, screen: { context: false }, agents: { enabled: [] }, trust: { askFirst: true } }),
   );
   port = await freePort();
   daemon = spawn(process.execPath, [TSX, 'src/server.ts'], {
