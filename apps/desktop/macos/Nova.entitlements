@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!-- Nova.app runs hardened: nothing can be injected into it, and it may use only what's declared here. -->
+<dict>
+  <!-- The microphone: hearing you, with echo cancellation while Nova speaks. -->
+  <key>com.apple.security.device.audio-input</key>
+  <true/>
+  <!-- Calendar and Reminders (EventKit): the briefing, and "in my Reminders". -->
+  <key>com.apple.security.personal-information.calendars</key>
+  <true/>
+  <!-- Controlling other apps for you (Music, Spotify, the Finder), asked by macOS the first time. -->
+  <key>com.apple.security.automation.apple-events</key>
+  <true/>
+</dict>
+</plist>

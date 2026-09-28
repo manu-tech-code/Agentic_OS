@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!-- Nova Eyes runs hardened: nothing can be injected into it to borrow its screen and Accessibility permissions. -->
+<dict>
+  <!-- Reading the page in front's address from the browser, asked by macOS the first time. -->
+  <key>com.apple.security.automation.apple-events</key>
+  <true/>
+</dict>
+</plist>

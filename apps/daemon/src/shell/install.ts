@@ -1,8 +1,9 @@
 /**
  * Build Nova.app on this Mac and put it in ~/Applications:   npm run app   (--no-open: don't open it)
  *
- * It's built from apps/desktop/macos and signed here, so macOS knows it by one name (dev.nova.app)
- * for the microphone and for opening at login. It runs Nova from this folder: the app gets a note
+ * It's built from apps/desktop/macos and signed here - with the user's own Apple certificate when they have
+ * one (see signing.ts), hardened - so macOS knows it by one name (dev.nova.app) for the microphone and
+ * for opening at login, and keeps what it was allowed across rebuilds. It runs Nova from this folder: the app gets a note
  * of where Nova is, which node to use and the PATH the daemon and its agents need.
  */
 import { execFile, spawn } from 'node:child_process';
@@ -15,6 +16,7 @@ import { promisify } from 'node:util';
 import { formatShortcut } from '@nova/core';
 import { loadConfig, loadDotEnv, readSettings, settingsFile } from '../config.ts';
 import { BUNDLED_MODELS, bundleModel, downloadModel, isInstalled, MODELS, modelsDir } from '../models/files.ts';
+import { describeIdentity, signApp, signingIdentity } from './signing.ts';
 
 const ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
 const PACKAGE = join(ROOT, 'apps', 'desktop', 'macos');
@@ -121,11 +123,11 @@ async function main() {
     devUi: process.argv.includes('--dev-ui') ? 'http://localhost:5173/' : undefined,
   };
   await writeFile(join(contents, 'Resources', 'shell.json'), `${JSON.stringify(shell, null, 2)}\n`);
-  // Signed here: one identity for macOS to remember. NOVA_SIGN_IDENTITY (in .env) can name a
-  // certificate of yours, so the microphone permission survives rebuilds; otherwise it's signed for
-  // this Mac alone, and macOS asks again after each rebuild.
-  const identity = process.env.NOVA_SIGN_IDENTITY || '-';
-  await run('codesign', ['--force', '--sign', identity, '--identifier', 'dev.nova.app', STAGING]);
+  // Signed here, hardened: with the user's Apple certificate (or NOVA_SIGN_IDENTITY in .env), macOS keeps
+  // what Nova.app was allowed across rebuilds; without one it's signed for this Mac alone, and asked again.
+  const identity = await signingIdentity();
+  console.log(`\n  Signing Nova.app ${identity.sign === '-' ? '' : 'as '}${describeIdentity(identity)} …`);
+  await signApp(STAGING, 'app', identity);
 
   const wasRunning = await quitRunning();
   await swapIn(APP, STAGING);
@@ -134,7 +136,11 @@ async function main() {
   Nova.app is in ${APP}, with Kokoro - Nova's voice - inside.
   It opens at login, runs the daemon (unless one is already running, or Settings → Menu bar says
   you run it yourself), listens for its name and comes when you press ${formatShortcut(config.presence.shortcut)}.
-  The first time, macOS asks to let Nova use the microphone.
+  ${
+    identity.sign === '-'
+      ? 'The first time - and after every rebuild - macOS asks to let Nova use the microphone. Sign in to\n  Xcode (Settings → Accounts) for a certificate, then run this again, and it asks only once.'
+      : 'The first time, macOS asks to let Nova use the microphone; after that, never again - rebuilds included.'
+  }
 `);
   if (!process.argv.includes('--no-open')) await run('open', [APP]);
   else if (wasRunning) console.log('  It was running and has been closed; open it again when you like.');

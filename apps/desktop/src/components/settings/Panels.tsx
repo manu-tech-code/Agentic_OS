@@ -479,6 +479,35 @@ export function JevPanel({ snapshot }: { snapshot: SettingsSnapshot }) {
   );
 }
 
+const SIGNED: Record<SettingsSnapshot['signing']['apps'][number]['signed'], string> = {
+  yours: 'your certificate',
+  'ad hoc': 'this Mac alone',
+  other: 'another certificate',
+  'not built': 'not built yet',
+};
+
+/** Who signs Nova's apps: with the user's certificate their permissions survive rebuilds, and Nova Eyes answers only Nova.app. */
+function SigningTile({ signing }: { signing: SettingsSnapshot['signing'] }) {
+  const ok = !signing.adHoc && signing.apps.every((a) => a.signed === 'not built' || (a.signed === 'yours' && a.hardened));
+  return (
+    <div className="tile">
+      <div className="tile__head">
+        <span className={`dot ${ok ? 'dot--on' : ''}`} />
+        <strong>Signing</strong>
+        <span className="muted">{signing.identity}</span>
+      </div>
+      <span className="muted">
+        {signing.apps.map((a) => `${a.name}: ${SIGNED[a.signed]}${a.signed !== 'not built' && !a.hardened ? ', not hardened' : ''}`).join(' · ')}.{' '}
+        {signing.adHoc
+          ? 'macOS asks for the microphone, the screen and Accessibility again after every rebuild. Sign in to Xcode (Settings → Accounts) for a free Apple Development certificate, then run npm run app.'
+          : ok
+            ? 'What macOS allows Nova survives rebuilds and renewals, nothing can be injected into its apps, and Nova Eyes answers only the daemon Nova.app runs.'
+            : 'Run npm run app to sign Nova.app with it; Nova Eyes and the hearing helper follow by themselves. macOS asks for each permission one last time.'}
+      </span>
+    </div>
+  );
+}
+
 export function SystemPanel({ snapshot }: { snapshot: SettingsSnapshot }) {
   const { constants } = snapshot;
   return (
@@ -497,6 +526,7 @@ export function SystemPanel({ snapshot }: { snapshot: SettingsSnapshot }) {
           pages allowed to change settings (<code>NOVA_UI_ORIGINS</code>), file locations and API keys. Changes there need a restart.
         </span>
       </div>
+      <SigningTile signing={snapshot.signing} />
       {constants.ignored.length > 0 && (
         <div className="banner">
           These entries in .env are settings from an earlier version. Nova ignores them now - your settings live in the file above - so you can delete them:{' '}

@@ -177,15 +177,37 @@ Nova.app makes Nova part of the Mac rather than a page:
   listening, then goes. It never takes focus from the app you're in, and it stays out of screenshots and screen
   shares. Click it for the full window (Settings included).
 - **It opens at login and runs the daemon** - or uses one that's already running, such as `npm run dev` in a
-  terminal. While you work on Nova itself, set Settings → Menu bar → *Who runs Nova's daemon* to the terminal. Its
-  daemon writes to `~/.nova/logs/daemon.log`; the app's own log is
-  `log show --predicate 'subsystem == "dev.nova.app"'`.
+  terminal. While you work on Nova itself, set Settings → Menu bar → *Who runs Nova's daemon* to the terminal (but
+  see below: a daemon of the terminal's gets no screen or hands). Its daemon writes to `~/.nova/logs/daemon.log`;
+  the app's own log is `log show --predicate 'subsystem == "dev.nova.app"'`.
 
 While Nova.app runs, a browser window of Nova shows what happens but doesn't listen or speak itself. The first time,
-macOS asks whether Nova may use the microphone. Nova.app is signed on your Mac, so after a rebuild macOS may ask
-again; to keep the permission across rebuilds, put a signing identity of yours in `.env`, for example
-`NOVA_SIGN_IDENTITY="Apple Development: you@example.com (TEAMID)"` (`security find-identity -v -p codesigning`
-lists yours). `apps/desktop/macos/.build/release/Nova --selftest` checks the parts that need no microphone.
+macOS asks whether Nova may use the microphone. `apps/desktop/macos/.build/release/Nova --selftest` checks the parts
+that need no microphone.
+
+### Signing: permissions that survive rebuilds
+
+Nova's apps - Nova.app, Nova Eyes and the hearing helper - are built and signed on your Mac (`apps/daemon/src/shell/signing.ts`).
+With an Apple certificate of yours they're signed with it, and macOS keys what you allowed them (the microphone, the
+screen, Accessibility, controlling other apps) to each app's id and your team: every rebuild, and next year's renewed
+certificate, still meets that - and no one else's app can. Signed "for this Mac alone" (ad hoc) instead, macOS asks
+again after every rebuild.
+
+- **Getting a certificate**: sign in to Xcode with your Apple ID (Xcode → Settings → Accounts); it makes a free
+  Apple Development certificate. Nova finds it by itself (a Developer ID one comes first), or name one in `.env` as
+  `NOVA_SIGN_IDENTITY` (its name, or `-` for ad hoc); `security find-identity -v -p codesigning` lists yours.
+  Then `npm run app` - macOS asks for each permission one last time; Nova Eyes and the hearing helper are signed
+  again by themselves the next time they're needed.
+- **Hardened**: all three run with the hardened runtime, so nothing can be injected into them to borrow their
+  permissions, and each may use only what it declares (`apps/desktop/macos/Nova.entitlements`: the microphone,
+  Calendar and Reminders, controlling other apps; `apps/daemon/native/eyes/Eyes.entitlements`: reading the browser's
+  address).
+- **Nova Eyes answers only Nova.app's daemon**: signed with your certificate, it checks - by code signature, not by
+  name - that the daemon asking was started by your Nova.app, and refuses anything else (Settings → Hands says so).
+  So a daemon you run in a terminal (`npm run dev`) gets no screen or hands: let Nova.app run it (it runs this
+  folder's code; restart it from its menu after a change).
+- Settings → System shows who signed each app and until when, and the setup checklist says when your certificate is
+  about to run out.
 
 ## Reminders, briefings and routines
 
@@ -289,8 +311,11 @@ runs in - and it answers only the Nova daemon that started it. To let it see:
 3. The first time it reads a browser's address, macOS asks whether Nova Eyes may control that browser; say OK.
 
 Worth knowing: what Nova Eyes may see, Nova can see - and, as with any assistant that sees your screen, a program running
-under your account could ask Nova for it (or start Nova Eyes itself). Grant these permissions on a Mac where you trust
-what runs, and turn them off in System Settings whenever you like.
+under your account could ask Nova for it. Signed with your certificate (see *Signing* above), Nova Eyes answers only
+the daemon your Nova.app runs, so a program can't just start Nova Eyes itself and use it; it runs hardened, so nothing
+can be injected into it either. What signing can't stop is a program rewriting Nova's own code in this folder, which
+the daemon runs. Grant these permissions on a Mac where you trust what runs, and turn them off in System Settings
+whenever you like.
 
 ## Hands: Nova uses the Mac
 

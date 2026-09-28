@@ -11,6 +11,7 @@ import { platform } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { currentIdentity, needsSigning, signApp } from '../shell/signing.ts';
 
 const run = promisify(execFile);
 
@@ -80,7 +81,12 @@ export function ensureHelper(onProgress?: (line: string) => void): Promise<strin
     // Another Nova (a restart mid-build) may be building it: wait for that instead of starting over.
     const other = Number(await readFile(lockFile, 'utf8').catch(() => ''));
     while (other && other !== process.pid && alive(other)) await new Promise((r) => setTimeout(r, 2000));
-    if (await helperIsCurrent()) return helperBinary;
+    const identity = await currentIdentity();
+    if (await helperIsCurrent()) {
+      // Built already: signed again only if the identity changed (a certificate added or renewed).
+      if (await needsSigning(helperBinary, identity)) await signApp(helperBinary, 'hearing', identity);
+      return helperBinary;
+    }
     await mkdir(join(helperPackage, '.vendor'), { recursive: true });
     await writeFile(lockFile, String(process.pid));
     try {
@@ -97,6 +103,8 @@ export function ensureHelper(onProgress?: (line: string) => void): Promise<strin
         child.on('error', (e) => reject(new Error(`Couldn't run swift (install Xcode or its Command Line Tools): ${e.message}`)));
         child.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`Building the hearing helper failed:\n${log.split('\n').slice(-12).join('\n')}`))));
       });
+      // Hardened, and with the user's certificate when there is one - like Nova.app and Nova Eyes.
+      await signApp(helperBinary, 'hearing', identity);
     } finally {
       await rm(lockFile, { force: true });
     }
