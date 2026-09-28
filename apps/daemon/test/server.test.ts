@@ -97,6 +97,12 @@ const get = (path: string) =>
   });
 
 describe('the daemon', () => {
+  it('starts with nothing failing unnoticed', async () => {
+    // Hearing reports its status at any wait while Nova starts: it once did before Settings could be put together.
+    await new Promise((r) => setTimeout(r, 300));
+    expect(output).not.toMatch(/something failed unnoticed/);
+  });
+
   it('lets in only clients that show its connection secret', async () => {
     expect((await connect('')).status).toBe(401);
     expect((await connect('?token=guess')).status).toBe(401);
