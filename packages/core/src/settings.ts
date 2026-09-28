@@ -351,12 +351,33 @@ export const FIELDS: SettingField[] = [
   },
 
   {
-    key: 'trust.askFirst',
+    key: 'trust.mode',
     section: 'privacy',
-    label: 'Ask before doing what you asked for',
-    help: "Off: when you tell Nova to do something - click, type, quit an app, run a shortcut, move a file - it does it, once it's sure what you said. It still asks before what you didn't ask for (a brain's own idea, an agent's commands), before anything that spends money or can't be undone, and paying always needs a tap. On: a yes for every change.",
+    label: 'Permissions',
+    help: "How often Nova checks with you first - kept until you change it here. Ask first: a yes for every change. Do what I ask: what you tell it to do is done at once; it asks only about what you didn't ask for (a brain's own idea, an agent's commands) and before anything that spends money or can't be undone. Don't ask: nothing waits for a yes - Nova, its brains and your agents act on their own, and anything you blocked stays blocked. Everything done is in the record, and most of it can be undone.",
+    type: 'select',
+    default: 'auto',
+    options: [
+      { value: 'ask', label: 'Ask first' },
+      { value: 'auto', label: 'Do what I ask' },
+      { value: 'free', label: "Don't ask" },
+    ],
+  },
+  {
+    key: 'trust.alwaysForGood',
+    section: 'privacy',
+    label: 'Remember "yes, always" for good, whatever it\'s for',
+    help: 'Whatever you say "yes, always" to - a step on the screen, a service\'s tool that changes things, an agent\'s command - Nova never asks about it again, after restarts too, until you remove it from the list below. Off: screen steps are allowed only for the task, and a service\'s changes and an agent\'s risky commands are asked each time.',
     type: 'toggle',
-    default: false,
+    default: true,
+  },
+  {
+    key: 'trust.stillAsk',
+    section: 'privacy',
+    label: 'Always ask before paying, deleting for good and risky commands',
+    help: "In every mode, and even after a \"yes, always\": Nova checks before spending money, deleting something that can't be brought back, and an agent's risky commands (deleting files, force-pushing, superuser). Off: nothing is kept back. With Voice ID off, any voice Nova hears can ask it for things.",
+    type: 'toggle',
+    default: true,
   },
   {
     key: 'trust.keepActivity',
@@ -1032,6 +1053,8 @@ export function settingProblem(key: string, value: unknown): string | null {
   const field = fieldFor(key);
   if (field) return fieldProblem(field, value);
   if (key === 'agents.enabled') return isTextList(value) ? null : 'should be a list of agent names';
+  // Kept from before Permissions: on is "Ask first", off "Do what I ask" - read only when trust.mode isn't set.
+  if (key === 'trust.askFirst') return typeof value === 'boolean' ? null : 'should be on or off';
   if (Object.hasOwn(COLLECTIONS, key)) {
     if (!isObject(value)) return 'should be an object';
     for (const [name, v] of Object.entries(value)) {

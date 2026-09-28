@@ -1,7 +1,7 @@
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { voiceSystemPrompt } from '@nova/core';
+import { voiceSystemPrompt, type PermissionMode } from '@nova/core';
 import { claudeMcpConfig, type McpServer } from './bridge.ts';
 
 /** How to read an agent's output stream. */
@@ -26,6 +26,8 @@ export interface InvocationOptions {
   model?: string;
   /** The assistant's name, as the agent should know it. */
   assistant: string;
+  /** The user's Permissions, for what the agent answering should do about asking. */
+  permissions?: PermissionMode;
   /** Nova's tools, as an MCP server the agent's CLI can start. */
   tools?: McpServer;
 }
@@ -106,19 +108,19 @@ export const PRESETS: Record<string, AgentPreset> = {
     output: 'claude',
     approvals: true,
     dropEnv: /^ANTHROPIC_/, // bill the signed-in Claude plan, never an API key
-    ask: (prompt, { model, assistant, tools }) => ({
+    ask: (prompt, { model, assistant, permissions, tools }) => ({
       args: [
         '-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
-        '--system-prompt', voiceSystemPrompt(assistant),
+        '--system-prompt', voiceSystemPrompt(assistant, permissions),
         ...claudeAnswerArgs(tools),
         ...flag('--model', model),
       ],
       stdin: prompt,
     }),
-    session: ({ model, assistant, tools }) => ({
+    session: ({ model, assistant, permissions, tools }) => ({
       args: [
         '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
-        '--system-prompt', voiceSystemPrompt(assistant),
+        '--system-prompt', voiceSystemPrompt(assistant, permissions),
         ...claudeAnswerArgs(tools),
         ...flag('--model', model),
       ],
@@ -148,9 +150,9 @@ export const PRESETS: Record<string, AgentPreset> = {
     label: 'Codex',
     bin: 'codex',
     output: 'codex',
-    ask: (prompt, { model, assistant, tools }) => ({
+    ask: (prompt, { model, assistant, permissions, tools }) => ({
       args: ['exec', '--json', '--ephemeral', '--skip-git-repo-check', '--sandbox', 'read-only', '--color', 'never', ...codexTools(tools), ...flag('-m', model)],
-      stdin: `${voiceSystemPrompt(assistant)}\n\n${prompt}`,
+      stdin: `${voiceSystemPrompt(assistant, permissions)}\n\n${prompt}`,
     }),
     // Non-interactive Codex can't hand approvals over; its workspace sandbox keeps writes inside the project.
     task: (prompt, { model, assistant, tools }) => ({
@@ -162,9 +164,9 @@ export const PRESETS: Record<string, AgentPreset> = {
     label: 'OpenCode',
     bin: 'opencode',
     output: 'opencode',
-    ask: (prompt, { model, assistant, tools }) => ({
+    ask: (prompt, { model, assistant, permissions, tools }) => ({
       args: ['run', '--format', 'json', '--agent', 'plan', ...flag('-m', model)],
-      trailing: `${voiceSystemPrompt(assistant)}\n\n${prompt}`,
+      trailing: `${voiceSystemPrompt(assistant, permissions)}\n\n${prompt}`,
       env: opencodeTools(tools),
     }),
     task: (prompt, { model, assistant, tools }) => ({ args: ['run', '--format', 'json', ...flag('-m', model)], trailing: `${prompt}\n\n${taskNote(assistant)}`, env: opencodeTools(tools) }),
@@ -173,7 +175,7 @@ export const PRESETS: Record<string, AgentPreset> = {
     label: 'Gemini',
     bin: 'gemini',
     output: 'text',
-    ask: (prompt, { model, assistant }) => ({ args: [...flag('-m', model)], stdin: `${voiceSystemPrompt(assistant)}\n\n${prompt}` }),
+    ask: (prompt, { model, assistant, permissions }) => ({ args: [...flag('-m', model)], stdin: `${voiceSystemPrompt(assistant, permissions)}\n\n${prompt}` }),
     task: (prompt, { model, assistant }) => ({ args: ['--approval-mode', 'auto_edit', ...flag('-m', model)], stdin: `${prompt}\n\n${taskNote(assistant)}` }),
   },
 };
@@ -199,8 +201,8 @@ export function customPreset(name: string, spec: CustomAgentSpec): AgentPreset {
     label: spec.label ?? name,
     bin: spec.command,
     output: spec.output ?? 'text',
-    ask: (prompt, { model, assistant, tools }) => {
-      const invocation = fill(spec.ask, `${voiceSystemPrompt(assistant)}\n\n${prompt}`, model);
+    ask: (prompt, { model, assistant, permissions, tools }) => {
+      const invocation = fill(spec.ask, `${voiceSystemPrompt(assistant, permissions)}\n\n${prompt}`, model);
       if (tools && spec.mcp) invocation.args = [...spec.mcp.map((a) => a.replaceAll('{mcpConfig}', claudeMcpConfig(tools))), ...invocation.args];
       return invocation;
     },

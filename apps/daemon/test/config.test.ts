@@ -21,6 +21,17 @@ describe('config: the settings file, plus constants from .env', () => {
 
   it("keeps a reply's cards for as long as chosen - or until they are closed", () => {
     expect(loadConfig({ appearance: { cardsClose: '15' } }, {}).ui.cardSeconds).toBe(15);
+    // Permissions: Do what I ask, "yes, always" kept for good, paying and risky commands still asked - until changed.
+    expect(loadConfig({}, {}).permissions).toEqual({ mode: 'auto', stillAsk: true, alwaysForGood: true });
+    expect(loadConfig({ trust: { mode: 'free', stillAsk: false, alwaysForGood: false } }, {}).permissions).toEqual({ mode: 'free', stillAsk: false, alwaysForGood: false });
+    // Set before Permissions existed: "Ask before doing what you asked for" on is Ask first - unless a mode is set.
+    expect(loadConfig({ trust: { askFirst: true } }, {}).permissions.mode).toBe('ask');
+    expect(loadConfig({ trust: { askFirst: false } }, {}).permissions.mode).toBe('auto');
+    expect(loadConfig({ trust: { askFirst: true, mode: 'free' } }, {}).permissions.mode).toBe('free');
+    const bad = loadConfig({ trust: { mode: 'always' } }, {});
+    expect(bad.permissions.mode).toBe('auto');
+    expect(bad.warnings.join(' ')).toMatch(/trust\.mode/);
+    expect(loadConfig({ trust: { askFirst: true } }, {}).warnings).toEqual([]);
     expect(loadConfig({ appearance: { cardsClose: 'never' } }, {}).ui.cardSeconds).toBe(0);
   });
 

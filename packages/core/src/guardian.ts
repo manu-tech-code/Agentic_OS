@@ -10,6 +10,27 @@ import type { RiskTier } from './protocol.ts';
  */
 export type Gate = 'run' | 'announce' | 'confirm' | 'tap';
 
+/**
+ * How often Nova checks with the user first - Settings → Privacy & trust → Permissions, kept in the settings file
+ * until they change it (never by voice: a TV mustn't be able to say "stop asking me"):
+ *   ask  - a yes before every change;
+ *   auto - what the user asked for is done; what they didn't (a brain's own idea, an agent's commands) and what's
+ *          weighty (money, what can't be undone) is asked;
+ *   free - nothing waits for a yes, from anyone: Nova's skills, a brain's steps, agents' commands, services' tools.
+ * With `stillAsk` on, paying, deleting for good and an agent's risky commands are asked in every mode.
+ */
+export type PermissionMode = 'ask' | 'auto' | 'free';
+export interface Permissions {
+  mode: PermissionMode;
+  /** Paying, deleting for good and an agent's risky commands are always asked - in every mode, and over a "yes, always". */
+  stillAsk: boolean;
+  /**
+   * "Yes, always" is kept for good whatever it was said to - a step on the screen, a service's tool that changes things,
+   * an agent's command. Off: those are allowed only for the task, or asked each time.
+   */
+  alwaysForGood: boolean;
+}
+
 export function gateFor(tier: RiskTier): Gate {
   return (['run', 'announce', 'confirm', 'tap'] as const)[tier];
 }

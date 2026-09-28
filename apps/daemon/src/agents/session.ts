@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { withTime, type ReasoningBrain, type Turn } from '@nova/core';
+import { withTime, type PermissionMode, type ReasoningBrain, type Turn } from '@nova/core';
 import type { McpServer } from './bridge.ts';
 import { claudeDelta } from './parsers.ts';
 import type { AgentPreset } from './presets.ts';
@@ -35,7 +35,7 @@ export class AgentSession implements ReasoningBrain {
 
   constructor(
     private readonly agent: SessionAgent,
-    private readonly opts: { cwd: string; assistant: string; tools?: McpServer; env: (extra?: Record<string, string>) => NodeJS.ProcessEnv },
+    private readonly opts: { cwd: string; assistant: string; permissions?: PermissionMode; tools?: McpServer; env: (extra?: Record<string, string>) => NodeJS.ProcessEnv },
   ) {
     this.name = agent.preset.label;
   }
@@ -46,7 +46,7 @@ export class AgentSession implements ReasoningBrain {
   }
 
   private start() {
-    const invocation = this.agent.preset.session!({ model: this.agent.model, assistant: this.opts.assistant, tools: this.opts.tools });
+    const invocation = this.agent.preset.session!({ model: this.agent.model, assistant: this.opts.assistant, permissions: this.opts.permissions, tools: this.opts.tools });
     const child = spawn(this.agent.bin, [...invocation.args, ...this.agent.extraArgs], { cwd: this.opts.cwd, env: this.opts.env(invocation.env), stdio: ['pipe', 'pipe', 'pipe'] });
     this.child = child;
     this.fresh = true;
