@@ -611,7 +611,7 @@ export const FIELDS: SettingField[] = [
     key: 'voiceId.keepRecordings',
     section: 'voice',
     label: 'Keep recordings of my turns for a week',
-    help: 'Each turn Voice ID checks - and its setup phrases and tests - is kept on this Mac for 7 days, with what Voice ID made of it, so its accuracy can be checked and tuned on your own voice. Readable by you alone, never sent anywhere; deleted after 7 days, and all of it at once when you switch this off.',
+    help: "Each turn Voice ID checks - yours, and any other voice it hears (a TV, someone nearby) - its setup phrases and tests are kept on this Mac for 7 days, with what was heard and what Voice ID made of it, so its accuracy can be checked and tuned on your own voice. Readable by you alone, never sent anywhere; deleted after 7 days, and all of it at once when you switch this off.",
     type: 'toggle',
     default: false,
   },

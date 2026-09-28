@@ -85,7 +85,7 @@ export function privacyFlows(input: PrivacyInput): PrivacyFlow[] {
   });
   flows.push({
     id: 'voice-recordings',
-    what: 'Recordings of your turns, with what Voice ID made of each - only when you keep them',
+    what: 'Recordings of the turns Voice ID checks (yours, and other voices it hears), with what was heard and what it made of each - only when you keep them',
     where: `${THIS_MAC} (~/.nova/voice-recordings, readable by you alone)`,
     detail: "For checking and tuning Voice ID on your own voice. Kept 7 days, then deleted; switching this off deletes them all at once. They never leave this Mac.",
     leaves: false,
