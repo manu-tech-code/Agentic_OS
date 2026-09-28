@@ -126,7 +126,7 @@ export function VoiceIdPanel({ snapshot, name, result, onAction }: ActionProps) 
       <div className="tile__head tile__head--wrap">
         <span className={`dot ${v.keyword.overriddenAt ? 'dot--warn' : v.on ? 'dot--on' : ''}`} />
         <strong>Voice ID</strong>
-        <Info label="Voice ID" text={personalize("With Voice ID on, Nova listens to you alone: other voices are ignored, even saying its name, and a TV can't answer its questions. When it can't tell (a very short \"yes\"), it says so - holding the talk shortcut always counts as you. To set it up, read six short phrases where it's quiet; Test my voice then shows whether it knows you. Your voiceprint is made and kept on this Mac, and never leaves it.", name)} />
+        <Info label="Voice ID" text={personalize("With Voice ID on, Nova listens to you alone: other voices are ignored, even saying its name, and a TV can't answer its questions. When it can't tell (a very short \"yes\"), it says so - holding the talk shortcut always counts as you. To set it up, read a few short phrases (about 45 seconds) where it's quiet; Test my voice then shows whether it knows you. Three models listen, and their matches are weighed together. Your voiceprint is made and kept on this Mac, and never leaves it.", name)} />
         <span className="muted">
           {v.enrolling
             ? v.enrolling.phase === 'check'
@@ -146,7 +146,7 @@ export function VoiceIdPanel({ snapshot, name, result, onAction }: ActionProps) 
         </span>
         {!v.installed && (
           <button type="button" className="btn btn--ghost tile__action" disabled={busy} onClick={() => act('install')}>
-            {busy ? 'Installing…' : 'Install · 8 MB'}
+            {busy ? 'Installing…' : `Install${v.size ? ` · ${v.size}` : ''}`}
           </button>
         )}
         {idle && (
@@ -378,6 +378,7 @@ function VoiceTestRow({ result: r, bars }: { result: VoiceTestResult; bars: Sett
           {r.score === null ? 'no match measured' : `match ${percent(r.score)}`} · {r.seconds.toFixed(1)} s{r.heard ? ` · “${r.heard}”` : ''}
         </span>
         {r.why && <span className="muted">{r.why}</span>}
+        {r.models && <span className="muted">each model: {r.models.map((m) => `${m.name} ${percent(m.score)}`).join(' · ')}</span>}
         {bars && r.score !== null && (
           <div className="voice-meter" role="img" aria-label={`Match ${percent(r.score)}: ${percent(bars.accept)} or more is you, under ${percent(bars.reject)} isn't.`}>
             <span className="voice-meter__zone voice-meter__zone--not" style={{ left: 0, width: percent(bars.reject) }} />

@@ -102,6 +102,8 @@ export interface VoiceTestResult {
   verdict: string;
   /** Why Nova couldn't tell, when it couldn't. */
   why?: string;
+  /** Each of Voice ID's models' own match, when more than one heard it. */
+  models?: { name: string; score: number }[];
   at: string;
 }
 
@@ -604,6 +606,14 @@ export const FIELDS: SettingField[] = [
     type: 'toggle',
     default: true,
     when: { key: 'voiceId.enabled', is: [true] },
+  },
+  {
+    key: 'voiceId.keepRecordings',
+    section: 'voice',
+    label: 'Keep recordings of my turns for a week',
+    help: "Each turn Voice ID checks - yours, and any other voice it hears (a TV, someone nearby) - its setup phrases and tests are kept on this Mac for 7 days, with what was heard and what Voice ID made of it, so its accuracy can be checked and tuned on your own voice. Readable by you alone, never sent anywhere; deleted after 7 days, and all of it at once when you switch this off.",
+    type: 'toggle',
+    default: false,
   },
   { key: 'presence.sounds', section: 'presence', label: 'Chime when Nova starts listening', type: 'toggle', default: true },
   { key: 'presence.launchAtLogin', section: 'presence', label: 'Open Nova at login', type: 'toggle', default: true },
@@ -1132,6 +1142,8 @@ export interface SettingsSnapshot {
   voiceId: {
     installed: boolean;
     label: string;
+    /** What installing downloads ("223 MB"). */
+    size?: string;
     enrolled: boolean;
     on: boolean;
     learned: number;

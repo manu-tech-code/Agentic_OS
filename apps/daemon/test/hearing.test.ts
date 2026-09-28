@@ -6,7 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SpeechActivity } from '@nova/core';
 import { helperBinary, helperIsCurrent, withoutPrebuiltBinary } from '../src/hearing/build.ts';
 import { frame, HearingHelper, type HelperEvent } from '../src/hearing/helper.ts';
+import type { WorkerModel } from '../src/hearing/printer.ts';
 import { Hearing } from '../src/hearing/service.ts';
+import type { Prints } from '../src/hearing/voiceid.ts';
 import { SmartTurn } from '../src/hearing/smart-turn.ts';
 import { isInstalled, modelsDir, PARAKEET_MODEL, SMART_TURN_MODEL } from '../src/models/files.ts';
 
@@ -114,16 +116,16 @@ describe('the hearing service, with a stand-in helper', () => {
   });
 
   /** Voice ID's check, with a hand on it: who it says a turn is, and what it was asked. */
-  function voiceCheck(say: 'you' | 'not-you' | 'unsure', opts: { claiming?: boolean; keyword?: string } = {}) {
-    const asked: { print: number[] | null; seconds: number; learn?: boolean }[] = [];
+  function voiceCheck(say: 'you' | 'not-you' | 'unsure', opts: { claiming?: boolean; keyword?: string; worker?: WorkerModel[] } = {}) {
+    const asked: { prints: Prints | null; seconds: number; learn?: boolean; audio?: Int16Array }[] = [];
     const claimed: string[] = [];
     return {
       asked,
       claimed,
       check: {
-        active: () => ({ models: '/models/wespeaker-v2' }),
-        decide: (print: number[] | null, seconds: number, o?: { learn?: boolean }) => (asked.push({ print, seconds, learn: o?.learn }), say),
-        claim: (_p: number[] | null, _s: number, text: string) => (opts.claiming ? (claimed.push(text), true) : false),
+        active: () => ({ helper: '/models/wespeaker-v2', worker: opts.worker ?? [], complete: true }),
+        decide: (prints: Prints | null, seconds: number, o?: { learn?: boolean; audio?: Int16Array }) => (asked.push({ prints, seconds, learn: o?.learn, audio: o?.audio }), say),
+        claim: (_p: Prints | null, _s: number, text: string) => (opts.claiming ? (claimed.push(text), true) : false),
         unlock: (text: string) => (opts.keyword && text.startsWith(opts.keyword) ? text.slice(opts.keyword.length).trim() : null),
       },
     };
@@ -155,7 +157,8 @@ describe('the hearing service, with a stand-in helper', () => {
     answer(helper, 'manuel open slack');
     await vi.advanceTimersByTimeAsync(0);
     expect(heard).toEqual([['manuel open slack', false, 'not-you']]);
-    expect(voice.asked[0]).toMatchObject({ print: [1, 0, 0] });
+    expect(voice.asked[0]).toMatchObject({ prints: { 'wespeaker-v2': [1, 0, 0] } });
+    expect(voice.asked[0]!.audio!.length / 16_000).toBeGreaterThan(1.2); // the turn's audio, for the recordings (when kept)
 
     hearing.hold(); // the shortcut: whoever holds it is at this Mac
     talk(900);
@@ -164,6 +167,28 @@ describe('the hearing service, with a stand-in helper', () => {
     answer(helper, 'open slack');
     await vi.advanceTimersByTimeAsync(0);
     expect(heard.at(-1)).toEqual(['open slack', true, undefined]);
+    hearing.close();
+  });
+
+  it("weighs the larger models' voiceprints with the helper's - and goes on with the helper's alone when theirs don't come", async () => {
+    const { hearing, start, quiet, talk, answer } = setup();
+    const worker: WorkerModel[] = [{ ear: 'wespeaker-resnet293', kind: 'wespeaker', file: '/models/resnet293.onnx' }];
+    const voice = voiceCheck('you', { worker });
+    hearing.voice = voice.check;
+    const helper = start();
+    printsWith(hearing, () => [1, 0]);
+    // The worker, standing in: it answers the first turn, then stops.
+    let answering = true;
+    Object.assign(hearing as any, { printer: { alive: true, print: async () => (answering ? { 'wespeaker-resnet293': [0, 1] } : null), close() {} }, printerFor: JSON.stringify(worker) });
+    for (const words of ['manuel open slack', 'and mail too']) {
+      talk(1200);
+      quiet(1000);
+      await vi.advanceTimersByTimeAsync(3000);
+      answer(helper, words);
+      await vi.advanceTimersByTimeAsync(0);
+      answering = false;
+    }
+    expect(voice.asked.map((a) => a.prints)).toEqual([{ 'wespeaker-v2': [1, 0], 'wespeaker-resnet293': [0, 1] }, { 'wespeaker-v2': [1, 0] }]);
     hearing.close();
   });
 

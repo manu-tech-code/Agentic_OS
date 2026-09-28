@@ -208,7 +208,7 @@ export function loadConfig(settings: Settings, env: Env) {
     },
     screen: { context: values['screen.context'] as boolean, images: values['screen.images'] as boolean },
     /** Voice ID (Settings → Voice): only the user's voice, and whether it keeps learning it. */
-    voiceId: { enabled: values['voiceId.enabled'] as boolean, learn: values['voiceId.learn'] as boolean },
+    voiceId: { enabled: values['voiceId.enabled'] as boolean, learn: values['voiceId.learn'] as boolean, keepRecordings: values['voiceId.keepRecordings'] as boolean },
     /** Whether Nova asks before doing what the user told it to (Settings → Privacy & trust). */
     askFirst: values['trust.askFirst'] as boolean,
     /** Nova's hands (Settings → Hands): using the computer, and saved window layouts. */

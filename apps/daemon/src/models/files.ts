@@ -20,13 +20,15 @@ interface ModelSpec {
   /** Pinned, so a changed upload can't slip in. */
   revision: string;
   license: string;
+  /** Where the files come from when it isn't Hugging Face: a GitHub release's downloads (`revision` is its tag, and the checksums pin each file). */
+  source?: 'github-release';
   files: Record<string, FileCheck>;
 }
 
 /**
  * Models Nova downloads: Reflex's embedding model (a lookup table of word meanings, not a
- * language model), Kokoro (the voice), Parakeet (hearing, on the Neural Engine) and Smart Turn
- * (hearing when you've finished). Each is pinned to a revision and checked file by file.
+ * language model), Kokoro (the voice), Parakeet (hearing, on the Neural Engine), Smart Turn
+ * (hearing when you've finished) and Voice ID's three. Each is pinned to a revision and checked file by file.
  */
 export const MODELS: Record<string, ModelSpec> = {
   'potion-base-8M': {
@@ -107,6 +109,28 @@ export const MODELS: Record<string, ModelSpec> = {
       'wespeaker_v2.mlmodelc/weights/weight.bin': { size: 7_243_904, sha256: '34004f6798d35cad7071e2fdc67e63faaa782f53697e1cb49bcb452cf81ae151' },
     },
   },
+  // Voice ID's two larger models, in ONNX Runtime (voice-worker.ts): WeSpeaker's ResNet293 (trained on VoxCeleb) and
+  // NVIDIA's TitaNet-Large (VoxCeleb, phone calls, audiobooks), as sherpa-onnx exported them. The release tag is spelled so.
+  'wespeaker-resnet293': {
+    label: 'WeSpeaker ResNet293 · 114 MB',
+    repo: 'k2-fsa/sherpa-onnx',
+    revision: 'speaker-recongition-models',
+    source: 'github-release',
+    license: 'CC-BY-4.0',
+    files: {
+      'wespeaker_en_voxceleb_resnet293_LM.onnx': { size: 114_336_527, sha256: 'f65dbc820e534eef64ae12d1e289e20244d60e60f7f00d7b092092b1c458be2e' },
+    },
+  },
+  'titanet-large': {
+    label: 'NVIDIA TitaNet-Large · 101 MB',
+    repo: 'k2-fsa/sherpa-onnx',
+    revision: 'speaker-recongition-models',
+    source: 'github-release',
+    license: 'CC-BY-4.0',
+    files: {
+      'nemo_en_titanet_large.onnx': { size: 101_405_493, sha256: 'd51abcf31717ef28162f26acb9d44dd4127c3d44c9b8624f699f3425daca8e77' },
+    },
+  },
 };
 /** Older name, from when only Reflex downloaded a model. */
 export const REFLEX_MODELS = MODELS;
@@ -116,6 +140,8 @@ export const KOKORO_MODEL = 'kokoro-82M';
 export const PARAKEET_MODEL = 'parakeet-tdt-0.6b-v2';
 export const SMART_TURN_MODEL = 'smart-turn-v3.2';
 export const VOICE_ID_MODEL = 'wespeaker-v2';
+/** Every model Voice ID hears with: the hearing helper's, then the two in ONNX Runtime. */
+export const VOICE_ID_MODELS = [VOICE_ID_MODEL, 'wespeaker-resnet293', 'titanet-large'] as const;
 
 const expand = (p: string) => (p === '~' ? homedir() : p.startsWith('~/') ? join(homedir(), p.slice(2)) : p);
 
@@ -204,7 +230,8 @@ export async function downloadModel(name: string, opts: { dir?: string; onProgre
       idleTimer = setTimeout(stalled, IDLE_TIMEOUT_MS);
     };
     try {
-      const res = await fetch(`https://huggingface.co/${spec.repo}/resolve/${spec.revision}/${file}`, { signal: controller.signal });
+      const url = spec.source === 'github-release' ? `https://github.com/${spec.repo}/releases/download/${spec.revision}/${file}` : `https://huggingface.co/${spec.repo}/resolve/${spec.revision}/${file}`;
+      const res = await fetch(url, { signal: controller.signal });
       if (!res.ok || !res.body) throw new Error(`Couldn't download ${file} (HTTP ${res.status}).`);
       // Straight to disk, checking (and capping at the expected size) as it goes: big models never sit in memory.
       const part = `${path}.part`;

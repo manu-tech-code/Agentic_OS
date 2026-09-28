@@ -83,6 +83,16 @@ export function privacyFlows(input: PrivacyInput): PrivacyFlow[] {
     on: Boolean(input.voiceprint),
     section: 'voice',
   });
+  flows.push({
+    id: 'voice-recordings',
+    what: 'Recordings of the turns Voice ID checks (yours, and other voices it hears), with what was heard and what it made of each - only when you keep them',
+    where: `${THIS_MAC} (~/.nova/voice-recordings, readable by you alone)`,
+    detail: "For checking and tuning Voice ID on your own voice. Kept 7 days, then deleted; switching this off deletes them all at once. They never leave this Mac.",
+    leaves: false,
+    on: config.voiceId.keepRecordings,
+    toggle: toggle('voiceId.keepRecordings'),
+    section: 'voice',
+  });
 
   // System 1: what each thing said means.
   // As the engine decides it: Jev only when chosen and its key is set; a language model only on the user's own servers.
