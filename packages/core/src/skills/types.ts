@@ -1,5 +1,5 @@
 import type { FileKind, SystemSetting, WindowPosition } from '../hands.ts';
-import type { Card, RiskTier, UndoStep } from '../protocol.ts';
+import type { Card, PrefKey, RiskTier, UndoStep } from '../protocol.ts';
 import type { Schedule } from '../when.ts';
 
 /** OS capabilities a shell/daemon provides. Keeps core platform-agnostic. */
@@ -59,6 +59,8 @@ export interface SkillContext {
   halt?: () => number;
   /** Nova's hands on the Mac: settings, media, windows, files, the clipboard, Shortcuts, and using the computer. */
   hands?: HandsService;
+  /** Nova's own looks that a skill may change (the text size) - none of the rest of Settings. */
+  prefs?: PrefsService;
   /** A tool call's own arguments (computer_click's element, x and y), for skills that take more than a request. */
   args?: Record<string, unknown>;
   /** Who is calling it as a tool - a brain or agent by name ("Claude"); none when the user asked by voice. */
@@ -226,6 +228,12 @@ export interface ActionService {
   lastUndoable(by?: string): ActionRecord | null;
   /** Take it back; says what was put back, or why it couldn't be. */
   undo(id: string): Promise<{ ok: boolean; message: string }>;
+}
+
+/** The few preferences a skill may change by voice, each checked like any setting: never anything but these keys. */
+export interface PrefsService {
+  get(key: PrefKey): number;
+  set(key: PrefKey, value: number): Promise<void>;
 }
 
 export interface TrustService {

@@ -1,5 +1,5 @@
 import { basename, dirname } from 'node:path';
-import type { ActionRecord, HandsService, Platform, Reminder, Routine, Schedule, UndoStep } from '@nova/core';
+import type { ActionRecord, HandsService, Platform, PrefsService, Reminder, Routine, Schedule, UndoStep } from '@nova/core';
 import type { UndoResult } from './actions.ts';
 import type { Snapshots } from './snapshots.ts';
 
@@ -16,6 +16,8 @@ export interface UndoDeps {
   snapshots: Snapshots;
   /** Nova's hands, for settings, music, windows, files and the clipboard put back as they were. */
   hands?: HandsService | null;
+  /** Nova's own looks (the text size), put back as they were. */
+  prefs?: PrefsService | null;
   now?: () => number;
 }
 
@@ -70,6 +72,11 @@ export class Undoer {
         const hands = this.hands();
         await hands.system.set(step.setting, { level: step.level, on: step.on, muted: step.muted });
         return { ok: true, message: `Okay, the ${SETTING_SAID[step.setting] ?? step.setting} is back as it was.` };
+      }
+      case 'pref-set': {
+        if (!this.deps.prefs) throw new Error("Nova's settings aren't reachable here, so that can't be put back.");
+        await this.deps.prefs.set(step.key, step.value);
+        return { ok: true, message: step.value === 100 ? 'Okay, the text is back to its normal size.' : `Okay, the text is back to ${step.value} percent.` };
       }
       case 'media':
         await this.hands().media.command(step.action);

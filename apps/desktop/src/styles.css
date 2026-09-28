@@ -162,10 +162,14 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .orb-preview__stage { position: relative; width: 168px; height: 168px; margin: 34px 0 30px; }
 .orb-preview__stage .particle-orb { inset: -30%; }
 
-.captions { min-height: 110px; max-width: min(640px, 86vw); text-align: center; display: flex; flex-direction: column; align-items: center; gap: 12px; }
-.captions__heard { font-size: 17px; color: var(--text-dim); letter-spacing: 0.01em; }
+/* What was said and the reply, scaled by the text size (Settings → Appearance, ⌘+ / ⌘−, or by voice). */
+.captions { position: relative; min-height: 110px; max-width: min(calc(640px * max(1, var(--text-scale, 1))), 90vw); text-align: center; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.captions__heard { font-size: calc(17px * var(--text-scale, 1)); color: var(--text-dim); letter-spacing: 0.01em; }
 .captions__heard .is-interim { color: var(--text-faint); }
-.captions__reply { margin-top: 10px; font-size: 24px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.3; }
+.captions__reply { margin-top: 10px; font-size: calc(24px * var(--text-scale, 1)); font-weight: 600; letter-spacing: -0.01em; line-height: 1.3; }
+.text-size-badge { position: absolute; top: -32px; left: 50%; transform: translateX(-50%); padding: 3px 10px; border-radius: 999px; font: 600 12px var(--mono);
+  color: var(--text); background: var(--glass); border: 1px solid var(--glass-border); pointer-events: none; opacity: 0; transition: opacity 0.25s; }
+.text-size-badge.is-on { opacity: 1; }
 .banner { font-size: 13px; padding: 8px 14px; border-radius: 12px; background: rgba(251, 191, 36, 0.12); color: #fcd34d; border: 1px solid rgba(251,191,36,0.25); }
 .banner--error { background: rgba(248, 113, 113, 0.12); color: #fca5a5; border-color: rgba(248,113,113,0.25); }
 .banner--quiet { background: rgba(148, 163, 184, 0.1); color: var(--text-dim, #cbd5e1); border-color: rgba(148, 163, 184, 0.2); }

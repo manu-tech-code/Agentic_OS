@@ -646,6 +646,18 @@ export const FIELDS: SettingField[] = [
     when: { key: 'appearance.orbStyle', is: ['particles'] },
   },
   {
+    key: 'appearance.textSize',
+    section: 'appearance',
+    label: 'Text size',
+    help: 'What you said and Nova\'s replies, in the window and the floating orb. Or press ⌘+ and ⌘− in the window (⌘0 for normal), or say "make the text bigger".',
+    type: 'slider',
+    default: 100,
+    unit: '%',
+    min: 75,
+    max: 200,
+    step: 5,
+  },
+  {
     key: 'appearance.orbSize',
     section: 'appearance',
     label: 'Orb size in the window',

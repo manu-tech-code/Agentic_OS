@@ -26,6 +26,7 @@ import type {
   News,
   NewsService,
   Platform,
+  PrefsService,
   ProjectService,
   ReminderService,
   Routine,
@@ -109,6 +110,8 @@ export interface NovaOptions {
   afterTask?: (task: TaskRecord) => Promise<UndoStep | null>;
   /** Nova's hands on the Mac: settings, media, windows, files, the clipboard, Shortcuts, using the computer. */
   hands?: HandsService | null;
+  /** Nova's own looks a skill may change by voice (the text size). */
+  prefs?: PrefsService | null;
   /** Whether brains may use the computer (look, click, type); the user's own "click send" works either way. */
   computerUse?: boolean;
   /** The talk shortcut as the user presses it ("⌥Space"), for what Nova says about it. */
@@ -125,7 +128,7 @@ export interface NovaOptions {
 /** What Settings can change while Nova runs. */
 export type NovaSettings = Omit<NovaOptions, 'platform' | 'emit' | 'clock'>;
 
-const DEFAULT_UI: UiPrefs = { autoListen: true, rate: 1.05, lang: 'en-US', orb: { style: 'particles', colors: 'nova', motion: 'lively', size: 100, floatingSize: 100 } };
+const DEFAULT_UI: UiPrefs = { autoListen: true, rate: 1.05, lang: 'en-US', orb: { style: 'particles', colors: 'nova', motion: 'lively', size: 100, floatingSize: 100 }, textSize: 100 };
 
 /** What System 1 resolved for the slots a skill may need. */
 interface Resolved {
@@ -943,6 +946,7 @@ export class NovaBrain implements ToolHost {
       utterance,
       heard,
       hands: this.opts.hands ?? undefined,
+      prefs: this.opts.prefs ?? undefined,
       lastReply: this.history.at(-1)?.nova,
       args: tool?.args,
       caller: tool?.caller,

@@ -8,7 +8,7 @@ const apps = ['none', 'Safari', 'Slack', 'Spotify', 'Figma', 'Visual Studio Code
 
 export const demoScript: Array<[number, ServerEvent]> = [
   [0, { type: 'hello', name: 'Nova', engine: 'jev (jev-latest) → reflex (potion-base-8M)', brain: 'claude', apps: 142, wakeWords: ['hey nova', 'nova'], requireWakeWord: true, agents: [{ name: 'claude', label: 'Claude' }, { name: 'codex', label: 'Codex' }], projects: ['Agentic_OS'], hearing: { engine: 'browser', state: 'ready' },
-      ui: { autoListen: false, rate: 1.05, lang: 'en-US', orb: { style: 'particles', colors: 'nova', motion: 'lively', size: 100, floatingSize: 100 } } }],
+      ui: { autoListen: false, rate: 1.05, lang: 'en-US', orb: { style: 'particles', colors: 'nova', motion: 'lively', size: 100, floatingSize: 100 }, textSize: 100 } }],
   [1200, { type: 'phase', phase: 'listening' }],
   [2400, { type: 'phase', phase: 'thinking' }],
   [2640, {

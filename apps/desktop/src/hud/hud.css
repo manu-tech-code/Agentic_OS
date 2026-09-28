@@ -23,7 +23,8 @@ html.is-hud #root {
 .hud--bottom-left { left: 0; bottom: 0; }
 .hud--top-left { left: 0; top: 0; }
 
-.hud--card { width: calc(312px + var(--hud-orb)); padding: 12px 18px 13px 12px; }
+/* The card widens with the text size (half as fast), so bigger words still fit a few to a line. */
+.hud--card { width: calc(312px * (0.5 + 0.5 * var(--text-scale, 1)) + var(--hud-orb)); padding: 12px 18px 13px 12px; }
 .hud--orb,
 .hud--hidden { width: calc(var(--hud-orb) + 16px); height: calc(var(--hud-orb) + 16px); padding: 8px; }
 
@@ -57,17 +58,17 @@ html.is-hud #root {
 
 .hud__body { flex: 1; min-width: 0; display: grid; gap: 5px; padding-top: 4px; }
 .hud__body p { margin: 0; overflow-wrap: anywhere; }
-.hud__heard { font-size: 13px; line-height: 1.35; color: rgba(255, 255, 255, 0.6); }
+.hud__heard { font-size: calc(13px * var(--text-scale, 1)); line-height: 1.35; color: rgba(255, 255, 255, 0.6); }
 .hud__heard.is-live { color: rgba(255, 255, 255, 0.86); }
-.hud__status { font-size: 13px; line-height: 1.35; color: rgba(255, 255, 255, 0.7); }
-.hud__computer { font-size: 12.5px; line-height: 1.35; font-weight: 600; color: #7dd3fc; }
+.hud__status { font-size: calc(13px * var(--text-scale, 1)); line-height: 1.35; color: rgba(255, 255, 255, 0.7); }
+.hud__computer { font-size: calc(12.5px * var(--text-scale, 1)); line-height: 1.35; font-weight: 600; color: #7dd3fc; }
 .hud__reply {
-  font-size: 14.5px;
+  font-size: calc(14.5px * var(--text-scale, 1));
   line-height: 1.42;
   display: -webkit-box;
   -webkit-line-clamp: 7;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-.hud__ask { font-size: 14px; font-weight: 600; line-height: 1.35; }
+.hud__ask { font-size: calc(14px * var(--text-scale, 1)); font-weight: 600; line-height: 1.35; }
 .hud__ask span { font-weight: 400; color: rgba(255, 255, 255, 0.6); margin-left: 6px; }

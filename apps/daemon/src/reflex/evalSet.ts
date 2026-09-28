@@ -729,6 +729,15 @@ export const SET_D: EvalCase[] = [
   c('other', 'just click the link i sent you in the group chat'),
   c('other', 'i dragged all my photos into the new folder last night'),
   c('chat', 'why does bluetooth drain my battery so fast'),
+  // Nova's text size (development cases; the phrasings Reflex learns from are in phrases.ts and grammar.ts).
+  c('text_size', 'these captions are really hard to read, blow them up'),
+  c('text_size', 'can the writing on your screen be a touch larger'),
+  c('text_size', 'shrink your text back down a little'),
+  c('text_size', 'go to one hundred and twenty percent on the text'),
+  c('text_size', 'put the font size back where it started'),
+  c('text_size', 'how large is the font set at the moment'),
+  c('text_size', 'i need the letters to be much bigger'),
+  c('text_size', 'your words are huge, bring them down'),
 ];
 
 /**

@@ -13,7 +13,7 @@ import { Timeline } from './components/Timeline';
 import { formatShortcut } from '@nova/core/shortcut';
 import type { SettingsSection } from '@nova/core/settings';
 import { appLevel, inApp, onShellOpen, openOnLoad, tellApp, useAppState } from './lib/shell';
-import { sizeRange, useResizable } from './lib/resize';
+import { sizeRange, useLiveSetting, useResizable, zoomKeySize } from './lib/resize';
 import { useNova, type SayEvent } from './lib/useNova';
 import {
   earcon,
@@ -45,8 +45,9 @@ function Clock() {
   return <span>{now.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}</span>;
 }
 
-/** How far the Orb in the window can be resized: its setting's range. */
+/** How far the Orb in the window can be resized, and the text: their settings' ranges. */
 const ORB_RANGE = sizeRange('appearance.orbSize');
+const TEXT_RANGE = sizeRange('appearance.textSize');
 
 export default function App() {
   const levelRef = useRef(0);
@@ -109,6 +110,29 @@ export default function App() {
     measure: () => orbSize.ref.current?.querySelector('.orb')?.getBoundingClientRect().width ?? 220,
     save: (size) => send({ type: 'settings-set', values: { 'appearance.orbSize': size } }),
   });
+  // The text size: ⌘+, ⌘− and ⌘0 here, as in a browser (Settings → Appearance and "make the text bigger" too).
+  const [textSize, setTextSize] = useLiveSetting(state.ui.textSize ?? 100, (size) => send({ type: 'settings-set', values: { 'appearance.textSize': size } }));
+  const textSizeNow = useRef(textSize);
+  textSizeNow.current = textSize;
+  const [textShown, setTextShown] = useState(0);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+      const next = zoomKeySize(textSizeNow.current, e.key, TEXT_RANGE);
+      if (next === null) return;
+      e.preventDefault(); // not the page's own zoom
+      textSizeNow.current = next; // presses faster than a render still add up
+      setTextSize(next);
+      setTextShown(Date.now());
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [setTextSize]);
+  useEffect(() => {
+    if (!textShown) return;
+    const t = setTimeout(() => setTextShown(0), 1400);
+    return () => clearTimeout(t);
+  }, [textShown]);
   const app = useAppState();
   const handsOff = inApp || state.appVoice;
   handsOffRef.current = handsOff;
@@ -544,7 +568,10 @@ export default function App() {
             {Math.round(orbSize.size)}%
           </span>
         </div>
-        <div className="captions">
+        <div className="captions" style={{ ['--text-scale' as string]: textSize / 100 }}>
+          <div className={`text-size-badge ${textShown ? 'is-on' : ''}`} aria-live="polite">
+            {textShown ? `Text ${textSize}%` : ''}
+          </div>
           <AnimatePresence mode="wait">
             {!listening ? (
               <motion.button key="wake" className="btn btn--glass wake-btn" onClick={micOn} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>

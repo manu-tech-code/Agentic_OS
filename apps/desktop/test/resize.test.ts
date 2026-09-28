@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clampSize, dragFromCentre, dragFromCorner, keySize, sizeRange, snapSize, wheelSize } from '../src/lib/resize';
+import { clampSize, dragFromCentre, dragFromCorner, keySize, sizeRange, snapSize, wheelSize, zoomKeySize } from '../src/lib/resize';
 
 describe('resizing an orb by hand', () => {
   const window = sizeRange('appearance.orbSize');
@@ -49,5 +49,21 @@ describe('resizing an orb by hand', () => {
     expect(keySize(100, 'Home', window)).toBe(50);
     expect(keySize(100, 'End', floating)).toBe(300);
     expect(keySize(100, 'a', window)).toBeNull();
+  });
+});
+
+describe('the text size, with ⌘+, ⌘− and ⌘0', () => {
+  const text = sizeRange('appearance.textSize');
+
+  it('steps like a browser zooms, within the setting\'s range - with or without shift', () => {
+    expect(text).toEqual({ min: 75, max: 200, step: 5 });
+    expect(zoomKeySize(100, '=', text)).toBe(110);
+    expect(zoomKeySize(100, '+', text)).toBe(110); // ⌘⇧= on most keyboards
+    expect(zoomKeySize(100, '-', text)).toBe(90);
+    expect(zoomKeySize(100, '_', text)).toBe(90);
+    expect(zoomKeySize(195, '=', text)).toBe(200);
+    expect(zoomKeySize(80, '-', text)).toBe(75);
+    expect(zoomKeySize(150, '0', text)).toBe(100);
+    expect(zoomKeySize(100, 'k', text)).toBeNull();
   });
 });

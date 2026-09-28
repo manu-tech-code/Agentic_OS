@@ -10,10 +10,13 @@ import {
   LlmReasoningBrain,
   NovaBrain,
   setPath,
+  settingProblem,
   type ActivityItem,
   type ClientEvent,
   type NovaSettings,
   type Phase,
+  type PrefKey,
+  type PrefsService,
   type ReasoningBrain,
   type ServerEvent,
   type SettingsSnapshot,
@@ -373,6 +376,18 @@ initiative = new Initiative({
 });
 let snapshotsReady = false;
 
+// Nova's own looks a skill may change by voice ("make the text bigger"): these keys alone, each checked as Settings would.
+const PREFS: Record<PrefKey, () => number> = { 'appearance.textSize': () => runtime.config.ui.textSize };
+const prefs: PrefsService = {
+  get: (key) => PREFS[key](),
+  async set(key, value) {
+    if (!Object.hasOwn(PREFS, key)) throw new Error(`${key} isn't one a skill may change.`);
+    const problem = settingProblem(key, value);
+    if (problem) throw new Error(`The text size ${problem}.`);
+    await saveSettings({ [key]: value });
+  },
+};
+
 const nova = new NovaBrain({
   ...runtime.options,
   ...initiative.options,
@@ -381,6 +396,7 @@ const nova = new NovaBrain({
   memory,
   screen: eyes,
   hands,
+  prefs,
   notes,
   onTurn: (turn) => memory.journal.append(turn),
   platform,
@@ -394,6 +410,7 @@ trust.wire({
   platform,
   project: initiative.state,
   hands,
+  prefs,
   saveRoutine: (name, routine) => saveSettings({ [`routines.${name}`]: routine ? { ...(routine.phrase ? { phrase: routine.phrase } : {}), ...(routine.schedule ? { schedule: routine.schedule } : {}), steps: routine.steps } : null }),
 });
 await nova.init();

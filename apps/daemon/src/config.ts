@@ -166,6 +166,7 @@ export function loadConfig(settings: Settings, env: Env) {
       size: num('appearance.orbSize'),
       floatingSize: num('appearance.floatingOrbSize'),
     },
+    textSize: num('appearance.textSize'),
   };
   return {
     name,
