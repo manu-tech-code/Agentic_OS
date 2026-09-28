@@ -244,7 +244,7 @@ export async function bundleModel(name: string, from: string, dir: string) {
 }
 
 /** Where a model's file downloads from: its pinned revision on Hugging Face, or on GitHub. */
-export function sourceUrl(spec: Pick<ModelSpec, 'repo' | 'revision' | 'source'>, path: string) {
+function sourceUrl(spec: Pick<ModelSpec, 'repo' | 'revision' | 'source'>, path: string) {
   if (spec.source === 'github-release') return `https://github.com/${spec.repo}/releases/download/${spec.revision}/${path}`;
   if (spec.source === 'github') return `https://raw.githubusercontent.com/${spec.repo}/${spec.revision}/${path}`;
   return `https://huggingface.co/${spec.repo}/resolve/${spec.revision}/${path}`;
