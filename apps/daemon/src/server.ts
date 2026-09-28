@@ -401,27 +401,8 @@ await nova.init();
 /** Names worth recognising when the Mac hears you: the assistant, its wake words, apps, agents and projects. */
 const vocabulary = () => [runtime.config.name, ...runtime.config.wakeWords, ...nova.apps, ...(runtime.host?.agents.flatMap((a) => [a.label, a.name]) ?? []), ...(runtime.host?.projects ?? [])];
 
-// Hearing on this Mac: the window streams its microphone, and finished turns come back to Nova.
-let micOwner: WebSocket | null = null;
-/** The walkthrough was offered this run. */
-let welcomed = false;
-hearing = new Hearing({
-  status(status) {
-    nova.reconfigure({ hearing: status });
-    broadcast({ type: 'hearing', status });
-    broadcastSnapshot();
-  },
-  transcript: (text, final) => broadcast({ type: 'transcript', text, final }),
-  utterance: (text, explicit, speaker) => void nova.handle(text, explicit ? 'shortcut' : 'voice', speaker).catch((e) => console.warn(`  [nova] ${why(e)}`)),
-  bargeIn() {
-    broadcast({ type: 'barge-in' }); // windows stop the audio
-    speaking = null; // and the rest of the reply isn't synthesized
-    nova.interrupt();
-  },
-});
-hearing.configure(runtime.config.hearing, vocabulary(), runtime.config.wakeWords);
-
-// Voice ID: the user's voiceprint (on this Mac only), and hearing asking whose each turn is.
+// Voice ID: the user's voiceprint (on this Mac only), read before hearing starts so its first turn is checked too.
+// Hearing starts without a wait between it and Settings' snapshots below: its status can come back at any await.
 const voiceprints = new VoiceprintStore(join(dirname(settingsFile()), 'voiceprint.json'), VOICE_ID_MODEL);
 await voiceprints.load();
 const voiceId = new VoiceId({
@@ -433,10 +414,31 @@ const voiceId = new VoiceId({
   learning: () => runtime.config.voiceId.learn,
   name: () => runtime.config.name,
   turnOn: () => saveSettings({ 'voiceId.enabled': true }),
-  changed: () => broadcastSnapshot(),
+  changed: () => snapshotsReady && broadcastSnapshot(),
 });
 await voiceId.refresh();
+
+// Hearing on this Mac: the window streams its microphone, and finished turns come back to Nova.
+let micOwner: WebSocket | null = null;
+/** The walkthrough was offered this run. */
+let welcomed = false;
+hearing = new Hearing({
+  status(status) {
+    nova.reconfigure({ hearing: status });
+    broadcast({ type: 'hearing', status });
+    // Not while Nova is still starting: a window gets the whole of Settings when it connects.
+    if (snapshotsReady) broadcastSnapshot();
+  },
+  transcript: (text, final) => broadcast({ type: 'transcript', text, final }),
+  utterance: (text, explicit, speaker) => void nova.handle(text, explicit ? 'shortcut' : 'voice', speaker).catch((e) => console.warn(`  [nova] ${why(e)}`)),
+  bargeIn() {
+    broadcast({ type: 'barge-in' }); // windows stop the audio
+    speaking = null; // and the rest of the reply isn't synthesized
+    nova.interrupt();
+  },
+});
 hearing.voice = voiceId;
+hearing.configure(runtime.config.hearing, vocabulary(), runtime.config.wakeWords);
 
 const voiceStatus = () => ({ model: KOKORO_MODEL, label: MODELS[KOKORO_MODEL]!.label, installed: runtime.voiceInstalled, bundled: runtime.voiceBundled });
 const hearingStatus = () => ({
