@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ClientEvent, OrbPrefs, Phase } from '@nova/core/protocol';
-import { isEntryName, personalize, type SettingsSnapshot } from '@nova/core/settings';
+import { isEntryName, personalize, type SettingsSnapshot, type VoiceTestResult } from '@nova/core/settings';
 import { ParticleOrb } from '../ParticleOrb';
 import { SecretStatus, Switch, TextInput, type Save } from './Controls';
 
@@ -108,47 +108,51 @@ function ModelRow({ name, label, installed, size, busy, onInstall }: { name: str
 }
 
 /**
- * Voice ID: its model, learning the user's voice (the phrase to say now, and how far along), and forgetting it.
- * The voiceprint itself never reaches a window - only whether there is one.
+ * Voice ID: its model, learning the user's voice (the phrase to say now, and how far along), testing it (what
+ * each thing said sounded like), and forgetting it. The voiceprint itself never reaches a window - only whether
+ * there is one, and how closely each test matched it.
  */
 export function VoiceIdPanel({ snapshot, name, result, onAction }: ActionProps) {
   const v = snapshot.voiceId;
   const browser = snapshot.hearing.status.engine === 'browser';
-  const [busy, setBusy] = useBusy([v.installed, v.enrolled, v.enrolling?.step], result);
-  const act = (action: 'install' | 'enroll' | 'cancel' | 'forget') => (setBusy(true), onAction({ type: 'voiceid', action }));
+  const [busy, setBusy] = useBusy([v.installed, v.enrolled, v.enrolling?.step, Boolean(v.testing)], result);
+  const act = (action: 'install' | 'enroll' | 'test' | 'cancel' | 'forget') => (setBusy(true), onAction({ type: 'voiceid', action }));
+  const idle = v.installed && !v.enrolling && !v.testing;
   return (
     <div className="tile">
-      <div className="tile__head">
+      <div className="tile__head tile__head--wrap">
         <span className={`dot ${v.on ? 'dot--on' : ''}`} />
         <strong>Voice ID</strong>
         <span className="muted">
           {v.enrolling
             ? `learning your voice · ${v.enrolling.step} of ${v.enrolling.of}`
-            : v.on
-              ? `on${v.learned ? ` · learned from ${v.learned} of your turns` : ''}`
-              : v.enrolled
-                ? 'your voice is learned · switched off'
-                : v.installed
-                  ? 'not set up'
-                  : 'not installed'}
+            : v.testing
+              ? 'testing your voice'
+              : v.on
+                ? `on${v.learned ? ` · learned from ${v.learned} of your turns` : ''}`
+                : v.enrolled
+                  ? 'your voice is learned · switched off'
+                  : v.installed
+                    ? 'not set up'
+                    : 'not installed'}
         </span>
         {!v.installed && (
           <button type="button" className="btn btn--ghost tile__action" disabled={busy} onClick={() => act('install')}>
             {busy ? 'Installing…' : 'Install · 8 MB'}
           </button>
         )}
-        {v.installed && !v.enrolling && (
+        {idle && (
           <button type="button" className="btn btn--ghost tile__action" disabled={busy || browser} onClick={() => act('enroll')}>
             {v.enrolled ? 'Learn it again' : 'Set up'}
           </button>
         )}
-        {v.enrolling && (
+        {(v.enrolling || v.testing) && (
           <button type="button" className="link tile__action" onClick={() => act('cancel')}>
-            Stop
+            {v.testing ? 'Done' : 'Stop'}
           </button>
         )}
-        {v.enrolled && !v.enrolling && (
-          <button type="button" className="link tile__action" onClick={() => act('forget')}>
+        {idle && v.enrolled && (
+          <button type="button" className="link" onClick={() => act('forget')}>
             Forget my voice
           </button>
         )}
@@ -158,14 +162,75 @@ export function VoiceIdPanel({ snapshot, name, result, onAction }: ActionProps) 
           Say: <strong>“{v.enrolling.say}”</strong>
         </div>
       )}
+      {idle && v.enrolled && (
+        <div className="voice-test__offer">
+          <button type="button" className="btn btn--primary" disabled={busy || browser} onClick={() => act('test')}>
+            Test my voice
+          </button>
+          <span className="muted">{personalize('Say anything, and see whether Nova knows it was you.', name)}</span>
+        </div>
+      )}
+      {v.testing && <VoiceTest testing={v.testing} bars={v.bars} on={v.on} name={name} />}
       {v.message && <span className="muted">{v.message}</span>}
       {browser && <span className="muted">Voice ID needs Nova's own hearing - Nova.app, or Hearing on Apple or Parakeet: the browser's speech recognition never passes the voice on.</span>}
       <span className="muted">
         {personalize(
-          "With Voice ID on, Nova listens to you alone: other voices are ignored, even saying its name, and a TV can't answer its questions. When it can't tell (a very short \"yes\"), it says so - holding the talk shortcut always counts as you. To set it up, read six short phrases where it's quiet. Your voiceprint is made and kept on this Mac, and never leaves it.",
+          "With Voice ID on, Nova listens to you alone: other voices are ignored, even saying its name, and a TV can't answer its questions. When it can't tell (a very short \"yes\"), it says so - holding the talk shortcut always counts as you. To set it up, read six short phrases where it's quiet; Test my voice then shows whether it knows you. Your voiceprint is made and kept on this Mac, and never leaves it.",
           name,
         )}
       </span>
+    </div>
+  );
+}
+
+const percent = (x: number) => `${Math.round(Math.max(0, Math.min(1, x)) * 100)}%`;
+
+/** A voice test under way: what to do, and what each thing said sounded like, newest first. */
+function VoiceTest({ testing, bars, on, name }: { testing: NonNullable<SettingsSnapshot['voiceId']['testing']>; bars: SettingsSnapshot['voiceId']['bars']; on: boolean; name: string }) {
+  const { results } = testing;
+  return (
+    <div className="voice-test">
+      <div className="banner banner--quiet">
+        {personalize('Say something - anything. While the test runs, what you say is only checked, never acted on.', name)}
+        {!on && ' Voice ID is switched off, so this shows what it would do once it is on.'}
+      </div>
+      {bars && (
+        <span className="muted">
+          {personalize(`A match of ${percent(bars.accept)} or more is you; under ${percent(bars.reject)}, it isn't; in between, Nova can't tell.`, name)}
+        </span>
+      )}
+      {results.length === 0 ? (
+        <span className="muted voice-test__listening">Listening…</span>
+      ) : (
+        results.map((r, i) => <VoiceTestRow key={`${r.at}-${i}`} result={r} bars={bars} />)
+      )}
+      {results.some((r) => r.speaker === 'you') && (
+        <span className="muted">Now have someone else say something, or play a video: it should say it isn't you.</span>
+      )}
+    </div>
+  );
+}
+
+function VoiceTestRow({ result: r, bars }: { result: VoiceTestResult; bars: SettingsSnapshot['voiceId']['bars'] }) {
+  const tone = r.speaker === 'you' ? 'dot--on' : r.speaker === 'not-you' ? 'dot--bad' : 'dot--warn';
+  return (
+    <div className="voice-test__row">
+      <span className={`dot ${tone}`} />
+      <div className="voice-test__text">
+        <strong>{r.verdict}</strong>
+        <span className="muted">
+          {r.score === null ? 'no match measured' : `match ${percent(r.score)}`} · {r.seconds.toFixed(1)} s{r.heard ? ` · “${r.heard}”` : ''}
+        </span>
+        {r.why && <span className="muted">{r.why}</span>}
+        {bars && r.score !== null && (
+          <div className="voice-meter" role="img" aria-label={`Match ${percent(r.score)}: ${percent(bars.accept)} or more is you, under ${percent(bars.reject)} isn't.`}>
+            <span className="voice-meter__zone voice-meter__zone--not" style={{ left: 0, width: percent(bars.reject) }} />
+            <span className="voice-meter__zone voice-meter__zone--unsure" style={{ left: percent(bars.reject), width: percent(bars.accept - bars.reject) }} />
+            <span className="voice-meter__zone voice-meter__zone--you" style={{ left: percent(bars.accept), right: 0 }} />
+            <span className="voice-meter__mark" style={{ left: percent(r.score) }} />
+          </div>
+        )}
+      </div>
     </div>
   );
 }

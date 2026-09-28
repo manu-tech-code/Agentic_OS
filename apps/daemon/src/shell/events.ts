@@ -43,7 +43,7 @@ const SHAPES: { [T in ClientEvent['type']]: Shape } = {
   'screen-restart': {},
   'screen-preview': {},
   'hands-refresh': {},
-  voiceid: { action: ['install', 'enroll', 'cancel', 'forget'] },
+  voiceid: { action: ['install', 'enroll', 'test', 'cancel', 'forget'] },
   'integration-sign-in': { name: 'string' },
   'integration-sign-out': { name: 'string' },
   'integration-retry': { name: 'string' },
