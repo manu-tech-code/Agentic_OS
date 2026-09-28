@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clampSize, dragFromCentre, dragFromCorner, keySize, sizeRange, snapSize, wheelSize, zoomKeySize } from '../src/lib/resize';
+import { clampSize, dragFromCentre, dragFromCorner, keySize, orbAtLargest, sizeRange, snapSize, wheelSize, zoomKeySize } from '../src/lib/resize';
 
 describe('resizing an orb by hand', () => {
   const window = sizeRange('appearance.orbSize');
@@ -40,6 +40,16 @@ describe('resizing an orb by hand', () => {
     expect(dragFromCorner(100, 0.48, 24, 24, away)).toBeCloseTo(50);
     expect(dragFromCorner(100, 0.48, -24, 24, away)).toBeCloseTo(100); // sideways along the diagonal's normal: no change
     expect(dragFromCorner(100, 0.48, 24, 24, { x: 1, y: 1 })).toBeCloseTo(150); // pinned top-left: right and down grow it
+  });
+
+  it("knows when the window's Orb is as big as it gets: at the top of its range, or held back by a small window", () => {
+    const big = { width: 1600, height: 1000 }; // 26vmin = 260 px: the Orb is 260 at 100%, capped at 720
+    expect(orbAtLargest(100, window, big)).toBe(false);
+    expect(orbAtLargest(195, window, big)).toBe(false); // 507 px, room to grow
+    expect(orbAtLargest(200, window, big)).toBe(true); // the top of its range
+    const small = { width: 600, height: 460 }; // the Orb is 180 at 100%, capped at 331
+    expect(orbAtLargest(150, window, small)).toBe(false); // 270 px
+    expect(orbAtLargest(185, window, small)).toBe(true); // 333 px: the window holds it back already
   });
 
   it('steps with the arrow keys on the handle, and jumps to the ends with Home and End', () => {
