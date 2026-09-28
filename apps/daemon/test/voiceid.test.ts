@@ -2,7 +2,7 @@ import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { consistent, cosine, enrollFrom, judge, learnFrom, VoiceId, VoiceprintStore, type StoredVoiceprint } from '../src/hearing/voiceid.ts';
+import { barsFrom, consistent, cosine, enrollFrom, judge, leaveOneOut, learnFrom, migrateVoiceprint, VoiceId, VoiceprintStore, type StoredVoiceprint } from '../src/hearing/voiceid.ts';
 
 /** Voiceprints for tests: a person's is their direction in 256-d, plus a little noise each time they speak. */
 function rng(seed: number) {
@@ -44,6 +44,30 @@ describe('voiceprints, in code', () => {
     expect(judge({ ...borderline, accept: cosine(voice.print, print) - 0.02 }, print, 3).speaker).toBe('you');
   });
 
+  it('sets the bars from each setup phrase against the others - never flattered by an average that includes it', () => {
+    const prints = [you(0.9), you(0.9), you(0.9), you(0.9), you(0.9), you(0.9)];
+    const avg = (xs: number[]) => xs.reduce((a, x) => a + x, 0) / xs.length;
+    const flattering = avg(prints.map((p) => cosine(p, unit(prints[0]!.map((_, i) => prints.reduce((a, q) => a + q[i]!, 0))))));
+    expect(avg(leaveOneOut(prints))).toBeLessThan(flattering);
+    const voice = enrollFrom(prints, 'wespeaker-v2');
+    expect(voice).toMatchObject({ version: 2, enrolled: 6 });
+    expect(voice.phrases).toHaveLength(6); // kept, to set the bars again or add phrases later
+    // Well under how alike the phrases were, and never above 0.62 or below what tells people apart.
+    expect(barsFrom([0.9])).toEqual({ accept: 0.62, reject: 0.4 });
+    expect(barsFrom([0.7]).accept).toBeCloseTo(0.5);
+    expect(barsFrom([0.4])).toEqual({ accept: 0.45, reject: 0.25 });
+  });
+
+  it('sets the bars of a voiceprint set up the old way as the new way would have, without setting up again', () => {
+    // Set up with six phrases, whose likeness to their own average came out at 0.837: "you" was 0.687, "not you" 0.45.
+    const old: StoredVoiceprint = { version: 1, model: 'wespeaker-v2', print: [1], accept: 0.6867, reject: 0.45, enrolled: 6, learned: 0, updated: '' };
+    const now = migrateVoiceprint(old);
+    expect(now.version).toBe(2);
+    expect(now.accept).toBeCloseTo(0.559, 2); // phrases alike by 0.64 each: one against the others, 0.76
+    expect(now.reject).toBeCloseTo(0.359, 2);
+    expect(migrateVoiceprint(now)).toBe(now); // already the new way
+  });
+
   it('keeps a phrase out of the setup when it sounds like someone else', () => {
     expect(consistent([], other())).toBe(true);
     expect(consistent([you(), you()], you())).toBe(true);
@@ -80,6 +104,16 @@ describe('the voiceprint on disk', () => {
     expect(await new VoiceprintStore(file, 'wespeaker-v2').load()).toBeNull();
     await store.forget();
     await expect(stat(file)).rejects.toThrow();
+  });
+
+  it('sets the bars of an old voiceprint again once, as it loads, and keeps them', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'nova-voice-'));
+    const file = join(dir, 'voiceprint.json');
+    await writeFile(file, JSON.stringify({ version: 1, model: 'wespeaker-v2', print: [0.6, 0.8], accept: 0.6867, reject: 0.45, enrolled: 6, learned: 0, updated: '' }));
+    const loaded = await new VoiceprintStore(file, 'wespeaker-v2').load();
+    expect(loaded).toMatchObject({ version: 2, accept: expect.closeTo(0.559, 2) });
+    expect(JSON.parse(await readFile(file, 'utf8'))).toMatchObject({ version: 2, print: [0.6, 0.8] });
+    expect((await stat(file)).mode & 0o777).toBe(0o600);
   });
 
   it('writes what it learns now and then, not on every turn', async () => {
@@ -221,6 +255,33 @@ describe('Voice ID, set up and at work', () => {
     await voice.test();
     await voice.forget();
     expect(voice.status()).toMatchObject({ testing: null, bars: null, enrolled: false });
+  });
+
+  it('takes a short turn right after a clear one of the user\'s as theirs - for 20 seconds, never chained, never a clear no', async () => {
+    let now = 1_000_000;
+    const dir = await mkdtemp(join(tmpdir(), 'nova-voice-'));
+    const store = new VoiceprintStore(join(dir, 'voiceprint.json'), 'wespeaker-v2');
+    const voice = new VoiceId({ store, model: 'wespeaker-v2', label: '', modelDir: async () => dir, enabled: () => true, learning: () => false, name: () => 'Manuel', turnOn: async () => {}, changed: () => {}, now: () => now });
+    await voice.refresh();
+    await store.set(enrollFrom([you(), you(), you(), you(), you(), you()], 'wespeaker-v2'));
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      expect(voice.decide(null, 0.4)).toBe('unsure'); // "yes", out of the blue: too little to tell
+      expect(voice.decide(you(), 3)).toBe('you'); // "Manuel, quit Spotify"
+      now += 6_000;
+      expect(voice.decide(null, 0.4)).toBe('you'); // "yes": the user, carrying on
+      expect(voice.decide(null, 3)).toBe('unsure'); // a long turn with no print is never waved through
+      expect(voice.decide(other(), 1)).toBe('not-you'); // clearly someone else, even so
+      now += 15_000; // 21 s after the clear one: the short one since didn't extend it
+      expect(voice.decide(null, 0.4)).toBe('unsure');
+      expect(voice.decide(you(), 3, { learn: false })).toBe('you'); // a glance while talking over Nova…
+      now += 2_000;
+      expect(voice.decide(null, 0.4)).toBe('unsure'); // …opens no window
+      expect(log.mock.calls.map((c) => String(c[0]))).toContainEqual(expect.stringMatching(/\[voice-id\] you · 0\.4 s · short, 6 s after a clear one/));
+      expect(log.mock.calls.map((c) => String(c[0]))).toContainEqual(expect.stringMatching(/\[voice-id\] you 0\.9\d · 3\.0 s$/));
+    } finally {
+      log.mockRestore();
+    }
   });
 
   it('forgets the voice entirely', async () => {

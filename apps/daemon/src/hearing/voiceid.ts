@@ -12,7 +12,8 @@ import type { SettingsSnapshot, VoiceTestResult } from '@nova/core';
 export type Speaker = 'you' | 'not-you' | 'unsure';
 
 export interface StoredVoiceprint {
-  version: 1;
+  /** 2: the bars come from each setup phrase against the others (1: against an average that included it). */
+  version: 1 | 2;
   /** The model the prints come from: prints of another model can't be compared with it. */
   model: string;
   print: number[];
@@ -22,6 +23,8 @@ export interface StoredVoiceprint {
   enrolled: number;
   learned: number;
   updated: string;
+  /** The setup phrases' own voiceprints, so the bars can be set again and more phrases added later. */
+  phrases?: number[][];
 }
 
 /** What the user reads while Nova learns their voice: short and long, a question, a yes. */
@@ -38,6 +41,8 @@ export const ENROLL_PHRASES = (name: string) => [
 export const MIN_SECONDS = 0.8;
 /** A turn this short is only ever "you" when it's clearly them - a quick "yes" is easy to mistake. */
 const SHORT_SECONDS = 1.5;
+/** A short turn this soon after a clear one in the user's voice is theirs too: the user, carrying on ("yes"). */
+const FOLLOWS_MS = 20_000;
 /** How much one clear turn moves the voiceprint, as the voice changes (a cold, another microphone). */
 const LEARN_RATE = 0.05;
 /** A voice test ends by itself after this long without a word: Nova mustn't stay deaf if the user walks away. */
@@ -58,18 +63,47 @@ const unit = (v: number[]) => {
 
 const mean = (prints: readonly number[][]) => unit(prints[0]!.map((_, i) => prints.reduce((s, p) => s + p[i]!, 0) / prints.length));
 
+const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));
+
 /**
- * The user's voiceprint from their setup phrases, with thresholds set by how alike those came out: a
- * steady voice gets a higher bar, a varied one a lower - never below what tells people apart.
+ * Each setup phrase against the average of the others: how alike a new turn in the same voice comes out. (Against
+ * an average that includes the phrase itself, each looks more alike than any new turn ever will.)
  */
+export function leaveOneOut(prints: readonly number[][]): number[] {
+  return prints.map((p, i) => cosine(p, mean(prints.filter((_, j) => j !== i))));
+}
+
+/**
+ * The bars from how alike the setup phrases came out, one against the others: a turn in the user's voice, said
+ * another time, somewhere else, scores somewhat lower than that - so the "you" bar sits well under it. Other people
+ * score far lower still (0.3 at most, as a rule, for this model), so the "not you" bar stays above them.
+ */
+export function barsFrom(alike: readonly number[]): { accept: number; reject: number } {
+  const typical = alike.reduce((s, x) => s + x, 0) / alike.length;
+  const accept = clamp(typical - 0.2, 0.45, 0.62);
+  return { accept, reject: clamp(accept - 0.2, 0.25, 0.4) };
+}
+
+/** The user's voiceprint from their setup phrases, with its bars set by how alike those came out. */
 export function enrollFrom(prints: readonly number[][], model: string, now = new Date()): StoredVoiceprint {
   if (prints.length < 3) throw new Error('Too few phrases to know a voice by.');
-  const print = mean(prints);
-  const self = prints.map((p) => cosine(p, print));
-  const typical = self.reduce((s, x) => s + x, 0) / self.length;
-  const accept = Math.min(0.75, Math.max(0.5, typical - 0.15));
-  const reject = Math.min(0.45, Math.max(0.25, accept - 0.2));
-  return { version: 1, model, print, accept, reject, enrolled: prints.length, learned: 0, updated: now.toISOString() };
+  const { accept, reject } = barsFrom(leaveOneOut(prints));
+  return { version: 2, model, print: mean(prints), accept, reject, enrolled: prints.length, learned: 0, updated: now.toISOString(), phrases: prints.map((p) => [...p]) };
+}
+
+/**
+ * A voiceprint set up before the bars came from each phrase against the others (version 1, phrases not kept): its
+ * "you" bar was the phrases' likeness to their own average less 0.15. That likeness gives back how alike two of the
+ * phrases were (for n unit prints alike by r each, it is √((1 + (n−1)r) / n)), and from that, how alike one is to
+ * the others - so the bars are set as a version 2 setup would have set them, without setting up again.
+ */
+export function migrateVoiceprint(v: StoredVoiceprint): StoredVoiceprint {
+  if (v.version === 2) return v;
+  const n = Math.max(3, v.enrolled || 6);
+  const self = clamp(v.accept + 0.15, 0, 0.999);
+  const r = clamp((n * self * self - 1) / (n - 1), 0, 0.999);
+  const alike = r / Math.sqrt((1 + (n - 2) * r) / (n - 1));
+  return { ...v, version: 2, ...barsFrom([alike]) };
 }
 
 /** Whether a setup phrase sounds like the others so far (not a cough, a TV, another person). */
@@ -117,7 +151,10 @@ export class VoiceprintStore {
     try {
       const v = JSON.parse(await readFile(this.file, 'utf8')) as StoredVoiceprint;
       // A voiceprint of another model (or a broken file) can't be compared with what the helper makes now.
-      this.voice = v?.version === 1 && v.model === this.model && Array.isArray(v.print) && v.print.length > 0 ? v : null;
+      const usable = (v?.version === 1 || v?.version === 2) && v.model === this.model && Array.isArray(v.print) && v.print.length > 0;
+      this.voice = usable ? migrateVoiceprint(v) : null;
+      // Bars set the old way: set again, once, and kept.
+      if (usable && v.version !== 2) await this.write().catch(() => {});
     } catch {
       this.voice = null;
     }
@@ -176,6 +213,8 @@ export class VoiceId {
   /** A voice test: its results so far, newest first - null when none is running. */
   private testing: VoiceTestResult[] | null = null;
   private testTimer: ReturnType<typeof setTimeout> | undefined;
+  /** When a turn was last clearly the user's, for a short one right after it. */
+  private youAt = 0;
 
   constructor(
     private readonly opts: {
@@ -190,6 +229,8 @@ export class VoiceId {
       name: () => string;
       /** The talk shortcut as the user presses it ("⌥Space"), for what a test says Nova would do. */
       shortcut?: () => string;
+      /** Which ear heard the turn ("Nova.app", "a window"), for the log. */
+      ear?: () => string;
       /** A voiceprint was made: switch Voice ID on in Settings. */
       turnOn: () => Promise<void>;
       /** Something changed that Settings shows. */
@@ -211,14 +252,44 @@ export class VoiceId {
     return this.opts.enabled() && this.opts.store.current ? { models: this.models } : null;
   }
 
+  /**
+   * Whose a turn was. A short one moments after a clear turn in the user's voice counts as theirs - unless it clearly
+   * isn't - but only a clear turn opens that window, so short ones never chain. A long turn with no print stays unsure.
+   * Each turn's decision goes to the log with its score, length and ear; `learn: false` (a glance at the start
+   * of a turn, talking over Nova) neither logs, learns nor opens the window.
+   */
   decide(print: number[] | null, seconds: number, opts: { learn?: boolean } = {}): Speaker | undefined {
     const voice = this.opts.store.current;
     if (!voice || !this.opts.enabled() || !this.models) return undefined;
-    if (!print) return 'unsure';
-    const { speaker, score } = judge(voice, print, seconds);
-    if (speaker === 'you' && opts.learn !== false && this.opts.learning()) {
-      const next = learnFrom(voice, print, score, seconds);
-      if (next) void this.opts.store.learned(next).catch((e) => console.warn(`  [voice-id] couldn't keep what it learned: ${(e as Error).message}`));
+    const now = this.opts.now?.() ?? Date.now();
+    const judged = print ? judge(voice, print, seconds) : { speaker: 'unsure' as const, score: null };
+    const { score } = judged;
+    let speaker: Speaker = judged.speaker;
+    let why = '';
+    const short = seconds < SHORT_SECONDS;
+    if (speaker === 'unsure' && short && now - this.youAt < FOLLOWS_MS && (score === null || score >= voice.reject)) {
+      speaker = 'you';
+      why = `short, ${Math.round((now - this.youAt) / 1000)} s after a clear one`;
+    } else if (speaker === 'unsure') {
+      why =
+        score === null
+          ? seconds < MIN_SECONDS
+            ? 'too short for a voiceprint'
+            : 'no voiceprint in time'
+          : seconds < MIN_SECONDS
+            ? 'too short to tell'
+            : seconds < SHORT_SECONDS && score >= voice.accept
+              ? `short: needs ${(voice.accept + 0.05).toFixed(2)}`
+              : `between ${voice.reject.toFixed(2)} and ${voice.accept.toFixed(2)}`;
+    }
+    if (opts.learn === false) return speaker;
+    console.log(`  [voice-id] ${speaker}${score === null ? '' : ` ${score.toFixed(2)}`} · ${seconds.toFixed(1)} s${why ? ` · ${why}` : ''}${this.opts.ear ? ` · heard by ${this.opts.ear()}` : ''}`);
+    if (speaker === 'you' && !why && print && score !== null) {
+      this.youAt = now;
+      if (this.opts.learning()) {
+        const next = learnFrom(voice, print, score, seconds);
+        if (next) void this.opts.store.learned(next).catch((e) => console.warn(`  [voice-id] couldn't keep what it learned: ${(e as Error).message}`));
+      }
     }
     return speaker;
   }

@@ -158,7 +158,7 @@ How it works: each finished turn's audio goes, on this Mac, to the hearing helpe
 (256 numbers) on the Neural Engine; the daemon compares it with yours (`apps/daemon/src/hearing/voiceid.ts`). Well
 above your bar, it's you; well below, it isn't - ignored; in between, or a turn too short to tell (a quick "yes"), Nova
 says it couldn't tell and does nothing: **hold the talk shortcut and say it again** - whoever holds the key is at this
-Mac, so it counts as you, as typing does. Talking over Nova stops it only in your voice. Turns that were clearly you,
+Mac, so it counts as you, as typing does. Talking over Nova stops it only in your voice. A short reply right after you've spoken ("yes") counts as you - for 20 seconds after a turn that was clearly yours, unless it clearly isn't you. The bars come from how alike your setup phrases are one against the others (a turn said another time scores somewhat lower than a phrase against an average that includes it), and every turn's decision is written to `~/.nova/logs/daemon.log` as `[voice-id] you 0.71 · 2.4 s · heard by Nova.app`, so a miss can be looked into. Turns that were clearly you,
 and long enough, refine your voiceprint a little (Settings → Voice → *Keep learning your voice*), so a cold or another
 microphone still works.
 
