@@ -20,4 +20,7 @@
   - Benched on 2026-09-28: set aside for now, to come back to later
 - [x] Remove the "System 1" and "System 2" items from the dock. There's no need to show those two items on the dock
 - [x] Remove the connected agents from the dock. There's no need to show them there
-- [ ] The listening model should be able to filter out noise
+- [ ] The listening model should be able to filter out noise. Leads:
+  - [x] Ignore sounds that aren't speech: Silero VAD tells a voice from typing, music, a door or a fan, so those no longer start a turn (#28, live)
+  - Ignore far voices by how loud they are: dropped - on my own recordings my voice ran from -65 to -14 dB, and the turns Voice ID said weren't me sat in the same ranges, so it would have ignored me speaking softly
+  - Clean the audio before it's heard (GTCRN): dropped - measured, it made both recognizers worse (Parakeet in loud noise: 5.1% of words wrong became 10.6%; with other voices as loud as mine, 25.8% became 39.4%). Parakeet already hears through music and typing without mistakes, and makes a third as many as Apple's recognizer in loud noise
