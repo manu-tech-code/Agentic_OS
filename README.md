@@ -138,6 +138,29 @@ runs through [FluidAudio](https://github.com/FluidInference/FluidAudio) (Apache-
 without its optional prebuilt text-normalization binary, which hearing doesn't need. Models download from pinned revisions
 and are checked against their checksums, into `~/.nova/models`.
 
+## Voice ID: only your voice
+
+With Voice ID on, Nova listens to you alone. Other voices are ignored entirely - a TV, a video call, someone in the
+room - even when they say its name, and nothing they say opens its listening window or is kept. Set it up in
+Settings → Voice → **Voice ID**:
+
+1. **Install** the model (WeSpeaker v2, 8 MB, from a pinned revision, checked file by file).
+2. **Set up**: read the six short phrases Nova shows, somewhere quiet. It checks each sounds like the others (a
+   cough or a TV gets asked again), then switches Voice ID on.
+
+How it works: each finished turn's audio goes, on this Mac, to the hearing helper, which turns it into a voiceprint
+(256 numbers) on the Neural Engine; the daemon compares it with yours (`apps/daemon/src/hearing/voiceid.ts`). Well
+above your bar, it's you; well below, it isn't - ignored; in between, or a turn too short to tell (a quick "yes"), Nova
+says it couldn't tell and does nothing: **hold the talk shortcut and say it again** - whoever holds the key is at this
+Mac, so it counts as you, as typing does. Talking over Nova stops it only in your voice. Turns that were clearly you,
+and long enough, refine your voiceprint a little (Settings → Voice → *Keep learning your voice*), so a cold or another
+microphone still works.
+
+Your voiceprint lives in `~/.nova/voiceprint.json` (readable by you alone) and never leaves the Mac; **Forget my
+voice** deletes it. Voice ID needs on-device hearing (Nova.app, or a window streaming its microphone): speech a
+browser recognises itself never reaches it, so with Voice ID on it doesn't count as you.
+`nova-hearing --voice-selftest ~/.nova/models/wespeaker-v2` checks the model with two of macOS's own voices.
+
 ## Integrations
 
 Every brain - Claude, Codex, OpenCode, a local model - can use your services through Nova: Settings → Integrations,

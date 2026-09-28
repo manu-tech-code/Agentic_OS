@@ -21,6 +21,7 @@ export interface SetupInput {
   screen: SettingsSnapshot['screen'];
   hands?: SettingsSnapshot['hands'];
   signing?: SettingsSnapshot['signing'];
+  voiceId?: SettingsSnapshot['voiceId'];
 }
 
 const ACCESS: Record<string, string> = { granted: 'allowed', denied: 'not allowed', undetermined: 'not asked yet', restricted: 'restricted' };
@@ -128,6 +129,21 @@ export function setupSteps(input: SetupInput): SetupStep[] {
             ? `${signing.identity} - it runs out soon: renew it in Xcode (Settings → Accounts), then run npm run app. What macOS allows Nova stays.`
             : `Signed as ${signing.identity}, hardened: what macOS allows Nova survives rebuilds, and Nova Eyes answers only the daemon Nova.app runs.`,
       fix: signing.adHoc || behind.length || soon ? { command: 'npm run app', section: 'system' } : { section: 'system' },
+    });
+  }
+  const voice = input.voiceId;
+  if (voice) {
+    steps.push({
+      id: 'voice-id',
+      label: 'Voice ID',
+      done: voice.on,
+      optional: true,
+      detail: voice.on
+        ? `On: Nova answers your voice alone${voice.learned ? ` (learned from ${voice.learned} of your turns)` : ''}.`
+        : voice.enrolled
+          ? 'Your voice is learned, but Voice ID is off: anyone Nova hears can ask it things.'
+          : 'Off: anyone Nova hears can ask it things - a TV too. Set it up to have Nova answer your voice alone.',
+      fix: { section: 'voice' },
     });
   }
   const access = app?.access;

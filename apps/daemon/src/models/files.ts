@@ -91,6 +91,22 @@ export const MODELS: Record<string, ModelSpec> = {
       'smart-turn-v3.2-cpu.onnx': { size: 8_679_182, sha256: '2bb026316b14a660486a75b1733cd3fbab8c2fd0314dc9af7be49f8cca967e4f' },
     },
   },
+  // Voice ID: a voiceprint of who is speaking (WeSpeaker v2), on the Neural Engine. Its licence isn't confirmed:
+  // the repository's NOTICE.md leaves this legacy export out of its CC-BY-4.0 scope. Before Nova goes to anyone
+  // else, switch to that repository's Community-1 Embedding + FBank pair (CC-BY-4.0) behind the same voiceprint.
+  'wespeaker-v2': {
+    label: 'WeSpeaker v2 · 8 MB',
+    repo: 'FluidInference/speaker-diarization-coreml',
+    revision: 'df2625ac79a7ac6b65ad868fee6d80f320da4232',
+    license: 'unconfirmed (legacy export; see the repository NOTICE.md)',
+    files: {
+      'wespeaker_v2.mlmodelc/analytics/coremldata.bin': { size: 243, sha256: 'd2b1fcde6121aea3ff0e14c1dc50d09dacb0314a2e89156353c31804230a422f' },
+      'wespeaker_v2.mlmodelc/coremldata.bin': { size: 359, sha256: '6feb2472a71fa9d8a84020c85206138a4f6261c565c9884bf518d59dd5838da7' },
+      'wespeaker_v2.mlmodelc/metadata.json': { size: 2_738, gitSha1: '5cda8cc14897fb37b01552a0fb9fefca31a6c00f' },
+      'wespeaker_v2.mlmodelc/model.mil': { size: 706_900, gitSha1: '977dcf031d18b18fb5096d3e943ff8aa18754e21' },
+      'wespeaker_v2.mlmodelc/weights/weight.bin': { size: 7_243_904, sha256: '34004f6798d35cad7071e2fdc67e63faaa782f53697e1cb49bcb452cf81ae151' },
+    },
+  },
 };
 /** Older name, from when only Reflex downloaded a model. */
 export const REFLEX_MODELS = MODELS;
@@ -99,6 +115,7 @@ export const DEFAULT_REFLEX_MODEL = 'potion-base-8M';
 export const KOKORO_MODEL = 'kokoro-82M';
 export const PARAKEET_MODEL = 'parakeet-tdt-0.6b-v2';
 export const SMART_TURN_MODEL = 'smart-turn-v3.2';
+export const VOICE_ID_MODEL = 'wespeaker-v2';
 
 const expand = (p: string) => (p === '~' ? homedir() : p.startsWith('~/') ? join(homedir(), p.slice(2)) : p);
 

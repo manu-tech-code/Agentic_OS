@@ -20,6 +20,8 @@ export interface PrivacyInput {
   hearing: HearingStatus;
   voiceInstalled: boolean;
   isLocal: (id: string) => boolean;
+  /** The user's voiceprint (Voice ID) is on this Mac. */
+  voiceprint?: boolean;
 }
 
 const VENDORS: Record<string, string> = { claude: 'Anthropic', codex: 'OpenAI', gemini: 'Google' };
@@ -70,6 +72,15 @@ export function privacyFlows(input: PrivacyInput): PrivacyFlow[] {
     where: input.voiceInstalled ? `${THIS_MAC} (Kokoro)` : "nowhere yet - Kokoro, Nova's voice, comes with Nova.app",
     leaves: false,
     on: input.voiceInstalled,
+    section: 'voice',
+  });
+  flows.push({
+    id: 'voiceprint',
+    what: 'Your voiceprint (Voice ID), to know your voice from others',
+    where: `${THIS_MAC} (~/.nova/voiceprint.json, readable by you alone)`,
+    detail: 'Made on this Mac from what you said when setting it up; it never leaves it. Settings → Voice forgets it.',
+    leaves: false,
+    on: Boolean(input.voiceprint),
     section: 'voice',
   });
 
@@ -221,7 +232,7 @@ export function privacyFlows(input: PrivacyInput): PrivacyFlow[] {
   });
   flows.push({
     id: 'downloads',
-    what: 'Model downloads - Reflex, Kokoro, Parakeet, Smart Turn',
+    what: 'Model downloads - Reflex, Kokoro, Parakeet, Smart Turn, Voice ID',
     where: 'huggingface.co, only when you install one',
     detail: 'Nothing about you goes with them; each file is checked against a pinned checksum.',
     leaves: true,

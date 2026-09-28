@@ -4,7 +4,7 @@ import type { ClientEvent } from '@nova/core/protocol';
 import { FIELDS, personalize, SECTIONS, type SettingField, type SettingsSection, type SettingsSnapshot, type SettingValue } from '@nova/core/settings';
 import { previewVoice } from '../voice/voice';
 import { ListInput, NumberInput, Reset, Switch, TextInput, type Save } from './settings/Controls';
-import { AgentsPanel, HearingPanel, JevPanel, OrbPreview, ProjectsPanel, ReflexPanel, ServersPanel, SystemPanel, VoicePanel } from './settings/Panels';
+import { AgentsPanel, HearingPanel, JevPanel, OrbPreview, ProjectsPanel, ReflexPanel, ServersPanel, SystemPanel, VoiceIdPanel, VoicePanel } from './settings/Panels';
 import { IntegrationsPanel } from './settings/Integrations';
 import { HandsPanel } from './settings/Hands';
 import { MemoryPanel, ScreenPanel } from './settings/Memory';
@@ -167,6 +167,7 @@ function SectionBody({
       {section === 'setup' && <SetupPanel snapshot={snapshot} name={name} onAction={onAction} onNavigate={onNavigate} onWalkthrough={onWalkthrough} />}
       {section === 'privacy' && <PrivacyPanel snapshot={snapshot} name={name} onSave={onSave} onNavigate={onNavigate} />}
       {section === 'voice' && <VoicePanel snapshot={snapshot} name={name} result={result} onAction={onAction} />}
+      {section === 'voice' && <VoiceIdPanel snapshot={snapshot} name={name} result={result} onAction={onAction} />}
       {section === 'hearing' && <HearingPanel snapshot={snapshot} name={name} result={result} onAction={onAction} />}
       {section === 'presence' && <PresencePanel snapshot={snapshot} name={name} onAction={onAction} />}
       {section === 'initiative' && <InitiativePanel snapshot={snapshot} name={name} onSave={onSave} onAction={onAction} />}

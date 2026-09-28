@@ -230,6 +230,8 @@ export type ClientEvent =
   | { type: 'screen-preview' }
   /** Read the user's Shortcuts again (Settings → Hands). */
   | { type: 'hands-refresh' }
+  /** Voice ID (Settings → Voice): get its model, learn the user's voice (again), stop, or forget it. */
+  | { type: 'voiceid'; action: 'install' | 'enroll' | 'cancel' | 'forget' }
   /** Sign in to an integration with the browser, sign out of one, or try connecting again. */
   | { type: 'integration-sign-in'; name: string }
   | { type: 'integration-sign-out'; name: string }

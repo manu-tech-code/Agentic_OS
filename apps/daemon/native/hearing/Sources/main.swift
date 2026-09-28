@@ -4,6 +4,12 @@ import Foundation
 // little endian][payload] - where type 1 is 16 kHz mono 16-bit PCM and type 2 a JSON command.
 // Events come back on stdout, one JSON object per line.
 
+if let i = CommandLine.arguments.firstIndex(of: "--voice-selftest"), i + 1 < CommandLine.arguments.count {
+  let result = VoiceSelfTest.run(models: CommandLine.arguments[i + 1])
+  print(String(decoding: try! JSONSerialization.data(withJSONObject: result), as: UTF8.self))
+  exit(result["ok"] as? Bool == true ? 0 : 1)
+}
+
 enum Message {
   case audio([Int16])
   case command([String: Any])
@@ -51,6 +57,32 @@ func startEngine(_ command: [String: Any]) async throws -> Engine {
   }
 }
 
+/// Voiceprints for Voice ID: one at a time, off the audio path, the model loaded on first use.
+let voiceQueue = DispatchQueue(label: "nova.hearing.voice")
+var printer: VoicePrinter?
+var printerFrom = ""
+
+func voiceprint(_ command: [String: Any]) {
+  let id = command["id"] ?? NSNull()
+  guard let models = command["models"] as? String, let pcm = (command["pcm"] as? String).flatMap({ Data(base64Encoded: $0) }) else {
+    return emit(["type": "voiceprint", "id": id, "error": "no model folder or audio"])
+  }
+  voiceQueue.async {
+    do {
+      if printer == nil || printerFrom != models {
+        printer = try VoicePrinter(directory: URL(fileURLWithPath: models))
+        printerFrom = models
+      }
+      var samples = [Int16](repeating: 0, count: pcm.count / 2)
+      _ = samples.withUnsafeMutableBytes { pcm.copyBytes(to: $0) }
+      let print = try printer!.voiceprint(samples.map { Float($0) / 32768 })
+      emit(print.map { ["type": "voiceprint", "id": id, "print": $0] } ?? ["type": "voiceprint", "id": id, "error": "too short"])
+    } catch {
+      emit(["type": "voiceprint", "id": id, "error": error.localizedDescription])
+    }
+  }
+}
+
 var engine: Engine?
 for await message in messages {
   switch message {
@@ -79,6 +111,8 @@ for await message in messages {
       await engine?.setVocabulary(command["words"] as? [String] ?? [])
     case "wake":
       engine?.setWakeWords(command["words"] as? [String] ?? [])
+    case "voiceprint":
+      voiceprint(command)
     default:
       break
     }
