@@ -13,7 +13,7 @@ import { Timeline } from './components/Timeline';
 import { formatShortcut } from '@nova/core/shortcut';
 import type { SettingsSection } from '@nova/core/settings';
 import { appLevel, inApp, onShellOpen, openOnLoad, tellApp, useAppState } from './lib/shell';
-import { sizeRange, useLiveSetting, useResizable, zoomKeySize } from './lib/resize';
+import { orbAtLargest, sizeRange, useLiveSetting, useResizable, useViewport, zoomKeySize } from './lib/resize';
 import { useNova, type SayEvent } from './lib/useNova';
 import {
   earcon,
@@ -110,6 +110,9 @@ export default function App() {
     measure: () => orbSize.ref.current?.querySelector('.orb')?.getBoundingClientRect().width ?? 220,
     save: (size) => send({ type: 'settings-set', values: { 'appearance.orbSize': size } }),
   });
+  // As big as it gets, the Orb sits in the middle of the window, what's said floating over its foot.
+  const viewport = useViewport();
+  const orbCentred = orbAtLargest(orbSize.size, ORB_RANGE, viewport);
   // The text size: ⌘+, ⌘− and ⌘0 here, as in a browser (Settings → Appearance and "make the text bigger" too).
   const [textSize, setTextSize] = useLiveSetting(state.ui.textSize ?? 100, (size) => send({ type: 'settings-set', values: { 'appearance.textSize': size } }));
   const textSizeNow = useRef(textSize);
@@ -544,7 +547,7 @@ export default function App() {
         />
       </div>
 
-      <main className="stage">
+      <main className={`stage ${orbCentred ? 'is-orb-centred' : ''}`}>
         <div ref={orbSize.ref} className={`orb-frame ${orbSize.resizing ? 'is-resizing' : ''}`} style={{ ['--orb-scale' as string]: orbSize.size / 100 }}>
           <Orb name={state.name} phase={shownPhase} levelRef={inApp ? appLevel : levelRef} prefs={state.ui.orb} onClick={() => orbSize.justResized() || (listening ? setShowCommand(true) : micOn())} />
           <span
