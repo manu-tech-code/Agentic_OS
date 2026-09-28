@@ -16,4 +16,6 @@
   - [x] Keep several voiceprints (e.g. per microphone, or a few clusters) instead of one average, and match against the closest
   - [x] Let "unsure" turns that I then confirm (via the talk shortcut) teach Voice ID, and offer "Improve my voice" to add phrases without redoing setup
   - [x] Log each turn's score, length and ear to daemon.log so misses can be diagnosed
+  - [x] Hear with stronger models: WeSpeaker ResNet293 and NVIDIA TitaNet-Large alongside the first one, their matches weighed together; my clear turns of the last 10 minutes count too; a week of recordings to tune on (#21) - it made no difference
+  - Benched on 2026-09-28: set aside for now, to come back to later
 - [x] Remove the "System 1" and "System 2" items from the dock. There's no need to show those two items on the dock
