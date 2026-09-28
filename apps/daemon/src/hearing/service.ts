@@ -49,9 +49,11 @@ export interface VoiceCheck {
    * Whose voice a turn was (null print: none could be made) - undefined when Voice ID decides nothing now.
    * `learn: false` for a glance at part of a turn (someone talking over Nova), which mustn't teach it.
    */
-  decide(print: number[] | null, seconds: number, opts?: { learn?: boolean }): Speaker | undefined;
-  /** Setting up or testing Voice ID: the turn is for it, not for Nova. True when it took it. */
-  claim(print: number[] | null, seconds: number, text: string): boolean;
+  decide(print: number[] | null, seconds: number, opts?: { learn?: boolean; text?: string }): Speaker | undefined;
+  /** Setting up or testing Voice ID: the turn is for it, not for Nova (with its audio, to check the recording). True when it took it. */
+  claim(print: number[] | null, seconds: number, text: string, audio?: Int16Array): boolean;
+  /** A turn said with the talk shortcut: the user's own - Voice ID may learn from it. */
+  confirmed?(print: number[] | null, seconds: number, text: string): void;
   /** The master keyword, in any voice: what was said after it (Voice ID is off from now on), or null. */
   unlock?(text: string): string | null;
 }
@@ -132,7 +134,7 @@ export class Hearing {
   private readonly prints = new Map<number, (print: number[] | null) => void>();
   private printSeq = 0;
   /** The voiceprint of each finished turn, until its words come back. */
-  private readonly turnPrints = new Map<number, { print: Promise<number[] | null>; seconds: number }>();
+  private readonly turnPrints = new Map<number, { print: Promise<number[] | null>; seconds: number; audio: Int16Array }>();
 
   constructor(private readonly events: HearingEvents) {
     this.turnOpts = {
@@ -439,7 +441,7 @@ export class Hearing {
     const voice = this.voice?.active();
     if (voice) {
       const audio = this.ring.since(this.turnStart);
-      this.turnPrints.set(id, { print: this.voiceprint(audio, voice.models), seconds: audio.length / RATE });
+      this.turnPrints.set(id, { print: this.voiceprint(audio, voice.models), seconds: audio.length / RATE, audio });
     }
     this.helper?.command({ type: 'finalize', turn: id });
     this.turn.reset();
@@ -495,12 +497,16 @@ export class Hearing {
     void printed.print.then((print) => {
       const voice = this.voice;
       // Setting up or testing Voice ID: what's said is for it, never a request.
-      if (voice?.claim(print, printed.seconds, words)) return;
+      if (voice?.claim(print, printed.seconds, words, printed.audio)) return;
       // The master keyword, in any voice: Voice ID is off from now on, and what came after it goes through.
       const rest = voice?.unlock?.(words) ?? null;
       if (rest !== null) return rest ? this.events.utterance(rest, explicit, 'anyone') : undefined;
-      // Said with the talk shortcut: whoever holds the key down is at this Mac - it counts as the user.
-      this.events.utterance(words, explicit, explicit ? undefined : voice?.decide(print, printed.seconds));
+      // Said with the talk shortcut: whoever holds the key down is at this Mac - it counts as the user (and teaches Voice ID).
+      if (explicit) {
+        voice?.confirmed?.(print, printed.seconds, words);
+        return this.events.utterance(words, true);
+      }
+      this.events.utterance(words, false, voice?.decide(print, printed.seconds, { text: words }));
     });
   }
 }

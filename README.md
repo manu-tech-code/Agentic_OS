@@ -146,8 +146,12 @@ room - even when they say its name, and nothing they say opens its listening win
 Settings → Voice → **Voice ID**:
 
 1. **Install** the model (WeSpeaker v2, 8 MB, from a pinned revision, checked file by file).
-2. **Set up**: read the six short phrases Nova shows, somewhere quiet. It checks each sounds like the others (a
-   cough or a TV gets asked again), then switches Voice ID on.
+2. **Set up** - about 45 seconds of your voice, the ways Nova will hear it: six phrases as usual, two a step back
+   from the microphone, two quietly, and a quarter of a minute of talking freely. Each recording is checked before it's
+   taken - loud enough, not distorted, clear of the room's noise, long enough in actual speech, and a voice (its pitch is
+   found in code) - with a live meter while you speak, and a ✓ or why to say it again beside each. Then a check: new
+   phrases must come out as you, three in a row (each one that doesn't is learned from, up to seven), before Voice ID
+   switches itself on. It keeps a voiceprint for each way you were heard, and a turn is you by the closest of them.
 3. **Test my voice**: say anything, and the panel shows whose voice it sounded like - *That's you*, *Not you* or
    *Can't tell* (and why) - how closely it matched, on a bar marked with the two thresholds, and what Nova would have
    done. Have someone else talk, or play a video, to see it tell them apart. While a test runs, nothing said is acted
@@ -160,7 +164,9 @@ above your bar, it's you; well below, it isn't - ignored; in between, or a turn 
 says it couldn't tell and does nothing: **hold the talk shortcut and say it again** - whoever holds the key is at this
 Mac, so it counts as you, as typing does. Talking over Nova stops it only in your voice. A short reply right after you've spoken ("yes") counts as you - for 20 seconds after a turn that was clearly yours, unless it clearly isn't you. The bars come from how alike your setup phrases are one against the others (a turn said another time scores somewhat lower than a phrase against an average that includes it), and every turn's decision is written to `~/.nova/logs/daemon.log` as `[voice-id] you 0.71 · 2.4 s · heard by Nova.app`, so a miss can be looked into. Turns that were clearly you,
 and long enough, refine your voiceprint a little (Settings → Voice → *Keep learning your voice*), so a cold or another
-microphone still works.
+microphone still works - and so do turns you say with the talk shortcut, and one Nova couldn't place that you then
+said again with it. **Improve my voice** adds a few more phrases (as usual, a step back, talking) to what it learned
+before, without setting up again.
 
 Your voiceprint lives in `~/.nova/voiceprint.json` (readable by you alone) and never leaves the Mac; **Forget my
 voice** deletes it. Voice ID needs on-device hearing (Nova.app, or a window streaming its microphone): speech a

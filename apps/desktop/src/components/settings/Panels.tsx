@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ClientEvent, OrbPrefs, Phase } from '@nova/core/protocol';
-import { isEntryName, personalize, type SettingsSnapshot, type VoiceTestResult } from '@nova/core/settings';
+import { isEntryName, personalize, type SettingsSnapshot, type VoiceEnrollStep, type VoiceTestResult } from '@nova/core/settings';
 import { ParticleOrb } from '../ParticleOrb';
+import { appLevel } from '../../lib/shell';
 import { Info, SecretStatus, Switch, TextInput, type Save } from './Controls';
 
 type ServerEntry = { url?: string; structuredOutputs?: boolean };
@@ -118,7 +119,7 @@ export function VoiceIdPanel({ snapshot, name, result, onAction }: ActionProps) 
   const v = snapshot.voiceId;
   const browser = snapshot.hearing.status.engine === 'browser';
   const [busy, setBusy] = useBusy([v.installed, v.enrolled, v.enrolling?.step, Boolean(v.testing), v.keyword.set, v.keyword.overriddenAt], result);
-  const act = (action: 'install' | 'enroll' | 'test' | 'cancel' | 'forget' | 'keyword-clear' | 'override-end') => (setBusy(true), onAction({ type: 'voiceid', action }));
+  const act = (action: 'install' | 'enroll' | 'improve' | 'test' | 'cancel' | 'forget' | 'keyword-clear' | 'override-end') => (setBusy(true), onAction({ type: 'voiceid', action }));
   const idle = v.installed && !v.enrolling && !v.testing;
   return (
     <div className="tile">
@@ -128,7 +129,9 @@ export function VoiceIdPanel({ snapshot, name, result, onAction }: ActionProps) 
         <Info label="Voice ID" text={personalize("With Voice ID on, Nova listens to you alone: other voices are ignored, even saying its name, and a TV can't answer its questions. When it can't tell (a very short \"yes\"), it says so - holding the talk shortcut always counts as you. To set it up, read six short phrases where it's quiet; Test my voice then shows whether it knows you. Your voiceprint is made and kept on this Mac, and never leaves it.", name)} />
         <span className="muted">
           {v.enrolling
-            ? `learning your voice · ${v.enrolling.step} of ${v.enrolling.of}`
+            ? v.enrolling.phase === 'check'
+              ? `checking it's you · ${v.enrolling.step} of ${v.enrolling.of} in a row`
+              : `learning your voice · ${v.enrolling.step} of ${v.enrolling.of}`
             : v.testing
               ? 'testing your voice'
               : v.keyword.overriddenAt
@@ -162,16 +165,17 @@ export function VoiceIdPanel({ snapshot, name, result, onAction }: ActionProps) 
           </button>
         )}
       </div>
-      {v.enrolling && (
-        <div className="banner">
-          Say: <strong>“{v.enrolling.say}”</strong>
-        </div>
-      )}
+      {v.enrolling && <Enrolling enrolling={v.enrolling} />}
       {idle && v.enrolled && (
         <div className="voice-test__offer">
           <button type="button" className="btn btn--primary" disabled={busy || browser} onClick={() => act('test')}>
             Test my voice
           </button>
+          {v.improvable && (
+            <button type="button" className="btn btn--ghost" disabled={busy || browser} onClick={() => act('improve')}>
+              Improve my voice
+            </button>
+          )}
           <span className="muted">{personalize('Say anything, and see whether Nova knows it was you.', name)}</span>
         </div>
       )}
@@ -205,6 +209,66 @@ export function VoiceIdPanel({ snapshot, name, result, onAction }: ActionProps) 
 }
 
 const percent = (x: number) => `${Math.round(Math.max(0, Math.min(1, x)) * 100)}%`;
+
+/** The microphone's level as the Mac app hears it, for the setup - drawn every frame, never through React. */
+function LevelMeter() {
+  const bar = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    let raf = 0;
+    const draw = () => {
+      bar.current?.style.setProperty('--level', String(Math.min(1, Math.max(0, appLevel.current ?? 0))));
+      raf = requestAnimationFrame(draw);
+    };
+    raf = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+  return (
+    <span className="voice-meter-live" aria-hidden>
+      <span ref={bar} className="voice-meter-live__bar" />
+    </span>
+  );
+}
+
+const HOW: Record<VoiceEnrollStep['kind'], string> = { normal: 'as usual', far: 'a step back', quiet: 'quietly', free: 'talking freely', check: 'check' };
+
+/** Setting up (or improving): what to say now and how, the microphone's level, and what each thing said came to. */
+function Enrolling({ enrolling: e }: { enrolling: NonNullable<SettingsSnapshot['voiceId']['enrolling']> }) {
+  return (
+    <div className="voice-enroll">
+      <div className="banner">
+        {e.hint && <span className="voice-enroll__hint">{e.hint}</span>}
+        {e.phase === 'check' ? 'To check it knows you, say: ' : 'Say: '}
+        <strong>“{e.say}”</strong>
+      </div>
+      <div className="voice-enroll__level">
+        <span className="muted">Your microphone</span>
+        <LevelMeter />
+      </div>
+      {e.done.length > 0 && (
+        <ol className="voice-enroll__done">
+          {[...e.done].reverse().slice(0, 6).map((d, i) => (
+            <li key={`${e.done.length - i}`} className={d.ok ? 'is-ok' : 'is-again'}>
+              <span className="voice-enroll__mark" aria-label={d.ok ? 'taken' : 'say it again'}>
+                {d.ok ? '✓' : '↻'}
+              </span>
+              <span className="voice-enroll__text">
+                <span>
+                  {HOW[d.kind]} · “{d.say.length > 48 ? `${d.say.slice(0, 46)}…` : d.say}”{d.score !== undefined ? ` · match ${Math.round(d.score * 100)}%` : ''}
+                </span>
+                {d.why && <span className="muted">{d.why}</span>}
+                {d.level !== undefined && (
+                  <span className="muted voice-enroll__stats">
+                    {d.level} dB · {d.snr} dB over the room · {d.speech} s of speech
+                  </span>
+                )}
+              </span>
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
+  );
+}
 
 /** "at 10:42" today, "on Mon at 10:42" before. */
 function saidAt(iso: string) {

@@ -5,7 +5,7 @@
 - [x] Make the transcript text size adjustable
 - [x] Add a "Test my voice" option in Settings → Voice → Voice ID so after setting up, I can check it recognises my voice
 - [x] In Settings, hide each label's description behind an info icon next to the label, and show the description when I hover over the icon
-- [ ] Give Voice ID a master override keyword that works anywhere, from any voice, and overrides any Voice ID that's already set up
+- [x] Give Voice ID a master override keyword that works anywhere, from any voice, and overrides any Voice ID that's already set up
 - [x] Make the response cards that show on screen after a reply close by themselves after a few seconds
 - [ ] Make Voice ID recognise my voice reliably — it's hit or miss and often says it couldn't tell it was me, even though I set it up with my own voice. Leads:
   - [x] Speech a window hears itself (not the Mac app's ear) never gets a voiceprint, so with Voice ID on it's always "unsure" → "I couldn't tell that was you" (`apps/daemon/src/server.ts:695`). Route that audio through Voice ID too, or say which ear is listening

@@ -2,7 +2,7 @@ import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { barsFrom, consistent, cosine, enrollFrom, judge, leaveOneOut, learnFrom, migrateVoiceprint, VoiceId, VoiceprintStore, type StoredVoiceprint } from '../src/hearing/voiceid.ts';
+import { barsFrom, consistent, cosine, enrollFrom, judge, leaveOneOut, learnFrom, migrateVoiceprint, scoreOf, VoiceId, VoiceprintStore, type StoredVoiceprint } from '../src/hearing/voiceid.ts';
 import { Keyword } from '../src/hearing/keyword.ts';
 
 /** Voiceprints for tests: a person's is their direction in 256-d, plus a little noise each time they speak. */
@@ -157,7 +157,12 @@ describe('Voice ID, set up and at work', () => {
     return { voice, store, turnOn, dir };
   }
 
-  it('needs its model to set up, then learns the voice from six phrases and switches itself on', async () => {
+  /** Says each collecting step of the setup (as usual, a step back, quietly, talking freely) in the same voice. */
+  const collect = (voice: VoiceId, say: () => number[], steps = 11) => {
+    for (let i = 0; i < steps; i++) expect(voice.enroll(say(), i === steps - 1 ? 16 : 3, 'phrase')).toBe(true);
+  };
+
+  it('needs its model, then learns the voice as usual, a step back, quietly and talking - checks it - and switches itself on', async () => {
     const without = await setup({ model: false });
     await expect(without.voice.start()).rejects.toThrow(/needs its model/);
 
@@ -165,31 +170,81 @@ describe('Voice ID, set up and at work', () => {
     expect(voice.active()).toBeNull(); // nothing to check yet
     expect(await voice.start()).toMatch(/Manuel, what's on my calendar today/);
     expect(voice.active()).not.toBeNull(); // setting up: prints are wanted
+    expect(voice.status().enrolling).toMatchObject({ step: 1, of: 11, kind: 'normal', phase: 'collect' });
     expect(voice.enroll(you(), 0.6, 'too short')).toBe(true);
-    expect(voice.status()).toMatchObject({ enrolling: { step: 1, of: 6 }, message: expect.stringMatching(/too short/) });
-    voice.enroll(you(), 2.5, 'one');
-    expect(voice.enroll(other(), 2.5, 'someone else')).toBe(true);
+    expect(voice.status()).toMatchObject({ enrolling: { step: 1, done: [{ ok: false, why: expect.stringMatching(/too short/) }] } });
+    voice.enroll(you(), 3, 'one');
+    expect(voice.enroll(other(), 3, 'someone else')).toBe(true);
     expect(voice.status()).toMatchObject({ enrolling: { step: 2 }, message: expect.stringMatching(/didn't sound like the others/) });
-    for (let i = 0; i < 5; i++) voice.enroll(you(), 2.5, 'phrase');
+    collect(voice, () => you(), 10);
+    expect(voice.status().enrolling).toMatchObject({ phase: 'check', step: 1, of: 3, kind: 'check' });
+    for (let i = 0; i < 3; i++) voice.enroll(you(), 3, 'check');
     await vi.waitFor(() => expect(turnOn).toHaveBeenCalled());
-    expect(store.current).toMatchObject({ enrolled: 6 });
-    expect(voice.status()).toMatchObject({ enrolled: true, on: true, enrolling: null });
-    expect(voice.enroll(you(), 2.5, 'after')).toBe(false); // done: turns go to Nova again
+    expect(store.current).toMatchObject({ enrolled: 11, conditions: ['normal', 'normal', 'normal', 'normal', 'normal', 'normal', 'far', 'far', 'quiet', 'quiet', 'free'] });
+    expect(store.current!.centroids!.map((c) => c.condition)).toEqual(['normal', 'far', 'quiet', 'free']);
+    expect(voice.status()).toMatchObject({ enrolled: true, on: true, enrolling: null, improvable: true, message: expect.stringMatching(/last 3 checks all came out as you/) });
+    expect(voice.enroll(you(), 3, 'after')).toBe(false); // done: turns go to Nova again
+  });
+
+  it("takes only a recording good enough to learn from, and says why when it isn't", async () => {
+    const { voice } = await setup();
+    await voice.start();
+    const silence = new Int16Array(16_000 * 3);
+    expect(voice.enroll(you(), 3, 'phrase', silence)).toBe(true);
+    expect(voice.status().enrolling).toMatchObject({ step: 1, done: [{ ok: false, why: expect.stringMatching(/too quiet/) }] });
+    const loud = new Int16Array(16_000 * 3).fill(32_767);
+    voice.enroll(you(), 3, 'phrase', loud);
+    expect(voice.status().enrolling!.done.at(-1)).toMatchObject({ ok: false, why: expect.stringMatching(/too loud and distorted/) });
+    expect(voice.status().enrolling!.step).toBe(1); // not taken either time
+  });
+
+  it("learns from a check that doesn't come out as the user yet, and needs three in a row - or goes on after seven", async () => {
+    const { voice, store, turnOn } = await setup();
+    await voice.start();
+    collect(voice, () => you());
+    // Like the user, but not enough (a match around 0.58): learned from, and the count starts again.
+    const halfway = (seed: number) => unit(you().map((x, i) => x + 1.4 * person(seed)()[i]!));
+    voice.enroll(you(), 3, 'check');
+    voice.enroll(halfway(100), 3, 'check');
+    expect(voice.status().enrolling).toMatchObject({ phase: 'check', step: 1, done: expect.arrayContaining([expect.objectContaining({ kind: 'check', ok: false, why: expect.stringMatching(/learned from it/) })]) });
+    for (let i = 0; i < 3; i++) voice.enroll(you(), 3, 'check');
+    await vi.waitFor(() => expect(turnOn).toHaveBeenCalled());
+    expect(store.current!.enrolled).toBe(12); // the one that didn't pass was learned from
+
+    const again = await setup();
+    await again.voice.start();
+    collect(again.voice, () => you());
+    for (let i = 0; i < 7; i++) again.voice.enroll(halfway(200 + i), 3, 'check');
+    await vi.waitFor(() => expect(again.turnOn).toHaveBeenCalled());
+    expect(again.voice.status().message).toMatch(/may still miss you now and then/);
   });
 
   it('starts over from the phrases that agree when the first one was the odd one out', async () => {
     const { voice, turnOn, store } = await setup();
     await voice.start();
-    voice.enroll(other(), 2.5, 'the TV, first'); // taken: nothing to compare it with yet
-    voice.enroll(you(), 2.5, 'the user');
+    voice.enroll(other(), 3, 'the TV, first'); // taken: nothing to compare it with yet
+    voice.enroll(you(), 3, 'the user');
     expect(voice.status()).toMatchObject({ enrolling: { step: 2 }, message: expect.stringMatching(/didn't sound like the others/) });
-    voice.enroll(you(), 2.5, 'the user again'); // alike, and both unlike the first: the first goes
+    voice.enroll(you(), 3, 'the user again'); // alike, and both unlike the first: the first goes
     expect(voice.status()).toMatchObject({ enrolling: { step: 3 } });
     expect(voice.status().message).toBeUndefined();
-    for (let i = 0; i < 4; i++) voice.enroll(you(), 2.5, 'phrase');
+    collect(voice, () => you(), 9);
+    for (let i = 0; i < 3; i++) voice.enroll(you(), 3, 'check');
     await vi.waitFor(() => expect(turnOn).toHaveBeenCalled());
     expect(cosine(store.current!.print, you())).toBeGreaterThan(store.current!.accept);
     expect(cosine(store.current!.print, other())).toBeLessThan(store.current!.reject);
+  });
+
+  it('improves the voice with a few more phrases, kept with the ones before - no setting up again', async () => {
+    const { voice, store } = await setup({ enabled: true });
+    await expect(voice.improve()).rejects.toThrow(/set it up again/); // nothing kept to add to
+    await store.set({ ...enrollFrom([you(), you(), you(), you(), you(), you()], 'wespeaker-v2'), learned: 4 });
+    expect(await voice.improve()).toMatch(/read me my last message/);
+    expect(voice.status().enrolling).toMatchObject({ of: 5, phase: 'collect' });
+    collect(voice, () => you(), 5);
+    for (let i = 0; i < 3; i++) voice.enroll(you(), 3, 'check');
+    await vi.waitFor(() => expect(store.current!.enrolled).toBe(11));
+    expect(store.current).toMatchObject({ learned: 4, conditions: expect.arrayContaining(['far', 'free']) });
   });
 
   it("decides whose each turn is only when it's on - and learns only from the user", async () => {
@@ -315,6 +370,35 @@ describe('Voice ID, set up and at work', () => {
       enabled = false;
       await store.set(enrollFrom([you(), you(), you(), you()], 'wespeaker-v2'));
       expect(voice.unlock('pineapple express')).toBeNull(); // Voice ID switched off: nothing to override
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('matches the closest of the ways the user was heard, and learns from what they say with the shortcut', async () => {
+    const { voice, store } = await setup({ enabled: true });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const room = person(41);
+      const far = () => unit(you().map((x, i) => x + 0.7 * room()[i]!)); // the user from across the room: alike, not the same
+      const set = enrollFrom([you(), you(), you(), you(), far(), far()], 'wespeaker-v2', new Date(), ['normal', 'normal', 'normal', 'normal', 'far', 'far']);
+      await store.set(set);
+      const turn = far();
+      expect(scoreOf(set, turn)).toBeGreaterThan(cosine(set.print, turn)); // the far voiceprint is closer than the average
+      // Said with the talk shortcut: the user's - learned from.
+      voice.confirmed(you(), 3, 'open slack');
+      expect(store.current!.learned).toBe(1);
+      // An unsure turn, then the same said with the shortcut: both are learned from.
+      const unsure = unit(you().map((x, i) => x + 1.4 * other()[i]!));
+      expect(voice.decide(unsure, 3, { text: 'manuel open the report' })).toBe('unsure');
+      voice.confirmed(you(), 3, 'open the report');
+      expect(store.current!.learned).toBe(3);
+      // Something else said with the shortcut doesn't vouch for the unsure turn before it; clearly someone else teaches nothing.
+      voice.decide(unsure, 3, { text: 'what is the weather' });
+      voice.confirmed(you(), 3, 'play some music');
+      expect(store.current!.learned).toBe(4);
+      voice.confirmed(other(), 3, 'play some music');
+      expect(store.current!.learned).toBe(4);
     } finally {
       log.mockRestore();
     }

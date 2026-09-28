@@ -245,7 +245,7 @@ export type ClientEvent =
   | { type: 'hands-refresh' }
   /** Voice ID (Settings → Voice): get its model, learn the user's voice (again), stop, or forget it. */
   /** Voice ID: its model, setting it up or testing it, forgetting it - and the master keyword (set, clear, back on). */
-  | { type: 'voiceid'; action: 'install' | 'enroll' | 'test' | 'cancel' | 'forget' | 'keyword-set' | 'keyword-clear' | 'override-end'; keyword?: string }
+  | { type: 'voiceid'; action: 'install' | 'enroll' | 'improve' | 'test' | 'cancel' | 'forget' | 'keyword-set' | 'keyword-clear' | 'override-end'; keyword?: string }
   /** Sign in to an integration with the browser, sign out of one, or try connecting again. */
   | { type: 'integration-sign-in'; name: string }
   | { type: 'integration-sign-out'; name: string }

@@ -472,6 +472,20 @@ select.setting__input { width: auto; max-width: 320px; }
 /* Voice ID's test: each thing said, and where its match falls between the bars */
 .voice-test { display: grid; gap: 10px; }
 .voice-keyword { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+/* Setting Voice ID up: what to say, the microphone's level, and each phrase with a ✓ or why to say it again. */
+.voice-enroll { display: grid; gap: 10px; }
+.voice-enroll__hint { display: block; font-size: 12px; opacity: 0.85; margin-bottom: 2px; }
+.voice-enroll__level { display: flex; align-items: center; gap: 10px; }
+.voice-enroll__level .muted { font-size: 12px; flex: none; }
+.voice-meter-live { position: relative; flex: 1; max-width: 260px; height: 6px; border-radius: 999px; background: rgba(255,255,255,0.08); overflow: hidden; }
+.voice-meter-live__bar { position: absolute; inset: 0 auto 0 0; width: calc(var(--level, 0) * 100%); border-radius: inherit; background: linear-gradient(90deg, var(--ok), var(--warn) 85%, var(--bad)); transition: width 0.06s linear; }
+.voice-enroll__done { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.voice-enroll__done li { display: grid; grid-template-columns: 18px 1fr; gap: 8px; font-size: 12.5px; }
+.voice-enroll__mark { font-weight: 700; text-align: center; }
+.voice-enroll__done li.is-ok .voice-enroll__mark { color: var(--ok); }
+.voice-enroll__done li.is-again .voice-enroll__mark { color: var(--warn); }
+.voice-enroll__text { display: grid; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.voice-enroll__stats { font-family: var(--mono); font-size: 11px; }
 .voice-keyword .setting__input { width: 250px; }
 .voice-override { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .voice-override > span { flex: 1; min-width: 220px; }

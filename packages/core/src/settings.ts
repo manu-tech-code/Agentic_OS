@@ -77,6 +77,20 @@ export interface ShellStatus {
 }
 
 /** How Nova hears you right now. */
+/** One thing said while setting Voice ID up: whether it was taken, and why not - with how it sounded. */
+export interface VoiceEnrollStep {
+  say: string;
+  kind: 'normal' | 'far' | 'quiet' | 'free' | 'check';
+  ok: boolean;
+  why?: string;
+  /** Speech loudness (dB below full scale), how far above the room's noise (dB), seconds of speech. */
+  level?: number;
+  snr?: number;
+  speech?: number;
+  /** A check's match against the voiceprint as it stands. */
+  score?: number;
+}
+
 /** One thing said while testing Voice ID: whose voice it sounded like, how closely, and what Nova would do. */
 export interface VoiceTestResult {
   speaker: 'you' | 'not-you' | 'unsure';
@@ -1121,7 +1135,19 @@ export interface SettingsSnapshot {
     enrolled: boolean;
     on: boolean;
     learned: number;
-    enrolling: { step: number; of: number; say: string } | null;
+    /** Setting up (or improving): the step now, what to say and how, and what each thing said so far came to. */
+    enrolling: {
+      step: number;
+      of: number;
+      say: string;
+      kind: VoiceEnrollStep['kind'];
+      hint?: string;
+      /** Collecting the voice, or checking it at the end - `of` is then the checks in a row it needs. */
+      phase: 'collect' | 'check';
+      done: VoiceEnrollStep[];
+    } | null;
+    /** Improve my voice can add to it: its setup phrases were kept. */
+    improvable: boolean;
     /** Testing: what each thing said since the test began sounded like, newest first. */
     testing: { results: VoiceTestResult[] } | null;
     /** The bars a turn's match (0-1) is judged by: at or above `accept` it's the user, below `reject` it isn't. */
