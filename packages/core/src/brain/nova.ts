@@ -2,7 +2,7 @@ import type { AgentHost, AgentStep, ApprovalRequest } from '../agents.ts';
 import { topProbability } from '../decision/distribution.ts';
 import { aliasesFor, matchName, nameTokens } from '../decision/reflex/names.ts';
 import type { DecisionEngine } from '../decision/types.ts';
-import { asksToAct, gateFor, MIN_CONFIDENCE } from '../guardian.ts';
+import { asksToAct, gateFor, MIN_CONFIDENCE, type PermissionMode, type Permissions } from '../guardian.ts';
 import { mayRememberTool, toolRisk } from '../integrations.ts';
 import type { ActivityItem, Card, Phase, ServerEvent, UiPrefs, UndoStep } from '../protocol.ts';
 import type { HearingStatus } from '../settings.ts';
@@ -129,10 +129,11 @@ export interface NovaOptions {
   /** The talk shortcut as the user presses it ("⌥Space"), for what Nova says about it. */
   talkShortcut?: string;
   /**
-   * Whether Nova asks before doing what the user told it to (unset: it does). Off, what the user says to do
-   * is done once Nova is sure what was said - a brain's steps for it too - and only what nobody asked for,
-   * and weighty things (money, what can't be taken back), are asked about.
+   * How often Nova checks with the user first (Settings → Privacy & trust → Permissions; see `PermissionMode`).
+   * Unset, `askFirst` decides, as before Permissions: false is "Do what I ask", anything else "Ask first".
    */
+  permissions?: Permissions;
+  /** Older than `permissions`: whether Nova asks before doing what the user told it to (unset: it does). */
   askFirst?: boolean;
   clock?: () => number;
 }
@@ -151,6 +152,16 @@ interface Resolved {
   prepared?: unknown;
 }
 
+/**
+ * What a "yes, always" is kept as: a rule's key and how Settings names it. `limited`: kept only with Remember "yes,
+ * always" for good on - a step on the screen, a service's tool that changes things, an agent's risky command.
+ */
+interface Remember {
+  key: string;
+  label: string;
+  limited?: boolean;
+}
+
 interface Approval {
   /** The agent task asking, if one is (tool calls from an answering brain have none). */
   taskId?: string;
@@ -159,8 +170,8 @@ interface Approval {
   prompt: string;
   /** e.g. 'Claude to run "npm test"', for the activity log. */
   summary: string;
-  /** What "yes, always" would remember, when it may. */
-  remember?: { key: string; label: string };
+  /** What "yes, always" would remember. */
+  remember?: Remember;
   /** What "go ahead with all of it" covers for the rest of this task. */
   session?: { key: string; label: string };
   resolve: (ok: boolean) => void;
@@ -493,9 +504,11 @@ export class NovaBrain implements ToolHost {
     // Answering a voice that got in with the master keyword: none of its steps delete, spend or can't be taken back.
     if (this.answeringByAnyone && !from.task && this.heldBack(skill, context)) return `${OVERRIDDEN} It was not done.`;
     const gate = gateFor(skill.tierFor?.(context) ?? skill.tier);
-    if (gate === 'tap') return `${skill.tapPrompt?.(context) ?? 'That needs a confirmation on screen.'} It was not done.`;
-    if (gate === 'confirm') {
-      const remember = skill.rememberAs?.(context);
+    if (gate === 'tap' && !this.unasked) return `${skill.tapPrompt?.(context) ?? 'That needs a confirmation on screen.'} It was not done.`;
+    if (gate === 'confirm' && this.freeFor(skill, context)) {
+      // Don't ask: a brain's own steps, and an agent's, need no yes either.
+    } else if (gate === 'confirm') {
+      const remember = this.ruleFor(skill, context);
       // "Go ahead with all of it" covers the brain's current answer - or one agent task, never the others.
       const own = skill.session?.(context) ?? undefined;
       const session = own && from.task ? { ...own, key: `${own.key}@${from.task}` } : own;
@@ -503,14 +516,14 @@ export class NovaBrain implements ToolHost {
         // "Go ahead with all of it", for this task: no need to ask again.
       } else if (this.toldTo(skill, context, from)) {
         // The user's own words asked for this ("click send"): the brain's steps for it are what they asked for.
-      } else if (!(remember && this.opts.trust?.allows(remember.key))) {
+      } else if (!(this.opts.trust?.allows(remember.key) && !(this.stillAsks && skill.weighty?.(context)))) {
         const prompt = skill.confirmPrompt?.(context) ?? `${caller} wants to ${name.replace(/_/g, ' ')}. Allow it?`;
         if (this.over(from)) return 'That answer is over, so it was not done.';
         // While the user is asked, what's about to happen shows on screen (the button about to be clicked).
         const unshow = await skill.preview?.(context).catch(() => undefined);
         const allowed = await this.approve(prompt, `${caller}: ${name.replace(/_/g, ' ')}`, {
           taskId: from.task,
-          remember: remember ?? undefined,
+          remember,
           session,
           thinking: from.thinking,
         }).finally(() => unshow?.());
@@ -541,11 +554,12 @@ export class NovaBrain implements ToolHost {
     if (!from.task) this.lesson?.calls.push(call);
     // The user's choice sets the tier; a tool they didn't allow that moves money needs a tap on screen, whatever the hub said.
     const gate = gateFor(tool.tier >= 2 && toolRisk(name) === 'money' ? 3 : tool.tier);
-    if (gate === 'tap') return `Moving money through ${tool.label} needs a tap on screen, never a spoken yes - so it was not done.`;
+    if (gate === 'tap' && !this.unasked) return `Moving money through ${tool.label} needs a tap on screen, never a spoken yes - so it was not done.`;
     // "Yes, always" is remembered only for a tool that just reads; the user allows any other in Settings → Integrations.
     const action = name.slice(name.indexOf('__') + 2).replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ').toLowerCase();
-    const remember = mayRememberTool(tool) ? { key: `tool:${name}`, label: `Use ${tool.label} to ${action}` } : undefined;
-    if (gate === 'confirm' && !(remember && this.opts.trust?.allows(remember.key))) {
+    // A tool that changes things is kept for good only with Remember "yes, always" for good on.
+    const remember: Remember = { key: `tool:${name}`, label: `Use ${tool.label} to ${action}`, limited: !mayRememberTool(tool) };
+    if (gate === 'confirm' && this.mode !== 'free' && !this.opts.trust?.allows(remember.key)) {
       if (this.over(from)) return 'That answer is over, so it was not done.';
       const allowed = await this.approve(`${caller} wants to use ${tool.summary(args)}. Allow it?`, `${caller}: ${tool.label}`, { taskId: from.task, remember, thinking: from.thinking });
       if (!allowed) return 'The user said no, so it was not done.';
@@ -683,7 +697,7 @@ export class NovaBrain implements ToolHost {
             return this.say(utterance, OVERRIDDEN);
           }
           this.opts.engine.learn?.({ utterance: pending.utterance, question: 'intent', choice: pending.skill.id, source: 'confirmed' });
-          const remembered = this.rememberYes(pending.skill.rememberAs?.(ctx), utterance, pending.skill.session?.(ctx) ?? undefined);
+          const remembered = this.rememberYes(this.ruleFor(pending.skill, ctx), utterance, pending.skill.session?.(ctx) ?? undefined);
           return this.execute(pending.skill, pending.utterance, pending.resolved, utterance, pending.by, remembered);
         }
         if (intent === 'confirm_no' || intent === 'stop') {
@@ -755,11 +769,13 @@ export class NovaBrain implements ToolHost {
       return this.say(utterance, OVERRIDDEN);
     }
     // A tap on screen, never a spoken yes (cancelling all the reminders): nothing is done, so saying where to do it
-    // needs only a fair idea of what was meant.
-    if (gateFor(tier) === 'tap' && p >= MIN_CONFIDENCE[1]) {
+    // needs only a fair idea of what was meant. With Don't ask and nothing kept back, the user's word does it - once
+    // Nova is as sure of it as of any change.
+    const unasked = this.unasked;
+    if (gateFor(tier) === 'tap' && !unasked && p >= MIN_CONFIDENCE[1]) {
       return this.say(utterance, skill.tapPrompt?.(ctx) ?? 'That needs a confirmation on screen.');
     }
-    if (p < MIN_CONFIDENCE[tier]) {
+    if (p < MIN_CONFIDENCE[unasked && tier === 3 ? 2 : tier]) {
       return this.say(utterance, "Sorry, I'm not sure what you meant. Could you say that again?");
     }
     if (skill.needsApp && !resolved.app) {
@@ -770,12 +786,15 @@ export class NovaBrain implements ToolHost {
       this.ask({ kind: 'slot', id: uid(), prompt: 'Which project?', slot: 'project', skill, resolved, utterance, by });
       return this.say(utterance, 'Which project?');
     }
-    // The user said to do it (and Nova is sure what they said, above): done - unless it's weighty.
-    if (gateFor(tier) === 'confirm' && this.opts.askFirst === false && !skill.weighty?.(ctx)) return this.execute(skill, utterance, resolved, utterance, by);
+    // The user said to do it (and Nova is sure what they said, above): done - unless it's weighty and the user's
+    // Permissions still ask about that (or ask about everything).
+    if ((gateFor(tier) === 'confirm' || (gateFor(tier) === 'tap' && unasked)) && this.mode !== 'ask' && (!skill.weighty?.(ctx) || unasked)) {
+      return this.execute(skill, utterance, resolved, utterance, by);
+    }
     if (gateFor(tier) === 'confirm') {
-      // Something the user said "yes, always" to: no need to ask.
-      const remember = skill.rememberAs?.(ctx);
-      if (remember && this.opts.trust?.allows(remember.key)) return this.execute(skill, utterance, resolved, utterance, by);
+      // Something the user said "yes, always" to: no need to ask - unless it's weighty and that's always asked.
+      const remember = this.ruleFor(skill, ctx);
+      if (this.opts.trust?.allows(remember.key) && !(this.stillAsks && skill.weighty?.(ctx))) return this.execute(skill, utterance, resolved, utterance, by);
       const prompt = skill.confirmPrompt?.(ctx) ?? 'Are you sure?';
       const id = uid();
       this.ask({ kind: 'confirm', id, prompt, skill, resolved, utterance, by });
@@ -965,7 +984,44 @@ export class NovaBrain implements ToolHost {
   }
 
   private toldTo(skill: Skill, context: SkillContext, from: ToolFrom) {
-    return this.opts.askFirst === false && !from.task && asksToAct(context.heard ?? '') && !skill.weighty?.(context);
+    return this.mode !== 'ask' && !from.task && asksToAct(context.heard ?? '') && !skill.weighty?.(context);
+  }
+
+  /** The user's Permissions: how often Nova checks with them first. */
+  private get mode(): PermissionMode {
+    return this.opts.permissions?.mode ?? (this.opts.askFirst === false ? 'auto' : 'ask');
+  }
+
+  /** Paying, deleting for good and an agent's risky commands are always asked - in every mode, over a "yes, always". */
+  private get stillAsks() {
+    return this.opts.permissions?.stillAsk ?? true;
+  }
+
+  /** "Yes, always" is kept for good whatever it's said to (unset, as before the setting: only what it names narrowly). */
+  private get alwaysForGood() {
+    return this.opts.permissions?.alwaysForGood ?? false;
+  }
+
+  /** Don't ask, with nothing kept back: nothing at all waits for a yes. */
+  private get unasked() {
+    return this.mode === 'free' && !this.stillAsks;
+  }
+
+  /**
+   * What "yes, always" to this skill is kept as: its own rule (this app, this file) - or, for a step on the screen, using
+   * the computer at all, or else the skill itself. Those two are kept for good only with the setting on.
+   */
+  private ruleFor(skill: Skill, context: SkillContext): Remember {
+    const own = skill.rememberAs?.(context);
+    if (own) return own;
+    const session = skill.session?.(context);
+    if (session) return { key: session.key, label: session.label.replace(/ for this task$/i, ''), limited: true };
+    return { key: `skill:${skill.id}`, label: skill.id.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase()), limited: true };
+  }
+
+  /** Don't ask: a step needs no yes - whoever takes it - unless it's weighty (money, what can't be taken back) and that's still asked. */
+  private freeFor(skill: Skill, context: SkillContext) {
+    return this.mode === 'free' && (this.unasked || !skill.weighty?.(context));
   }
 
   /** What "go ahead with all of it" allows right now. */
@@ -1211,10 +1267,19 @@ export class NovaBrain implements ToolHost {
   private requestApproval(taskId: string, agent: AgentRef, project: string, request: ApprovalRequest): Promise<boolean> {
     const detail = request.detail?.replace(/\s+/g, ' ').trim() ?? '';
     const risky = request.tool === 'Bash' && RISKY_COMMAND.test(detail);
-    // Without a detail (the command, the site, the file) "always" would cover the whole tool: then it's asked each time.
-    const remember = request.tool && detail && !risky ? { key: `agent:${agent.name}:${project}:${request.tool}:${detail}`, label: `${agent.label} may ${request.action} in ${project}` } : undefined;
-    if (remember && this.opts.trust?.allows(remember.key)) {
+    // "Yes, always" is this command (the site, the file) - or, without one, the whole tool. A risky command, or a whole
+    // tool, is kept for good only with Remember "yes, always" for good on - and a risky one is still asked while
+    // paying, deleting for good and risky commands always are.
+    const remember: Remember | undefined = request.tool
+      ? { key: `agent:${agent.name}:${project}:${request.tool}${detail ? `:${detail}` : ''}`, label: `${agent.label} may ${detail ? request.action : `use ${request.tool}`} in ${project}`, limited: risky || !detail }
+      : undefined;
+    if (remember && this.opts.trust?.allows(remember.key) && !(risky && this.stillAsks)) {
       this.activity(`${agent.label}: ${request.action} (you said always)`, 'done', undefined, { by: agent.label });
+      return Promise.resolve(true);
+    }
+    // Don't ask: the agent goes ahead - a risky command still asks unless the user turned that off too.
+    if (this.mode === 'free' && (!risky || !this.stillAsks)) {
+      this.activity(`${agent.label}: ${request.action} (Don't ask)`, 'done', undefined, { by: agent.label });
       return Promise.resolve(true);
     }
     return this.approve(`${agent.label} wants to ${request.action} in ${project}. Allow it?`, `${agent.label} to ${request.action}`, { taskId, remember });
@@ -1285,7 +1350,14 @@ export class NovaBrain implements ToolHost {
     }
     const id = uid();
     this.pending = { kind: 'approval', id, approval };
-    const body = approval.session ? 'Say "yes", "go ahead with all of it" or "no"' : approval.remember ? 'Say "yes", "yes, always" or "no"' : 'Say "yes" or "no"';
+    const body =
+      approval.session && this.alwaysForGood
+        ? 'Say "yes", "yes, always", "go ahead with all of it" or "no"'
+        : approval.session
+          ? 'Say "yes", "go ahead with all of it" or "no"'
+          : approval.remember
+            ? 'Say "yes", "yes, always" or "no"'
+            : 'Say "yes" or "no"';
     this.card({ id, kind: 'confirm', title: approval.prompt, body });
     this.announce(approval.prompt);
   }
@@ -1379,18 +1451,23 @@ export class NovaBrain implements ToolHost {
    * Remember a "yes, always" (or "for today"): only for what may be remembered. "Go ahead with all
    * of it" - or "always", for a step that's never remembered for good - covers the rest of this task.
    */
-  private rememberYes(remember: { key: string; label: string } | null | undefined, said: string, session?: { key: string; label: string }) {
+  private rememberYes(remember: Remember | null | undefined, said: string, session?: { key: string; label: string }) {
     const scope = alwaysIn(said);
     // A voice that got in with the master keyword allows things once, never for good - nor for the rest of a task.
     if (this.byAnyone) return scope || taskScope(said) ? " Just this once - nothing is allowed for good while Voice ID is off." : '';
-    if (session && (taskScope(said) || (scope && !remember))) {
-      this.sessionYes.set(session.key, this.now() + SESSION_MS);
-      this.activity(`Allowed for this task: ${session.label}`, 'done', undefined, { by: 'you' });
-      return " And I won't ask again during this task.";
-    }
+    const forTask = () => {
+      this.sessionYes.set(session!.key, this.now() + SESSION_MS);
+      this.activity(`Allowed for this task: ${session!.label}`, 'done', undefined, { by: 'you' });
+    };
+    // "Go ahead with all of it": the rest of this task, as the user said.
+    if (session && taskScope(said)) return (forTask(), " And I won't ask again during this task.");
     if (!scope || !this.opts.trust) return '';
-    // Said "always" to something that must be asked every time (a risky command, a tool that changes things): say so.
-    if (!remember) return " I'll still ask each time for that one.";
+    // "Always" to what's kept for good only with the setting on - and it's off: as before it existed, and where to change that.
+    const setting = 'turn on Remember "yes, always" for good in Settings → Privacy & trust';
+    if (!remember || (remember.limited && !this.alwaysForGood)) {
+      if (session) return (forTask(), ` And I won't ask again during this task - to be asked never again, ${setting}.`);
+      return ` I'll still ask each time for that one - unless you ${setting}.`;
+    }
     const today = new Date(this.now());
     const until = scope === 'today' ? `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}` : undefined;
     this.opts.trust.allow(remember.key, remember.label, until).catch((error: Error) => {

@@ -67,4 +67,4 @@ export type {
   WindowFrame,
 } from './skills/types.ts';
 export type { AgentHost, AgentStep, ApprovalRequest, TaskCallbacks } from './agents.ts';
-export { asksToAct, gateFor, MIN_CONFIDENCE, weighty, type Gate } from './guardian.ts';
+export { asksToAct, gateFor, MIN_CONFIDENCE, weighty, type Gate, type PermissionMode, type Permissions } from './guardian.ts';

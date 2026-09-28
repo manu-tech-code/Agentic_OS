@@ -123,7 +123,8 @@ async function buildRuntime(previous?: Runtime): Promise<Runtime> {
   const config = loadConfig(settings, process.env);
   const custom = { ...(await readAgentsFile(config.agentsFile)), ...config.customAgents };
   const folders = [...(await findProjects(config.projectsDir, config.projects))];
-  const agentsKey = JSON.stringify([config.agents, custom, folders, config.agentOptions, config.agentTaskTimeoutMs, config.name]);
+  // The Permissions mode is in it too: an agent answering is told, when it starts, what to do about asking.
+  const agentsKey = JSON.stringify([config.agents, custom, folders, config.agentOptions, config.agentTaskTimeoutMs, config.name, config.permissions.mode]);
   const kept = previous && previous.agentsKey === agentsKey;
   const agents = kept
     ? previous.host
@@ -136,6 +137,7 @@ async function buildRuntime(previous?: Runtime): Promise<Runtime> {
         bridge,
         taskTimeoutMs: config.agentTaskTimeoutMs,
         assistant: config.name,
+        permissions: config.permissions.mode,
       });
   try {
     return await finishRuntime(settings, fileError, config, custom, agents, agentsKey);
@@ -159,7 +161,7 @@ async function finishRuntime(settings: Settings, fileError: string | undefined, 
     reasoning = brain;
   } else if (id) {
     const local = models.resolve(id);
-    if (local) reasoning = new LlmReasoningBrain(local, id, config.name, tools);
+    if (local) reasoning = new LlmReasoningBrain(local, id, config.name, tools, config.permissions.mode);
     else console.warn(`  [answers] ${id} is neither a paired agent nor a model on one of your servers - nobody answers open questions.`);
   }
 
@@ -203,7 +205,7 @@ async function finishRuntime(settings: Settings, fileError: string | undefined, 
       replyTimeoutMs: config.replyTimeoutMs,
       ui: config.ui,
       computerUse: config.hands.computerUse,
-      askFirst: config.askFirst,
+      permissions: config.permissions,
       talkShortcut: formatShortcut(config.presence.shortcut),
     },
   };

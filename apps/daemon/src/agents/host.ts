@@ -4,7 +4,7 @@ import { access, mkdir, readdir } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
-import { withTime, type AgentHost, type ReasoningBrain, type TaskCallbacks, type Turn } from '@nova/core';
+import { withTime, type AgentHost, type PermissionMode, type ReasoningBrain, type TaskCallbacks, type Turn } from '@nova/core';
 import type { Approver, Bridge } from './bridge.ts';
 import { approvalDetail, describeAction, outputReader, tooLongToSay } from './parsers.ts';
 import { customPreset, PRESETS, type AgentPreset, type CustomAgentSpec, type Invocation } from './presets.ts';
@@ -25,6 +25,8 @@ export interface AgentHostOptions {
   taskTimeoutMs: number;
   /** The assistant's name, as agents should know it. */
   assistant: string;
+  /** The user's Permissions, for what an agent answering should do about asking. */
+  permissions?: PermissionMode;
 }
 
 /** How one agent runs: its model, extra CLI arguments, and where its CLI is when it isn't on PATH. */
@@ -159,7 +161,7 @@ export async function createAgentHost(opts: AgentHostOptions): Promise<NovaAgent
     async function* (question: string, history: Turn[], signal?: AbortSignal): AsyncGenerator<string> {
       const out = channel<string>();
       let streamed = false;
-      const invocation = agent.preset.ask(withHistory(withTime(question), history, opts.assistant), { model: agent.model, assistant: opts.assistant, tools });
+      const invocation = agent.preset.ask(withHistory(withTime(question), history, opts.assistant), { model: agent.model, assistant: opts.assistant, permissions: opts.permissions, tools });
       run(agent, invocation, { cwd: scratch, signal, onDelta: (piece) => ((streamed = true), out.push(piece)) }).then(
         (text) => (streamed || out.push(text), out.end()),
         (error) => out.end(error),
@@ -172,7 +174,7 @@ export async function createAgentHost(opts: AgentHostOptions): Promise<NovaAgent
     projects: [...projects.keys()],
     async ask(name, question, history, signal) {
       const agent = find(name);
-      return run(agent, agent.preset.ask(withHistory(question, history, opts.assistant), { model: agent.model, assistant: opts.assistant }), { cwd: scratch, signal });
+      return run(agent, agent.preset.ask(withHistory(question, history, opts.assistant), { model: agent.model, assistant: opts.assistant, permissions: opts.permissions }), { cwd: scratch, signal });
     },
     brain(name) {
       let brain = brains.get(name);
@@ -180,7 +182,7 @@ export async function createAgentHost(opts: AgentHostOptions): Promise<NovaAgent
         const agent = find(name);
         const tools = opts.bridge?.tools(agent.preset.label);
         if (agent.preset.session) {
-          brain = new AgentSession(agent, { cwd: scratch, assistant: opts.assistant, tools, env: (extra) => agentEnv(agent.preset.dropEnv, extra) });
+          brain = new AgentSession(agent, { cwd: scratch, assistant: opts.assistant, permissions: opts.permissions, tools, env: (extra) => agentEnv(agent.preset.dropEnv, extra) });
         } else {
           const stream = askOnce(agent, tools);
           brain = {

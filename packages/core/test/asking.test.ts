@@ -165,7 +165,8 @@ describe('a yes or no', () => {
     start(t.nova, 'claude');
     await vi.waitFor(() => expect(t.said().at(-1)).toMatch(/Allow it\?$/));
     await t.nova.handle('yes, always');
-    expect(t.said().some((s) => s === "Okay, go ahead. I'll still ask each time for that one.")).toBe(true);
+    // Without Remember "yes, always" for good (unset here, as before it existed): asked each time - and where to change that.
+    expect(t.said().some((s) => s === 'Okay, go ahead. I\'ll still ask each time for that one - unless you turn on Remember "yes, always" for good in Settings → Privacy & trust.')).toBe(true);
     await vi.waitFor(() => expect(t.said().at(-1)).toMatch(/Allow it\?$/)); // asked again
     expect(t.rules.size).toBe(0);
     await t.nova.handle('no');
