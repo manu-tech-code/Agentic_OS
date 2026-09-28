@@ -42,6 +42,20 @@ export const MODELS: Record<string, ModelSpec> = {
       'config.json': { size: 202, gitSha1: '7df26884a1aaaefbd7a30b37c32a25477cfb4c0e' },
     },
   },
+  // Reflex's sentence model: reads whole sentences (word order, "not") for its classifier, next to potion's word
+  // meanings. Run by transformers.js in its own process (reflex/sentence-worker.ts).
+  'all-MiniLM-L6-v2': {
+    label: 'MiniLM L6 · sentences · 24 MB',
+    repo: 'Xenova/all-MiniLM-L6-v2',
+    revision: '751bff37182d3f1213fa05d7196b954e230abad9',
+    license: 'Apache-2.0',
+    files: {
+      'onnx/model_quantized.onnx': { size: 22_972_370, sha256: 'afdb6f1a0e45b715d0bb9b11772f032c399babd23bfc31fed1c170afc848bdb1' },
+      'tokenizer.json': { size: 711_661, gitSha1: 'c17ed520ed8438736732a54957a69306b8822215' },
+      'config.json': { size: 650, gitSha1: '72147e4ff4426ebedbfa2146c4a0999def51a313' },
+      'tokenizer_config.json': { size: 366, gitSha1: '37fca74771bc76a8e01178ce3a6055a0995f8093' },
+    },
+  },
   'kokoro-82M': {
     label: 'Kokoro 82M · natural voices · 326 MB',
     repo: 'onnx-community/Kokoro-82M-v1.0-ONNX',
@@ -136,6 +150,8 @@ export const MODELS: Record<string, ModelSpec> = {
 export const REFLEX_MODELS = MODELS;
 
 export const DEFAULT_REFLEX_MODEL = 'potion-base-8M';
+/** Reflex's sentence model, for its classifier (optional: without it, Reflex reads word meanings alone). */
+export const SENTENCE_MODEL = 'all-MiniLM-L6-v2';
 export const KOKORO_MODEL = 'kokoro-82M';
 export const PARAKEET_MODEL = 'parakeet-tdt-0.6b-v2';
 export const SMART_TURN_MODEL = 'smart-turn-v3.2';

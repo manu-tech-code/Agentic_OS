@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { agentSkills, buildQuestions, builtinSkills, handsSkills, initiativeSkills, memorySkills, ReflexEvaluationModel, StaticEmbedder, trustSkills } from '@nova/core';
 import { EVAL_AGENTS, EVAL_APPS, EVAL_PROJECTS, REPLIES, SET_A, SET_B, SET_C, SET_D, SET_E } from '../src/reflex/evalSet.ts';
 import { DEFAULT_REFLEX_MODEL, downloadModel, isInstalled, modelsDir, readModelFiles, REFLEX_MODELS } from '../src/models/files.ts';
+import { sentenceEncoder } from '../src/reflex/sentences.ts';
 
 describe('Reflex model files', () => {
   it('pins every model to a revision and checksums', () => {
@@ -99,7 +100,9 @@ describe.skipIf(!installed)('Reflex with its model', () => {
       texts: [...all.filter((c) => !short(c.u) || !replyIntents.has(c.intent)).map((c) => c.u), ...REPLIES.map((r) => r.u).filter((u) => !short(u))],
       names: [...EVAL_APPS, ...EVAL_AGENTS.map((a) => a.name), ...EVAL_PROJECTS],
     };
-    const reflex = new ReflexEvaluationModel({ embedder: StaticEmbedder.fromFiles(DEFAULT_REFLEX_MODEL, await readModelFiles(DEFAULT_REFLEX_MODEL)), learn: false, holdOut });
+    // As Nova runs it: with its sentence model, when that's installed.
+    const sentences = (await sentenceEncoder()) ?? undefined;
+    const reflex = new ReflexEvaluationModel({ embedder: StaticEmbedder.fromFiles(DEFAULT_REFLEX_MODEL, await readModelFiles(DEFAULT_REFLEX_MODEL)), learn: false, holdOut, sentences });
     await reflex.train();
     const host = { agents: EVAL_AGENTS, projects: EVAL_PROJECTS } as never;
     const decide = async (u: string, state: Record<string, unknown> = {}) =>
@@ -139,8 +142,8 @@ describe.skipIf(!installed)('Reflex with its model', () => {
     expect(addressed / cases.length).toBeGreaterThan(0.9);
     expect(apps / withApp.length).toBeGreaterThan(0.95);
     expect(replies / REPLIES.length).toBeGreaterThan(0.9);
-    expect(times[Math.floor(times.length * 0.9)]).toBeLessThan(5);
-  }, 60_000);
+    expect(times[Math.floor(times.length * 0.9)]).toBeLessThan(sentences ? 8 : 5);
+  }, 180_000);
 
   it('trains its classifier in the background once, and keeps it', async () => {
     process.env.NOVA_SETTINGS_FILE = join(mkdtempSync(join(tmpdir(), 'nova-settings-')), 'settings.json');
@@ -183,9 +186,10 @@ describe.skipIf(!installed)('Reflex with its model', () => {
     await forgetLearned(first.model);
     // (`ReflexEvaluationModel.forget()` dropping the head synchronously, so it's never left deciding
     // from a classifier trained on what was just forgotten, is unit-tested directly in packages/core.)
-    // Retrains in the background rather than being left permanently without a classifier.
+    // Retrains in the background rather than being left permanently without a classifier (with the sentence
+    // model, reading every phrasing again takes a while).
     const start = Date.now();
-    while (!first.model?.trained && Date.now() - start < 20_000) await new Promise((r) => setTimeout(r, 200));
+    while (!first.model?.trained && Date.now() - start < 120_000) await new Promise((r) => setTimeout(r, 200));
     expect(first.model?.trained).toBe(true);
-  }, 40_000);
+  }, 180_000);
 });

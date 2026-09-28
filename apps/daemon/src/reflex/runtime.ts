@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 import { fingerprint, ReflexEvaluationModel, StaticEmbedder, type Embedder, type HeadData, type LearnedExample, type SettingsSnapshot } from '@nova/core';
 import { settingsFile } from '../config.ts';
 import { DEFAULT_REFLEX_MODEL, isInstalled, readModelFiles, REFLEX_MODELS } from '../models/files.ts';
+import { sentenceEncoder } from './sentences.ts';
 
 /** Loaded once: the model is 30 MB and never changes while Nova runs. */
 const embedders = new Map<string, Embedder>();
@@ -114,9 +115,12 @@ export async function loadReflex(opts: { learn: boolean; name?: string }): Promi
     // on its own): a saved classifier trained on a since-changed model or reader must retrain.
     const spec = REFLEX_MODELS[name];
     const modelKey = spec ? `${name}@${fingerprint(JSON.stringify([spec.revision, spec.files]))}` : name;
+    // The sentence model, when it's installed: the classifier reads whole sentences too.
+    const sentences = (await sentenceEncoder()) ?? undefined;
     const model: ReflexEvaluationModel = new ReflexEvaluationModel({
       embedder,
       modelKey,
+      sentences,
       learned,
       learn: opts.learn,
       onLearn: () => void saveLearned([...model.learned]),
@@ -125,7 +129,11 @@ export async function loadReflex(opts: { learn: boolean; name?: string }): Promi
       model.useHead(head);
       return model.trained;
     });
-    return { model, status: { ...status, installed: true, learned: learned.length, phrasings: model.trainingExamples().length }, classifier };
+    return {
+      model,
+      status: { ...status, label: sentences ? `${status.label} + MiniLM` : status.label, installed: true, sentences: Boolean(sentences), learned: learned.length, phrasings: model.trainingExamples().length },
+      classifier,
+    };
   } catch (e) {
     console.warn(`[reflex] couldn't load ${name}: ${(e as Error).message}`);
     return none;

@@ -31,13 +31,19 @@ export interface TrainOptions {
   /** Weight decay, which keeps the classifier from leaning on rare words. */
   l2?: number;
   seed?: number;
+  /**
+   * Classes that count fully however many examples they have - background talk: taking it for a request does the
+   * wrong thing, so it mustn't count for less just because there's a lot of it.
+   */
+  full?: string[];
   /** Awaited now and then, so a server stays responsive while it trains. */
   pause?: () => Promise<void>;
 }
 
 /** `trainHead`'s defaults, named so a cache key can include them (see `ReflexEvaluationModel.trainingKey`). */
 // 24 epochs: with Hands' eight intents, 12 left short replies it was trained on ("never mind", "okay") to the classes around them.
-export const DEFAULT_TRAIN_OPTIONS: Required<Omit<TrainOptions, 'pause'>> = { epochs: 24, batch: 32, rate: 0.02, l2: 1e-5, seed: 7 };
+// Background talk ("other") counts fully: over three seeds on sets A, B, D, a little more right and fewer wrong actions.
+export const DEFAULT_TRAIN_OPTIONS: Required<Omit<TrainOptions, 'pause'>> = { epochs: 24, batch: 32, rate: 0.02, l2: 1e-5, seed: 7, full: ['other'] };
 
 export class ReflexHead {
   readonly classes: string[];
@@ -85,7 +91,7 @@ export class ReflexHead {
  * Adam. Deterministic for a given seed.
  */
 export async function trainHead(inputs: Float32Array[], labels: number[], classes: string[], opts: TrainOptions = {}): Promise<HeadData> {
-  const { epochs, batch, rate, l2, seed, pause } = { ...DEFAULT_TRAIN_OPTIONS, ...opts };
+  const { epochs, batch, rate, l2, seed, full, pause } = { ...DEFAULT_TRAIN_OPTIONS, ...opts };
   const n = inputs.length;
   const dim = inputs[0]?.length ?? 0;
   const k = classes.length;
@@ -94,7 +100,7 @@ export async function trainHead(inputs: Float32Array[], labels: number[], classe
   // Rare intents count for more, so a few hundred background phrasings don't drown out "stop".
   const counts = new Array(k).fill(0);
   for (const y of labels) counts[y]++;
-  const classWeight = counts.map((c) => (c ? Math.sqrt(n / (k * c)) : 0));
+  const classWeight = counts.map((c, y) => (c ? (full.includes(classes[y]!) ? Math.max(1, Math.sqrt(n / (k * c))) : Math.sqrt(n / (k * c))) : 0));
 
   const w = new Float32Array(k * dim);
   const b = new Float32Array(k);

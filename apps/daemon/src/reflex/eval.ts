@@ -17,12 +17,14 @@ import {
   StaticEmbedder,
   topProbability,
   type EvaluationModelV4,
+  type HeadData,
 } from '@nova/core';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { loadConfig, loadDotEnv, readSettings } from '../config.ts';
 import { EVAL_AGENTS, EVAL_APPS, EVAL_PROJECTS, REPLIES, SET_A, SET_B, SET_C, SET_D, SET_E } from './evalSet.ts';
 import { DEFAULT_REFLEX_MODEL, readModelFiles } from '../models/files.ts';
+import { sentenceEncoder } from './sentences.ts';
 
 loadDotEnv();
 const started = performance.now();
@@ -42,12 +44,26 @@ const holdOut = {
 };
 // Examples only: the closest-example search on its own, as Reflex was before its classifier.
 const examplesOnly = new ReflexEvaluationModel({ embedder, learn: false, tuning, holdOut });
-const reflex = new ReflexEvaluationModel({ embedder, learn: false, tuning, holdOut });
+// Its sentence model, when installed (REFLEX_SENTENCES=0 measures word meanings alone).
+const sentences = process.env.REFLEX_SENTENCES === '0' ? null : await sentenceEncoder();
+console.log(sentences ? `With its sentence model (${sentences.id})` : 'Without a sentence model');
+const reflex = new ReflexEvaluationModel({ embedder, learn: false, tuning, holdOut, sentences: sentences ?? undefined });
 const training = reflex.trainingExamples();
 const trainStarted = performance.now();
-// REFLEX_TRAIN='{"epochs":20}' tries other training settings.
-await reflex.train(process.env.REFLEX_TRAIN ? JSON.parse(process.env.REFLEX_TRAIN) : {});
-console.log(`Trained the classifier on ${training.length} phrasings in ${Math.round(performance.now() - trainStarted)} ms`);
+// REFLEX_TRAIN='{"epochs":20}' tries other training settings. REFLEX_HEAD_CACHE=<file> keeps the trained classifier by
+// what it was trained on (and how), so trying other decision settings (REFLEX_TUNING) doesn't train it again.
+const trainOpts = process.env.REFLEX_TRAIN ? JSON.parse(process.env.REFLEX_TRAIN) : {};
+const headKey = `${reflex.trainingKey()}:${JSON.stringify(trainOpts)}`;
+const cacheFile = process.env.REFLEX_HEAD_CACHE;
+const cached = cacheFile && existsSync(cacheFile) ? (JSON.parse(readFileSync(cacheFile, 'utf8')) as { key: string; head: HeadData }) : null;
+if (cached?.key === headKey) {
+  reflex.useHead(cached.head);
+  console.log(`The classifier trained on ${training.length} phrasings, from ${cacheFile}`);
+} else {
+  const head = await reflex.train(trainOpts);
+  if (cacheFile) writeFileSync(cacheFile, JSON.stringify({ key: headKey, head }));
+  console.log(`Trained the classifier on ${training.length} phrasings in ${Math.round(performance.now() - trainStarted)} ms`);
+}
 const keywords = new HeuristicEvaluationModel();
 // Every intent Nova has, memory's included (the tool-only skills never reach System 1).
 const skills = [...builtinSkills, ...agentSkills, ...memorySkills, ...initiativeSkills, ...trustSkills, ...handsSkills];
@@ -193,6 +209,8 @@ for (const [label, model] of models) {
   }
   console.log(`Replies   ${label} ${pct(ok, REPLIES.length)} (${ok}/${REPLIES.length})${model === reflex || model === jev ? ` · wrong: ${wrong.join(' | ') || 'none'}` : ''}`);
 }
+
+sentences?.close();
 
 /** Jev's answers kept by request (the key is a header, so it's never in the file): a second run asks only what's new. */
 function cachedFetch(file: string): typeof fetch {

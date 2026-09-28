@@ -14,6 +14,17 @@ export interface Embedder {
   knows?(word: string): boolean;
 }
 
+/**
+ * A model that reads whole sentences - word order, "not", a new way of saying something - for Reflex's classifier,
+ * next to the word meanings: a unit-length vector for each text. It runs outside the decision (a process of its own),
+ * so it's asked for many texts at once, and may not answer.
+ */
+export interface SentenceEncoder {
+  readonly id: string;
+  readonly dim: number;
+  encode(texts: string[]): Promise<Float32Array[]>;
+}
+
 /** BERT-style WordPiece tokenization, as the model's tokenizer.json describes it. */
 export class WordPieceTokenizer {
   private readonly vocab: Map<string, number>;
