@@ -37,7 +37,7 @@ import { VoiceId, VoiceprintStore, type VoiceModels } from './hearing/voiceid.ts
 import { Initiative } from './initiative/index.ts';
 import { IntegrationHub } from './integrations/hub.ts';
 import { Journal, MemoryStore } from './memory/store.ts';
-import { describeContext, Eyes } from './screen/eyes.ts';
+import { describeContext, Eyes, sweepEyesSockets } from './screen/eyes.ts';
 import { connectionToken, refusal, tokenFile, windowOrigins } from './shell/access.ts';
 import { readClientEvent } from './shell/events.ts';
 import { Presence } from './shell/presence.ts';
@@ -317,6 +317,12 @@ const eyes =
   osPlatform() === 'darwin'
     ? new Eyes({ skipTitles: () => [runtime.config.name], images: () => runtime.config.screen.images, onChange: () => broadcastSnapshot() })
     : null;
+// Sockets left by daemons that were killed or crashed before they could remove theirs.
+if (eyes)
+  void sweepEyesSockets().then(
+    (gone) => gone.length && console.log(`  [screen] removed ${gone.length} Nova Eyes socket${gone.length === 1 ? '' : 's'} left by daemons that are gone`),
+    (e) => console.warn(`  [screen] couldn't remove old Nova Eyes sockets: ${(e as Error).message}`),
+  );
 
 // Nova's hands: the Mac's settings, music, windows, files, the clipboard, Shortcuts, and using the computer.
 // NOVA_DRY_RUN=1 (for trying Nova out) only says what they'd change.

@@ -1,4 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
+import { rmSync } from 'node:fs';
 import { copyFile, mkdir, readdir, rm, stat } from 'node:fs/promises';
 import { connect, type Socket } from 'node:net';
 import { platform } from 'node:os';
@@ -23,6 +24,36 @@ const BUILT = join(PACKAGE, '.build', 'release', 'nova-eyes');
 
 /** Where the app lives: outside the repo, in one place, so macOS keeps its permissions. */
 export const eyesApp = () => join(dirname(settingsFile()), 'apps', 'Nova Eyes.app');
+
+/** Where each daemon and its Nova Eyes talk: a socket named for the daemon's pid, `eyes-<pid>.sock`. */
+const runDir = () => join(dirname(settingsFile()), 'run');
+const SOCKET = /^eyes-([1-9]\d*)\.sock$/;
+
+/**
+ * Remove the sockets that daemons which stopped without tidying up (killed, crashed) left behind: an
+ * `eyes-<pid>.sock` whose process is gone. Never this daemon's, never a live process's, nothing else in
+ * the folder. Answers the names it removed.
+ */
+export async function sweepEyesSockets(dir = runDir()): Promise<string[]> {
+  const removed: string[] = [];
+  for (const entry of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
+    const pid = Number(SOCKET.exec(entry.name)?.[1] ?? 0);
+    if (!pid || pid === process.pid || !entry.isSocket() || alive(pid)) continue;
+    await rm(join(dir, entry.name), { force: true });
+    removed.push(entry.name);
+  }
+  return removed;
+}
+
+/** Whether a process exists: signal 0 only asks. One this user may not signal (EPERM) exists too. */
+function alive(pid: number) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code !== 'ESRCH';
+  }
+}
 
 export interface ScreenContext {
   app?: string;
@@ -217,8 +248,13 @@ export class Eyes implements ScreenService {
   problem: string | null = null;
   /** What macOS allows it, as it last said. */
   known: Permissions | null = null;
+  /** The socket this daemon's Nova Eyes listens on. It's removed when Nova Eyes goes, and when the daemon does. */
+  private readonly path = join(runDir(), `eyes-${process.pid}.sock`);
 
-  constructor(private readonly opts: { skipTitles: () => string[]; images: () => boolean; onChange?: () => void }) {}
+  constructor(private readonly opts: { skipTitles: () => string[]; images: () => boolean; onChange?: () => void }) {
+    // shutdown() in server.ts closes Nova Eyes first; this covers any other way out that still runs code.
+    process.once('exit', () => this.close());
+  }
 
   get running() {
     return this.socket !== null;
@@ -243,9 +279,8 @@ export class Eyes implements ScreenService {
     if (this.problem && Date.now() - this.failedAt < 60_000) throw new Error(this.problem);
     this.connecting ??= (async () => {
       const app = await ensureEyes();
-      const dir = join(dirname(settingsFile()), 'run');
-      await mkdir(dir, { recursive: true, mode: 0o700 });
-      const path = join(dir, `eyes-${process.pid}.sock`);
+      const path = this.path;
+      await mkdir(dirname(path), { recursive: true, mode: 0o700 });
       await rm(path, { force: true });
       // Through LaunchServices, so it's Nova Eyes to macOS: hidden, in the background, a fresh instance.
       await run('open', ['-g', '-j', '-n', '-a', app, '--args', '--socket', path, '--parent', String(process.pid)]);
@@ -265,7 +300,12 @@ export class Eyes implements ScreenService {
         }
       });
       socket.on('close', () => {
-        if (this.socket === socket) this.socket = null;
+        // Nova Eyes went by itself (it quit, crashed, or refused us). After close() the path isn't ours to touch
+        // any more: a new Nova Eyes may already be starting there.
+        if (this.socket === socket) {
+          this.socket = null;
+          this.removeSocket();
+        }
         for (const done of this.waiting.values()) done({ error: 'Nova Eyes stopped.' });
         this.waiting.clear();
       });
@@ -457,6 +497,16 @@ export class Eyes implements ScreenService {
     this.socket?.write(`${JSON.stringify({ type: 'quit' })}\n`);
     this.socket?.destroy();
     this.socket = null;
+    this.removeSocket();
+  }
+
+  /** Synchronous, so it's done before the daemon exits, and before a new Nova Eyes can be started on the same path. */
+  private removeSocket() {
+    try {
+      rmSync(this.path, { force: true });
+    } catch {
+      // it stays until the next start's sweep
+    }
   }
 }
 

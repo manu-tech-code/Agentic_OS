@@ -1,13 +1,13 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { chmod, mkdtemp, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { platform, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { dayName, Journal, MemoryStore } from '../src/memory/store.ts';
-import { describeContext } from '../src/screen/eyes.ts';
+import { describeContext, Eyes, sweepEyesSockets } from '../src/screen/eyes.ts';
 
 const temp = () => mkdtemp(join(tmpdir(), 'nova-memory-'));
 /** Local noon, some days back: never on the wrong side of midnight or a clock change. */
@@ -203,6 +203,51 @@ describe.skipIf(platform() !== 'darwin' || !existsSync(EYES))('Nova Eyes', () =>
   it('says which permissions it has', async () => {
     const { stdout } = await promisify(execFile)(EYES, ['--permissions'], { timeout: 10_000 });
     expect(Object.keys(JSON.parse(stdout)).sort()).toEqual(['accessibility', 'screen']);
+  });
+});
+
+describe("Nova Eyes' sockets", () => {
+  /** A socket file as a killed process leaves it: bound, then gone before it could remove it. */
+  const strand = (path: string) =>
+    spawnSync(process.execPath, ['-e', "require('node:net').createServer().listen(process.argv[1], () => process.kill(process.pid, 'SIGKILL'))", path]);
+
+  it("are swept once their daemon is gone, never a live process's, and nothing else in the folder is touched", async () => {
+    const dir = await temp();
+    const dead = spawnSync(process.execPath, ['-e', '']).pid; // processes that have come and gone
+    const gone = spawnSync(process.execPath, ['-e', '']).pid;
+    const live = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60_000)'], { stdio: 'ignore' });
+    try {
+      // pid 1 is launchd: alive, though not this user's to signal (EPERM).
+      const kept = [live.pid, process.pid, 1].map((pid) => `eyes-${pid}.sock`);
+      for (const name of [`eyes-${dead}.sock`, ...kept]) strand(join(dir, name));
+      await writeFile(join(dir, 'ws-token'), 'secret\n', { mode: 0o600 });
+      await writeFile(join(dir, `eyes-${gone}.sock`), ''); // named like one, but not a socket
+      await writeFile(join(dir, `eyes-${dead}.sock.old`), '');
+
+      expect(await sweepEyesSockets(dir)).toEqual([`eyes-${dead}.sock`]);
+      expect((await readdir(dir)).sort()).toEqual([...kept, `eyes-${gone}.sock`, `eyes-${dead}.sock.old`, 'ws-token'].sort());
+      for (const name of kept) expect((await lstat(join(dir, name))).isSocket()).toBe(true);
+      expect(await readFile(join(dir, 'ws-token'), 'utf8')).toBe('secret\n');
+      expect(await sweepEyesSockets(dir)).toEqual([]);
+      expect(await sweepEyesSockets(join(dir, 'missing'))).toEqual([]);
+    } finally {
+      live.kill();
+    }
+  });
+
+  it('go when the daemon closes Nova Eyes', async () => {
+    const dir = await temp();
+    vi.stubEnv('NOVA_SETTINGS_FILE', join(dir, 'settings.json'));
+    try {
+      const path = join(dir, 'run', `eyes-${process.pid}.sock`);
+      await mkdir(join(dir, 'run'));
+      strand(path);
+      expect(existsSync(path)).toBe(true);
+      new Eyes({ skipTitles: () => [], images: () => false }).close();
+      expect(existsSync(path)).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 
