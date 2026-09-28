@@ -13,6 +13,7 @@ import { Timeline } from './components/Timeline';
 import { formatShortcut } from '@nova/core/shortcut';
 import type { SettingsSection } from '@nova/core/settings';
 import { appLevel, inApp, onShellOpen, openOnLoad, tellApp, useAppState } from './lib/shell';
+import { sizeRange, useResizable } from './lib/resize';
 import { useNova, type SayEvent } from './lib/useNova';
 import {
   earcon,
@@ -43,6 +44,9 @@ function Clock() {
   }, []);
   return <span>{now.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}</span>;
 }
+
+/** How far the Orb in the window can be resized: its setting's range. */
+const ORB_RANGE = sizeRange('appearance.orbSize');
 
 export default function App() {
   const levelRef = useRef(0);
@@ -91,6 +95,20 @@ export default function App() {
   }, []);
 
   const { state, send, sendAudio, dismiss } = useNova(onSay);
+  // The Orb, resized by hand (pinch, ⌥-scroll, its handle) or in Settings → Appearance.
+  const orbSize = useResizable({
+    saved: state.ui.orb.size ?? 100,
+    range: ORB_RANGE,
+    grows: {
+      from: 'centre',
+      centre: () => {
+        const r = orbSize.ref.current?.getBoundingClientRect();
+        return r ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : { x: 0, y: 0 };
+      },
+    },
+    measure: () => orbSize.ref.current?.querySelector('.orb')?.getBoundingClientRect().width ?? 220,
+    save: (size) => send({ type: 'settings-set', values: { 'appearance.orbSize': size } }),
+  });
   const app = useAppState();
   const handsOff = inApp || state.appVoice;
   handsOffRef.current = handsOff;
@@ -508,7 +526,24 @@ export default function App() {
       </div>
 
       <main className="stage">
-        <Orb name={state.name} phase={shownPhase} levelRef={inApp ? appLevel : levelRef} prefs={state.ui.orb} onClick={() => (listening ? setShowCommand(true) : micOn())} />
+        <div ref={orbSize.ref} className={`orb-frame ${orbSize.resizing ? 'is-resizing' : ''}`} style={{ ['--orb-scale' as string]: orbSize.size / 100 }}>
+          <Orb name={state.name} phase={shownPhase} levelRef={inApp ? appLevel : levelRef} prefs={state.ui.orb} onClick={() => orbSize.justResized() || (listening ? setShowCommand(true) : micOn())} />
+          <span
+            className="orb-handle"
+            role="slider"
+            tabIndex={0}
+            title="Drag to resize - or pinch, or hold ⌥ and scroll"
+            aria-label={`${state.name}'s size`}
+            aria-valuemin={ORB_RANGE.min}
+            aria-valuemax={ORB_RANGE.max}
+            aria-valuenow={Math.round(orbSize.size)}
+            aria-valuetext={`${Math.round(orbSize.size)}%`}
+            {...orbSize.handle}
+          />
+          <span className="orb-frame__size" aria-hidden>
+            {Math.round(orbSize.size)}%
+          </span>
+        </div>
         <div className="captions">
           <AnimatePresence mode="wait">
             {!listening ? (

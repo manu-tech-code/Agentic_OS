@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import type { ClientEvent } from '@nova/core/protocol';
 import { FIELDS, personalize, SECTIONS, type SettingField, type SettingsSection, type SettingsSnapshot, type SettingValue } from '@nova/core/settings';
 import { previewVoice } from '../voice/voice';
-import { ListInput, NumberInput, Reset, Switch, TextInput, type Save } from './settings/Controls';
+import { ListInput, NumberInput, Reset, SliderInput, Switch, TextInput, type Save } from './settings/Controls';
 import { AgentsPanel, HearingPanel, JevPanel, OrbPreview, ProjectsPanel, ReflexPanel, ServersPanel, SystemPanel, VoiceIdPanel, VoicePanel } from './settings/Panels';
 import { IntegrationsPanel } from './settings/Integrations';
 import { HandsPanel } from './settings/Hands';
@@ -86,6 +86,8 @@ function Control({
       return <Switch label={field.label} on={value === true} onChange={onSave} />;
     case 'number':
       return <NumberInput value={Number(value)} unit={field.unit} min={field.min} max={field.max} step={field.step} onSave={onSave} />;
+    case 'slider':
+      return <SliderInput value={Number(value)} unit={field.unit} min={field.min} max={field.max} step={field.step} label={personalize(field.label, name)} onSave={onSave} />;
     case 'list':
       return <ListInput value={Array.isArray(value) ? value : []} onSave={(v) => onSave(v.length ? v : null)} />;
     case 'select':

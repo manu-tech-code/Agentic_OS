@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Orb } from '../components/Orb';
-import { appLevel, tellApp, useAppState } from '../lib/shell';
+import { sizeRange, useResizable } from '../lib/resize';
+import { appLevel, tellApp, useAppHover, useAppState } from '../lib/shell';
 import { useNova, type SayEvent } from '../lib/useNova';
 import './hud.css';
 
@@ -8,6 +9,16 @@ import './hud.css';
 const ORB_ALONE_MS = 30_000;
 /** Just summoned or woken: say that Nova is listening, before any words arrive. */
 const FRESH_MS = 4000;
+/** The floating orb at 100%, in points; its setting's range. */
+const ORB_PT = 48;
+const FLOATING_RANGE = sizeRange('appearance.floatingOrbSize');
+/** Which way the orb grows from each corner it can be pinned to: into the screen. */
+const AWAY: Record<string, { x: number; y: number }> = {
+  'bottom-right': { x: -1, y: -1 },
+  'top-right': { x: -1, y: 1 },
+  'bottom-left': { x: 1, y: -1 },
+  'top-left': { x: 1, y: 1 },
+};
 
 /**
  * Nova's floating orb, shown by the Mac app over whatever the user is doing: the orb with what Nova
@@ -17,8 +28,21 @@ const FRESH_MS = 4000;
 export default function Hud() {
   const [reply, setReply] = useState<{ text: string; at: number } | null>(null);
   const onSay = useCallback((say: SayEvent) => setReply({ text: say.text, at: Date.now() }), []);
-  const { state } = useNova(onSay);
+  const { state, send } = useNova(onSay);
   const app = useAppState();
+  const hovered = useAppHover();
+  const corner = app?.corner ?? 'bottom-right';
+  // Resized by hand (pinch, ⌥-scroll, its handle) or in Settings → Appearance.
+  const orbSize = useResizable({
+    saved: state.ui.orb.floatingSize ?? 100,
+    range: FLOATING_RANGE,
+    grows: { from: 'corner', away: () => AWAY[corner] ?? AWAY['bottom-right']! },
+    measure: () => (ORB_PT * orbSize.size) / 100,
+    save: (size) => send({ type: 'settings-set', values: { 'appearance.floatingOrbSize': size } }),
+  });
+  const resizing = useRef(false);
+  resizing.current = orbSize.resizing;
+  const { ref: resizeRef } = orbSize;
   const [heard, setHeard] = useState<{ text: string; final: boolean; at: number } | null>(null);
   const [now, setNow] = useState(() => Date.now());
   /** When Nova last finished thinking or speaking. */
@@ -26,6 +50,14 @@ export default function Hud() {
   /** When this conversation started: Nova was summoned, or heard its name. */
   const [startedAt, setStartedAt] = useState(0);
   const box = useRef<HTMLDivElement>(null);
+  /** The box the app sizes its panel to is also where pinches and ⌥-scrolls resize the orb. */
+  const setBox = useCallback(
+    (el: HTMLDivElement | null) => {
+      box.current = el;
+      resizeRef.current = el;
+    },
+    [resizeRef],
+  );
 
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 400);
@@ -70,7 +102,6 @@ export default function Hud() {
   const listening = state.phase === 'listening';
   const quietFor = now - Math.max(endedAt, startedAt, heard?.at ?? 0);
 
-  const corner = app?.corner ?? 'bottom-right';
   // The reply: the one heard in this conversation - or, while Nova speaks, whatever it's saying.
   const shownReply = reply && (busy || lingering) && reply.at >= startedAt ? reply.text : state.phase === 'speaking' ? state.reply : null;
   const words = heard && heard.at >= startedAt ? heard : null;
@@ -97,7 +128,8 @@ export default function Hud() {
     if (!el) return;
     const report = () => {
       const r = el.getBoundingClientRect();
-      tellApp({ type: 'hud', state: mode, width: Math.ceil(r.width), height: Math.ceil(r.height) });
+      // While it's resized by hand, the app follows at once rather than animating each step.
+      tellApp({ type: 'hud', state: mode, width: Math.ceil(r.width), height: Math.ceil(r.height), ...(resizing.current ? { live: true } : {}) });
     };
     report();
     const observer = new ResizeObserver(report);
@@ -106,9 +138,16 @@ export default function Hud() {
   }, [mode]);
 
   return (
-    <div ref={box} className={`hud hud--${mode} hud--${corner}`} onClick={() => tellApp({ type: 'expand' })} aria-live="polite">
+    <div
+      ref={setBox}
+      className={`hud hud--${mode} hud--${corner} ${hovered ? 'is-hovered' : ''} ${orbSize.resizing ? 'is-resizing' : ''}`}
+      style={{ ['--hud-orb' as string]: `${(ORB_PT * orbSize.size) / 100}px` }}
+      onClick={() => orbSize.justResized() || tellApp({ type: 'expand' })}
+      aria-live="polite"
+    >
       <div className="hud__orb">
         <Orb name={state.name} phase={state.phase} levelRef={appLevel} prefs={state.ui.orb} />
+        <span className="hud__handle" aria-hidden {...orbSize.handle} />
       </div>
       {mode === 'card' && (
         <div className="hud__body">
