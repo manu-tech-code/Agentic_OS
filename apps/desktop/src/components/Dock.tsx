@@ -40,7 +40,7 @@ function DockIcon({ item, mouseX }: { item: DockItem; mouseX: MotionValue<number
 }
 
 /**
- * macOS-style magnifying dock: brains, agents and panels. The wrapper centres it; the dock's
+ * macOS-style magnifying dock: the microphone, typing and the panels. The wrapper centres it; the dock's
  * own slide-in animation owns its transform, so centring can't live on the dock itself.
  */
 export function Dock({ items }: { items: DockItem[] }) {
