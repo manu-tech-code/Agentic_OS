@@ -12,7 +12,7 @@
     "reflex:download": "tsx src/models/download.ts potion-base-8M",
     "reflex:eval": "tsx src/reflex/eval.ts",
     "voice:download": "tsx src/models/download.ts kokoro-82M",
-    "hearing:download": "tsx src/models/download.ts parakeet-tdt-0.6b-v2 smart-turn-v3.2",
+    "hearing:download": "tsx src/models/download.ts parakeet-tdt-0.6b-v2 smart-turn-v3.2 silero-vad-v6.2",
     "hearing:build": "tsx src/hearing/build.ts",
     "app": "tsx src/shell/install.ts"
   },

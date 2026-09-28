@@ -34,7 +34,7 @@ const SHAPES: { [T in ClientEvent['type']]: Shape } = {
   'settings-set': { values: 'object' },
   'reflex-install': {},
   'reflex-forget': {},
-  'hearing-install': { model: ['parakeet', 'smart-turn'] },
+  'hearing-install': { model: ['parakeet', 'smart-turn', 'speech'] },
   'memory-edit': { id: 'string', text: 'string' },
   'memory-delete': { id: 'string' },
   'memory-clear': {},

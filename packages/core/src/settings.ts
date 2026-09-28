@@ -527,6 +527,14 @@ export const FIELDS: SettingField[] = [
     default: true,
   },
   {
+    key: 'hearing.speechOnly',
+    section: 'hearing',
+    label: "Ignore sounds that aren't speech",
+    help: 'A small speech detector (Silero VAD) tells a voice from other sounds, so typing, music, a door or a fan never start a turn. Needs its 2 MB model.',
+    type: 'toggle',
+    default: true,
+  },
+  {
     key: 'hearing.bargeIn',
     section: 'hearing',
     label: 'Interrupt by talking',
@@ -1189,6 +1197,8 @@ export interface SettingsSnapshot {
     status: HearingStatus;
     parakeet: { model: string; label: string; installed: boolean };
     smartTurn: { model: string; label: string; installed: boolean };
+    /** Silero VAD: which sounds are speech. */
+    speech: { model: string; label: string; installed: boolean };
   };
   agents: { name: string; label: string; bin: string; path: string | null; custom: boolean }[];
   servers: { name: string; url: string; builtIn: boolean; defaultUrl?: string; keyVar: string; online: boolean; models: string[] }[];

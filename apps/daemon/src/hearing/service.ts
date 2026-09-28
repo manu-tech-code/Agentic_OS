@@ -6,6 +6,7 @@ import { ensureHelper } from './build.ts';
 import { HearingHelper, type HelperEvent } from './helper.ts';
 import { Voiceprinter, type WorkerModel } from './printer.ts';
 import { SmartTurn } from './smart-turn.ts';
+import { SPEECH_CHUNK, SpeechDetector } from './speech-detector.ts';
 import { HELPER_EAR, type Prints, type Speaker, type VoiceModels } from './voiceid.ts';
 
 export type HearingEngine = 'auto' | 'apple' | 'parakeet' | 'browser';
@@ -16,6 +17,8 @@ export interface HearingConfig {
   language: string;
   patience: Patience;
   smartTurn: boolean;
+  /** Only a voice starts a turn: Silero VAD (when it's installed) tells speech from other sounds. */
+  speechOnly: boolean;
   bargeIn: boolean;
 }
 
@@ -90,6 +93,37 @@ class AudioRing {
   }
 }
 
+/** Audio waiting for the speech detector's say on it, taken off in order as that comes back. */
+class Backlog {
+  private chunks: Int16Array[] = [];
+  length = 0;
+
+  push(samples: Int16Array) {
+    this.chunks.push(samples);
+    this.length += samples.length;
+  }
+
+  /** The next `n` samples (all there are, when fewer). */
+  take(n: number): Int16Array {
+    const out = new Int16Array(Math.min(n, this.length));
+    for (let filled = 0; filled < out.length; ) {
+      const first = this.chunks[0]!;
+      const used = Math.min(first.length, out.length - filled);
+      out.set(first.subarray(0, used), filled);
+      filled += used;
+      if (used === first.length) this.chunks.shift();
+      else this.chunks[0] = first.subarray(used);
+    }
+    this.length -= out.length;
+    return out;
+  }
+
+  clear() {
+    this.chunks = [];
+    this.length = 0;
+  }
+}
+
 /**
  * Nova's hearing on the Mac. The window streams its microphone; this finds speech in it, relays
  * it to the hearing helper (Apple's recognizer or Parakeet), decides when each turn is over -
@@ -106,6 +140,14 @@ export class Hearing {
   private smartStarting: Promise<void> | null = null;
   private smartRestarts = 0;
   private vad = new SpeechActivity();
+  /** Where `vad` began reading, in the ring: the positions of its changes count from here. */
+  private vadFrom = 0;
+  /** Silero VAD, when Settings want it and it's installed: its say on each 32 ms decides what's a voice. */
+  private speech: SpeechDetector | null = null;
+  private speechStarting: Promise<void> | null = null;
+  private speechRestarts = 0;
+  /** Audio the speech detector has, until its say on it comes back. */
+  private readonly unheard = new Backlog();
   private readonly ring = new AudioRing();
   private readonly turnOpts: { patience: Patience; judge: () => Promise<number | null> };
   private readonly turn: TurnDetector;
@@ -165,6 +207,10 @@ export class Hearing {
       this.smart.close();
       this.smart = null;
     }
+    if (config.speechOnly) {
+      this.speechRestarts = 0;
+      this.startSpeech();
+    } else if (this.speech) this.loseSpeech(this.speech, false);
     if (!previous || previous.engine !== config.engine || previous.language !== config.language) {
       this.restarts = 0;
       void this.restart();
@@ -215,13 +261,30 @@ export class Hearing {
     const samples = new Int16Array(pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + bytes)); // aligned copy
     this.ring.push(samples);
     this.helper.audio(pcm.subarray(0, bytes));
-    const change = this.vad.push(samples);
-    if (!change) return;
+    // With the speech detector, its say on this audio decides whether it's a voice - in a moment, once it
+    // comes back. Half a second behind, it's no use: loudness alone, until it's started again.
+    if (this.speech?.push(samples)) {
+      this.unheard.push(samples);
+      if (this.unheard.length > RATE / 2) this.loseSpeech(this.speech, true);
+      return;
+    }
+    this.flushUnheard();
+    this.detect(samples);
+  }
+
+  /**
+   * Speech starting or stopping in this audio - read in order, the speech detector's say (`voice`) with it
+   * when there is one, so however late that came, where it happened is known.
+   */
+  private detect(samples: Int16Array, voice?: number) {
+    const change = this.vad.push(samples, voice);
+    if (!change || !this.helper) return;
     const active = change === 'start';
-    const at = this.helperMs(); // ms of the helper's audio so far
+    const position = this.vadFrom + this.vad.changedAt;
+    const at = this.helperMs(position); // in ms of the helper's audio
     if (active && !this.turn.open) {
       // A new turn: whatever was transcribed before it (murmurs below the speech threshold) is dropped.
-      this.turnStart = Math.max(0, this.ring.position - RATE / 2);
+      this.turnStart = Math.max(0, position - RATE / 2);
       this.overlapping = this.spoken !== null;
       this.interrupted = false;
       clearTimeout(this.armTimer); // after the shortcut: this turn is the one it was for
@@ -272,6 +335,9 @@ export class Hearing {
     this.turn.reset();
     this.helper?.command({ type: 'cancel', at: this.helperMs() });
     this.vad = new SpeechActivity();
+    this.vadFrom = this.ring.position;
+    this.unheard.clear();
+    this.speech?.reset();
   }
 
   /** Nova is saying this (its reply so far), or null once it has finished speaking. */
@@ -293,6 +359,9 @@ export class Hearing {
     this.helper = null;
     this.smart?.close();
     this.smart = null;
+    this.speech?.close();
+    this.speech = null;
+    this.unheard.clear();
     this.stopPrinter();
   }
 
@@ -327,6 +396,45 @@ export class Hearing {
       })
       .catch(() => {})
       .finally(() => (this.smartStarting = null));
+  }
+
+  /** The speech detector's process, when Settings want it - started again if it stops or falls behind, a few times. */
+  private startSpeech() {
+    if (this.speech || this.speechStarting) return;
+    const started = Date.now();
+    this.speechStarting = SpeechDetector.start((gone) => this.loseSpeech(gone, true))
+      .then((speech) => {
+        if (!speech) return;
+        if (!this.config?.speechOnly) return speech.close(); // turned off while it started
+        speech.onVoice = (voices) => this.onVoice(speech, voices);
+        this.speech = speech;
+        console.log(`  [hearing] speech detector ready in ${Date.now() - started} ms`);
+      })
+      .catch(() => {})
+      .finally(() => (this.speechStarting = null));
+  }
+
+  /** The speech detector stopped, fell behind or was turned off: loudness alone from here, until it's started again. */
+  private loseSpeech(detector: SpeechDetector, again: boolean) {
+    if (this.speech !== detector) return;
+    this.speech = null;
+    detector.close();
+    this.flushUnheard();
+    if (again && this.config?.speechOnly && this.speechRestarts++ < MAX_RESTARTS) setTimeout(() => this.config?.speechOnly && this.startSpeech(), 5000 * this.speechRestarts);
+  }
+
+  /** Its say on the audio it was sent, 32 ms at a time: that audio is read now, with it. */
+  private onVoice(detector: SpeechDetector, voices: number[]) {
+    if (this.speech !== detector) return;
+    for (const voice of voices) {
+      if (this.unheard.length < SPEECH_CHUNK) return;
+      this.detect(this.unheard.take(SPEECH_CHUNK), voice);
+    }
+  }
+
+  /** What the speech detector had and never gave its say on: read by loudness, before anything newer. */
+  private flushUnheard() {
+    if (this.unheard.length) this.detect(this.unheard.take(this.unheard.length));
   }
 
   /** Which engine to run: what's asked for, if this Mac has it. */

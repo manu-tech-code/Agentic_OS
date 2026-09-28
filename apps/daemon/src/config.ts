@@ -257,6 +257,7 @@ export function loadConfig(settings: Settings, env: Env) {
       language: text('voice.language') || 'en-US',
       patience: text('hearing.patience') as 'quick' | 'normal' | 'patient',
       smartTurn: values['hearing.smartTurn'] as boolean,
+      speechOnly: values['hearing.speechOnly'] as boolean,
       bargeIn: values['hearing.bargeIn'] as boolean,
     },
     /** Every setting's value in effect, by key. */

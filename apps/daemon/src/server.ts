@@ -42,7 +42,7 @@ import { connectionToken, refusal, tokenFile, windowOrigins } from './shell/acce
 import { readClientEvent } from './shell/events.ts';
 import { Presence } from './shell/presence.ts';
 import { serveUi, UI_DIR } from './shell/static.ts';
-import { DEFAULT_REFLEX_MODEL, downloadModel, isInstalled, KOKORO_MODEL, MODELS, modelsDir, PARAKEET_MODEL, SENTENCE_MODEL, SMART_TURN_MODEL, VOICE_ID_MODEL, VOICE_ID_MODELS, whereInstalled } from './models/files.ts';
+import { DEFAULT_REFLEX_MODEL, downloadModel, isInstalled, KOKORO_MODEL, MODELS, modelsDir, PARAKEET_MODEL, SENTENCE_MODEL, SMART_TURN_MODEL, SPEECH_MODEL, VOICE_ID_MODEL, VOICE_ID_MODELS, whereInstalled } from './models/files.ts';
 import { forgetLearned, loadReflex, reflexEmbedder, type ReflexRuntime } from './reflex/runtime.ts';
 import { buildSnapshot, validateChanges } from './snapshot.ts';
 import { Trust } from './trust/index.ts';
@@ -96,6 +96,7 @@ interface Runtime {
   /** Whether hearing's downloadable models are installed. */
   parakeetInstalled: boolean;
   smartTurnInstalled: boolean;
+  speechInstalled: boolean;
   /** Paired agents, some kept running as brains; closed when a runtime with other agent settings replaces this one. */
   host: NovaAgentHost | null;
   /** What the host was made from: the same again, and the next runtime keeps it (and the brain's answer in progress). */
@@ -165,7 +166,7 @@ async function finishRuntime(settings: Settings, fileError: string | undefined, 
   const reflex = await loadReflex({ learn: config.learn });
   const voiceAt = await whereInstalled(KOKORO_MODEL);
   const voiceInstalled = voiceAt !== null;
-  const [parakeetInstalled, smartTurnInstalled] = await Promise.all([isInstalled(PARAKEET_MODEL), isInstalled(SMART_TURN_MODEL)]);
+  const [parakeetInstalled, smartTurnInstalled, speechInstalled] = await Promise.all([isInstalled(PARAKEET_MODEL), isInstalled(SMART_TURN_MODEL), isInstalled(SPEECH_MODEL)]);
   if (voiceInstalled) kokoro().catch((e) => console.warn(`  [voice] Kokoro didn't load: ${(e as Error).message}`)); // warm it up before the first reply
   const engine = createDecisionEngine({
     engine: config.engine,
@@ -188,6 +189,7 @@ async function finishRuntime(settings: Settings, fileError: string | undefined, 
     voiceBundled: voiceAt?.bundled ?? false,
     parakeetInstalled,
     smartTurnInstalled,
+    speechInstalled,
     host: agents,
     agentsKey,
     options: {
@@ -497,6 +499,7 @@ const hearingStatus = () => ({
   status: hearing!.status,
   parakeet: { model: PARAKEET_MODEL, label: MODELS[PARAKEET_MODEL]!.label, installed: runtime.parakeetInstalled },
   smartTurn: { model: SMART_TURN_MODEL, label: MODELS[SMART_TURN_MODEL]!.label, installed: runtime.smartTurnInstalled },
+  speech: { model: SPEECH_MODEL, label: MODELS[SPEECH_MODEL]!.label, installed: runtime.speechInstalled },
 });
 const memoryStatus = async () => ({ items: [...memory.list()], conversations: await memory.journal.stats() });
 const screenStatus = async () => {
@@ -633,24 +636,29 @@ function installReflex(progress: (message: string) => void) {
   });
 }
 
+/** Hearing's downloadable models: which each is, and what it does once it's there. */
+const HEARING_MODELS = {
+  parakeet: { name: PARAKEET_MODEL, label: 'Parakeet', done: 'Parakeet is installed. Choose it in Settings → Hearing → Speech recognition.' },
+  'smart-turn': { name: SMART_TURN_MODEL, label: 'Smart Turn', done: 'Smart Turn is installed - Nova now hears when you have finished.' },
+  speech: { name: SPEECH_MODEL, label: 'the speech detector', done: "The speech detector is installed - sounds that aren't speech no longer start a turn." },
+} as const;
+
 /** Download a model for hearing (checked against its pinned checksums) and start using it. */
-function installHearing(model: 'parakeet' | 'smart-turn', progress: (message: string) => void) {
+function installHearing(model: keyof typeof HEARING_MODELS, progress: (message: string) => void) {
   return queue(async () => {
-    const name = model === 'parakeet' ? PARAKEET_MODEL : SMART_TURN_MODEL;
+    const { name, label, done } = HEARING_MODELS[model];
     const spec = MODELS[name]!;
     const big = Object.entries(spec.files).sort((a, b) => b[1].size - a[1].size)[0]![0];
     let shown = -1;
     await downloadModel(name, {
       onProgress(file, received, total) {
         const pct = Math.floor((received / total) * 10) * 10;
-        if (file === big && pct !== shown) progress(`Downloading ${model === 'parakeet' ? 'Parakeet' : 'Smart Turn'}… ${(shown = pct)}%`);
+        if (file === big && pct !== shown) progress(`Downloading ${label}… ${(shown = pct)}%`);
       },
     });
     apply(await buildRuntime(runtime));
     if (model === 'parakeet') hearing!.retry(); // it may have been waiting for this
-    return model === 'parakeet'
-      ? 'Parakeet is installed. Choose it in Settings → Hearing → Speech recognition.'
-      : 'Smart Turn is installed - Nova now hears when you have finished.';
+    return done;
   });
 }
 
@@ -988,7 +996,7 @@ function banner() {
   Name         ${config.name}
   System 1     ${options.engine.name}${runtime.reflex.model ? ` · learned ${runtime.reflex.model.learned.length}` : ['auto', 'reflex'].includes(config.engine) ? ' (install Reflex: npm run reflex:download, or Settings → Decisions)' : ''}
   System 2     ${options.reasoning?.name ?? '(none - choose one in Settings → Answers)'}
-  Hearing      ${runtime.config.hearing.engine === 'browser' ? "the browser's speech recognition" : runtime.config.hearing.engine === 'parakeet' ? 'Parakeet, on this Mac' : "Apple's on-device recognizer"}${runtime.smartTurnInstalled && runtime.config.hearing.smartTurn ? ' · Smart Turn' : ''}
+  Hearing      ${runtime.config.hearing.engine === 'browser' ? "the browser's speech recognition" : runtime.config.hearing.engine === 'parakeet' ? 'Parakeet, on this Mac' : "Apple's on-device recognizer"}${runtime.smartTurnInstalled && runtime.config.hearing.smartTurn ? ' · Smart Turn' : ''}${runtime.speechInstalled && runtime.config.hearing.speechOnly ? ' · speech only' : ''}
   Voice        ${speaksAloud() ? `Kokoro · ${config.voice.kokoroVoice}${runtime.voiceBundled ? ' (inside Nova.app)' : ''}` : 'Kokoro comes with Nova.app (npm run app) - until then replies are shown, not spoken'}
   Apps found   ${nova.apps.length}
   Hands        ${hands ? (dryRun ? 'dry run (NOVA_DRY_RUN=1) - changes are only logged' : `on${config.hands.computerUse ? ', and brains may use the computer (with a yes)' : ''}`) : '(needs macOS)'}

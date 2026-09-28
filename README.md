@@ -124,7 +124,7 @@ speech into text and decides when you've finished. Nothing you say leaves the Ma
 - **The browser's speech recognition**: the fallback, used automatically while on-device hearing starts or if it can't.
 
 ```bash
-npm run hearing:download      # Parakeet (464 MB) and Smart Turn (9 MB) - or Settings → Hearing → Install
+npm run hearing:download      # Parakeet (464 MB), Smart Turn (9 MB) and the speech detector (2 MB) - or Settings → Hearing → Install
 npm run hearing:build         # the hearing helper; Nova also builds it by itself the first time (a few minutes)
 ```
 
