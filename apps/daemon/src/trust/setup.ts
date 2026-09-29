@@ -22,6 +22,7 @@ export interface SetupInput {
   hands?: SettingsSnapshot['hands'];
   signing?: SettingsSnapshot['signing'];
   voiceId?: SettingsSnapshot['voiceId'];
+  phone?: SettingsSnapshot['phone'];
 }
 
 const ACCESS: Record<string, string> = { granted: 'allowed', denied: 'not allowed', undetermined: 'not asked yet', restricted: 'restricted' };
@@ -189,6 +190,23 @@ export function setupSteps(input: SetupInput): SetupStep[] {
           ? `Nova Eyes needs ${list(missing)}: Settings → Hands → Allow.`
           : `Ready: Nova can change settings, arrange windows and use the computer when you say so${hands.shortcuts?.length ? `, and run your ${hands.shortcuts.length} Shortcuts` : ''}.`,
       fix: { section: 'hands' },
+    });
+  }
+
+  const phone = input.phone;
+  if (phone) {
+    const paired = phone.devices.length;
+    steps.push({
+      id: 'phone',
+      label: 'Nova on your iPhone',
+      done: paired > 0 && config.phone.enabled,
+      optional: true,
+      detail: !paired
+        ? 'Not paired: pair your iPhone in Settings → iPhone to talk to Nova from anywhere on your Wi-Fi.'
+        : !config.phone.enabled
+          ? `${paired === 1 ? 'One iPhone is' : `${paired} iPhones are`} paired, but they can't connect: turn on "Let your iPhone connect".`
+          : `${paired === 1 ? 'One iPhone' : `${paired} iPhones`} paired${phone.message ? ` - ${phone.message}` : ''}.`,
+      fix: { section: 'phone' },
     });
   }
 

@@ -197,6 +197,7 @@ async function main() {
 
     // Settings, a few of its pages - early on, with the Decision Inspector (⌘I) put away, so little is behind it.
     page = await open(devtools, `${base}#demo`, 2);
+    await page.at(600); // the window takes its shortcuts once it's up
     await page.command('i', 'KeyI', 73);
     await page.command(',', 'Comma', 188);
     await sleep(700);

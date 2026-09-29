@@ -1,4 +1,4 @@
-import type { HearingStatus, IntegrationStatus, PrivacyFlow, SettingValue } from '@nova/core';
+import type { HearingStatus, IntegrationStatus, PhoneStatus, PrivacyFlow, SettingValue } from '@nova/core';
 import type { Config } from '../config.ts';
 
 /**
@@ -22,6 +22,8 @@ export interface PrivacyInput {
   isLocal: (id: string) => boolean;
   /** The user's voiceprint (Voice ID) is on this Mac. */
   voiceprint?: boolean;
+  /** Nova on the iPhone: the door, and the paired phones. */
+  phone?: PhoneStatus;
 }
 
 const VENDORS: Record<string, string> = { claude: 'Anthropic', codex: 'OpenAI', gemini: 'Google' };
@@ -92,6 +94,21 @@ export function privacyFlows(input: PrivacyInput): PrivacyFlow[] {
     on: config.voiceId.keepRecordings,
     toggle: toggle('voiceId.keepRecordings'),
     section: 'voice',
+  });
+
+  // An iPhone: what's said into it comes here, over the Wi-Fi, and its replies go back - nowhere else.
+  flows.push({
+    id: 'phone',
+    what: 'What you say to Nova on your iPhone, and its replies',
+    where: `${THIS_MAC}, from the iPhones you paired - over your Wi-Fi, encrypted`,
+    detail:
+      config.phone.hearing === 'iphone'
+        ? "Apple's recognizer on the iPhone turns it into text, and only the text comes here."
+        : "The iPhone streams its microphone here while you hold its talk button, and Nova hears it as it hears you at the Mac. On a weak connection, Apple's recognizer on the iPhone can do it instead.",
+    leaves: false,
+    on: config.phone.enabled && Boolean(input.phone?.devices.length),
+    toggle: toggle('phone.enabled'),
+    section: 'phone',
   });
 
   // System 1: what each thing said means.

@@ -3,6 +3,7 @@ export * from './settings.ts';
 export * from './speech.ts';
 export * from './shortcut.ts';
 export * from './integrations.ts';
+export * from './phone.ts';
 export * from './decision/types.ts';
 export * from './decision/distribution.ts';
 export { HeuristicEvaluationModel } from './decision/heuristicModel.ts';

@@ -21,6 +21,7 @@ import {
   type IntegrationEntry,
   type LayoutWindow,
   type PermissionMode,
+  type PhoneHearing,
   type PresenceConfig,
   type SettingValue,
   type UiPrefs,
@@ -156,6 +157,7 @@ export function loadConfig(settings: Settings, env: Env) {
 
   const enabled = getPath(settings, 'agents.enabled');
   const port = Number(env.NOVA_PORT || 7878);
+  const phonePort = Number(env.NOVA_PHONE_PORT || 7879);
   const ui: UiPrefs = {
     autoListen: values['voice.listenOnOpen'] as boolean,
     rate: num('voice.rate'),
@@ -174,6 +176,8 @@ export function loadConfig(settings: Settings, env: Env) {
     name,
     // Constants and secrets, from .env or the environment.
     port: Number.isInteger(port) && port > 0 && port < 65536 ? port : 7878,
+    /** The door for paired iPhones listens here, on every network the Mac is on (Settings → iPhone opens it). */
+    phonePort: Number.isInteger(phonePort) && phonePort > 0 && phonePort < 65536 ? phonePort : 7879,
     /** Jev's key, from .env: a secret, sent only to TypeSafe with each decision when Jev decides. */
     jevKey: env.NOVA_JEV_API_KEY || '',
     agentsFile: resolve(ROOT, expand(env.NOVA_AGENTS_FILE || 'nova.agents.json')),
@@ -258,6 +262,11 @@ export function loadConfig(settings: Settings, env: Env) {
       launchAtLogin: values['presence.launchAtLogin'] as boolean,
       daemon: text('presence.daemon'),
     } as PresenceConfig,
+    /** Nova on the iPhone (Settings → iPhone): whether paired phones may connect, and where their speech is heard. */
+    phone: {
+      enabled: values['phone.enabled'] as boolean,
+      hearing: text('phone.hearing') as PhoneHearing,
+    },
     hearing: {
       engine: text('hearing.engine') as 'auto' | 'apple' | 'parakeet' | 'browser',
       language: text('voice.language') || 'en-US',
