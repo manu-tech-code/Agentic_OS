@@ -6,10 +6,12 @@ const ICON: Record<Card['kind'], string> = {
   app: '◐',
   time: '◷',
   timer: '⏱',
+  reminder: '◔',
   info: 'ⓘ',
   confirm: '⚠︎',
   error: '✕',
   answer: '✦',
+  task: '✳︎',
 };
 
 function Countdown({ endsAt }: { endsAt: number }) {
@@ -24,13 +26,24 @@ function Countdown({ endsAt }: { endsAt: number }) {
   return <div className="card__countdown">{`${m}:${s}`}</div>;
 }
 
-/** Floating frosted result cards. Confirm cards also accept a tap. */
+/**
+ * A reply's cards close by themselves; these stay until they're done: a question waiting for a yes or no, a timer
+ * counting down, an agent's task at work.
+ */
+const STAYS: ReadonlySet<Card['kind']> = new Set(['confirm', 'timer', 'task']);
+
+/**
+ * Floating frosted result cards. Confirm cards also accept a tap. The rest close after `closeAfter` seconds (0: they
+ * stay) - a thin bar shows the time left, and pointing at a card holds it (Settings → Appearance).
+ */
 export function Cards({
   cards,
+  closeAfter,
   onDismiss,
   onAnswer,
 }: {
   cards: Card[];
+  closeAfter: number;
   onDismiss: (id: string) => void;
   onAnswer: (text: 'yes' | 'no') => void;
 }) {
@@ -69,6 +82,9 @@ export function Cards({
             <button className="card__close" onClick={() => onDismiss(card.id)} aria-label="Dismiss">
               ×
             </button>
+            {closeAfter > 0 && !STAYS.has(card.kind) && !card.endsAt && (
+              <div className="card__life" style={{ animationDuration: `${closeAfter}s` }} onAnimationEnd={() => onDismiss(card.id)} aria-hidden />
+            )}
           </motion.article>
         ))}
       </AnimatePresence>

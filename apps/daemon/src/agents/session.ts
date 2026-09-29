@@ -1,0 +1,159 @@
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { createInterface } from 'node:readline';
+import { withTime, type PermissionMode, type ReasoningBrain, type Turn } from '@nova/core';
+import type { McpServer } from './bridge.ts';
+import { claudeDelta } from './parsers.ts';
+import type { AgentPreset } from './presets.ts';
+import { channel, type Channel } from './stream.ts';
+
+export interface SessionAgent {
+  preset: AgentPreset;
+  bin: string;
+  model?: string;
+  extraArgs: string[];
+}
+
+interface ActiveTurn {
+  out: Channel<string>;
+  wrote: boolean;
+  done: () => void;
+}
+
+/**
+ * An agent kept running as Nova's brain: one CLI process for the whole conversation, so there's
+ * no start-up for each question, it remembers what was said, and answers stream as they're
+ * written. Questions take turns; stopping one restarts the process (the next question gets the
+ * recent conversation to pick up from).
+ */
+export class AgentSession implements ReasoningBrain {
+  readonly name: string;
+  private child: ChildProcessWithoutNullStreams | null = null;
+  private turn: ActiveTurn | null = null;
+  private queue: Promise<unknown> = Promise.resolve();
+  private fresh = true;
+  private stderr = '';
+
+  constructor(
+    private readonly agent: SessionAgent,
+    private readonly opts: { cwd: string; assistant: string; permissions?: PermissionMode; tools?: McpServer; env: (extra?: Record<string, string>) => NodeJS.ProcessEnv },
+  ) {
+    this.name = agent.preset.label;
+  }
+
+  /** Start the process ahead of the first question. */
+  warm() {
+    if (!this.child) this.start();
+  }
+
+  private start() {
+    const invocation = this.agent.preset.session!({ model: this.agent.model, assistant: this.opts.assistant, permissions: this.opts.permissions, tools: this.opts.tools });
+    const child = spawn(this.agent.bin, [...invocation.args, ...this.agent.extraArgs], { cwd: this.opts.cwd, env: this.opts.env(invocation.env), stdio: ['pipe', 'pipe', 'pipe'] });
+    this.child = child;
+    this.fresh = true;
+    child.stderr.on('data', (d) => (this.stderr = (this.stderr + d).slice(-2000)));
+    child.stdin.on('error', () => {});
+    // Only the current process speaks for the session: one that was replaced (refreshed, stopped) is ignored.
+    createInterface({ input: child.stdout }).on('line', (line) => this.child === child && this.onLine(line));
+    const gone = (why: string) => {
+      if (this.child !== child) return; // its turn was settled when it was replaced
+      this.child = null;
+      this.settle(new Error(why));
+    };
+    child.on('error', (e) => gone(`${this.name} couldn't start: ${e.message}`));
+    child.on('exit', (code) => gone(this.stderr.trim().split('\n').at(-1)?.slice(0, 200) || `${this.name} stopped (${code}).`));
+  }
+
+  /** The turn in progress ends - with `error`, unless it already ended. */
+  private settle(error: Error) {
+    const turn = this.turn;
+    this.turn = null;
+    turn?.out.end(error);
+    turn?.done();
+  }
+
+  private onLine(line: string) {
+    const turn = this.turn;
+    if (!turn) return;
+    const piece = claudeDelta(line);
+    if (piece) {
+      turn.wrote = true;
+      return turn.out.push(piece);
+    }
+    if (!line.includes('"result"')) return;
+    let e: any;
+    try {
+      e = JSON.parse(line);
+    } catch {
+      return;
+    }
+    if (e?.type !== 'result') return;
+    // Without partial messages the whole answer arrives here.
+    if (!turn.wrote && typeof e.result === 'string' && !e.is_error) turn.out.push(e.result);
+    this.turn = null;
+    turn.out.end(e.is_error ? new Error(typeof e.result === 'string' ? e.result : `${this.name} failed`) : undefined);
+    turn.done();
+  }
+
+  stream(utterance: string, history: Turn[], signal?: AbortSignal): AsyncIterable<string> {
+    const out = channel<string>();
+    this.queue = this.queue.then(
+      () =>
+        new Promise<void>((done) => {
+          if (signal?.aborted) {
+            out.end(new Error('Stopped.'));
+            return done();
+          }
+          if (!this.child) this.start();
+          // A new process doesn't know the conversation yet: give it the recent turns.
+          const context =
+            this.fresh && history.length
+              ? `Conversation so far:\n${history.map((t) => `User: ${t.user}\n${this.opts.assistant}: ${t.nova}`).join('\n')}\n\nUser: `
+              : '';
+          this.fresh = false;
+          const finish = () => {
+            signal?.removeEventListener('abort', stop);
+            done();
+          };
+          const stop = () => {
+            out.end(new Error('Stopped.'));
+            this.stop(); // the only way to stop a turn mid-answer; the next question starts a new process
+          };
+          signal?.addEventListener('abort', stop, { once: true });
+          this.turn = { out, wrote: false, done: finish };
+          this.child!.stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user', content: withTime(context + utterance) } })}\n`);
+        }),
+    );
+    return out;
+  }
+
+  async reply(utterance: string, history: Turn[], signal?: AbortSignal) {
+    let text = '';
+    for await (const piece of this.stream(utterance, history, signal)) text += piece;
+    return text.trim();
+  }
+
+  /** Start a fresh process after any question in progress, so it sees what changed (its tools, say). */
+  refresh() {
+    this.queue = this.queue.then(() => {
+      if (!this.child) return;
+      this.stop();
+      this.start();
+    });
+  }
+
+  /**
+   * Just the process goes - a stopped turn, a refresh. Never close(): whoever owns the brain may hang its
+   * own ending on that (the agent host retires the brain's tools token there), and the brain lives on.
+   */
+  private stop() {
+    const child = this.child;
+    this.child = null;
+    child?.kill();
+    this.settle(new Error(`${this.name} was stopped.`)); // a question in progress doesn't wait for an answer that won't come
+  }
+
+  /** The brain is done with. */
+  close() {
+    this.stop();
+  }
+}

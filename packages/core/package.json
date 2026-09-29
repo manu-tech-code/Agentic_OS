@@ -5,7 +5,12 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./protocol": "./src/protocol.ts"
+    "./protocol": "./src/protocol.ts",
+    "./settings": "./src/settings.ts",
+    "./speech": "./src/speech.ts",
+    "./shortcut": "./src/shortcut.ts",
+    "./when": "./src/when.ts",
+    "./integrations": "./src/integrations.ts"
   },
   "scripts": {
     "test": "vitest run",

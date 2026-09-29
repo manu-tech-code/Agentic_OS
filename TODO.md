@@ -1,0 +1,26 @@
+# TODO
+
+- [x] Make the orb resizable
+- [x] When the orb is resized to its maximum size, centre it on the screen in app window only
+- [x] Make the transcript text size adjustable
+- [x] Add a "Test my voice" option in Settings → Voice → Voice ID so after setting up, I can check it recognises my voice
+- [x] In Settings, hide each label's description behind an info icon next to the label, and show the description when I hover over the icon
+- [x] Give Voice ID a master override keyword that works anywhere, from any voice, and overrides any Voice ID that's already set up
+- [x] Make the response cards that show on screen after a reply close by themselves after a few seconds
+- [ ] Make Voice ID recognise my voice reliably — it's hit or miss and often says it couldn't tell it was me, even though I set it up with my own voice. Leads:
+  - [x] Speech a window hears itself (not the Mac app's ear) never gets a voiceprint, so with Voice ID on it's always "unsure" → "I couldn't tell that was you" (`apps/daemon/src/server.ts:695`). Route that audio through Voice ID too, or say which ear is listening
+  - [x] Setup takes only 6 short phrases in one sitting; ask for more and longer speech (aim for ~30–60 s in total), including a free-talk part, and at different distances/volumes (normal, quiet, a bit further from the mic)
+  - [x] Make setup explicit: check each phrase before accepting it — loudness, background noise, clipping, length of actual speech, and pitch range — and show a live meter plus a per-phrase ✓ or "say it again because…" so setup only completes once it has every bit of data it needs
+  - [x] End setup with a built-in check: a few new phrases that must come out as "you" (with the scores shown) before Voice ID is switched on; if they don't, keep collecting instead of finishing
+  - [x] Thresholds are set from how alike the setup phrases are to their own average (`enrollFrom` in `apps/daemon/src/hearing/voiceid.ts`), which flatters them; set the bars leave-one-out, or from the end-of-setup check, so the "you" bar isn't too high for real turns
+  - [x] Keep several voiceprints (e.g. per microphone, or a few clusters) instead of one average, and match against the closest
+  - [x] Let "unsure" turns that I then confirm (via the talk shortcut) teach Voice ID, and offer "Improve my voice" to add phrases without redoing setup
+  - [x] Log each turn's score, length and ear to daemon.log so misses can be diagnosed
+  - [x] Hear with stronger models: WeSpeaker ResNet293 and NVIDIA TitaNet-Large alongside the first one, their matches weighed together; my clear turns of the last 10 minutes count too; a week of recordings to tune on (#21) - it made no difference
+  - Benched on 2026-09-28: set aside for now, to come back to later
+- [x] Remove the "System 1" and "System 2" items from the dock. There's no need to show those two items on the dock
+- [x] Remove the connected agents from the dock. There's no need to show them there
+- [ ] The listening model should be able to filter out noise. Leads:
+  - [x] Ignore sounds that aren't speech: Silero VAD tells a voice from typing, music, a door or a fan, so those no longer start a turn (#28, live)
+  - Ignore far voices by how loud they are: dropped - on my own recordings my voice ran from -65 to -14 dB, and the turns Voice ID said weren't me sat in the same ranges, so it would have ignored me speaking softly
+  - Clean the audio before it's heard (GTCRN): dropped - measured, it made both recognizers worse (Parakeet in loud noise: 5.1% of words wrong became 10.6%; with other voices as loud as mine, 25.8% became 39.4%). Parakeet already hears through music and typing without mistakes, and makes a third as many as Apple's recognizer in loud noise

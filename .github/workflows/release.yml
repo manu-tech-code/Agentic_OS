@@ -1,0 +1,32 @@
+# develop merged into main: branch the release off main, named for its version
+# (release/v0.2.0), with the date and commit added if that name is taken.
+name: Release branch
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+# One release at a time: two quick merges into main never race for a name.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Release branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: Branch the release off main
+        run: |
+          version=$(node -p "require('./package.json').version")
+          name="release/v$version"
+          if git ls-remote --exit-code --heads origin "$name" >/dev/null; then
+            name="$name-$(date -u +%Y%m%d)-${GITHUB_SHA::7}"
+          fi
+          git push origin "HEAD:refs/heads/$name"
+          echo "Released as \`$name\`." >> "$GITHUB_STEP_SUMMARY"

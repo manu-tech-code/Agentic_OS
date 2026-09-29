@@ -1,12 +1,25 @@
 import { motion, useMotionValue, useSpring, useTransform, type MotionValue } from 'motion/react';
-import { useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
+
+/** Shrinks the dock to fit narrow windows, measured from its resting size (icons 48px, gaps 10px). */
+function useFitScale(items: DockItem[]) {
+  const [width, setWidth] = useState(() => window.innerWidth);
+  useEffect(() => {
+    const onResize = () => setWidth(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  const icons = items.filter((i) => i.id !== '|').length;
+  const resting = icons * 48 + (items.length - icons) * 5 + (items.length - 1) * 10 + 26;
+  return Math.min(1, (width - 24) / resting);
+}
 
 export interface DockItem {
   id: string;
   label: string;
   glyph: string;
   active?: boolean;
-  status?: 'on' | 'off' | 'warn';
+  status?: 'on' | 'off' | 'warn' | 'busy';
   onClick: () => void;
 }
 
@@ -26,21 +39,27 @@ function DockIcon({ item, mouseX }: { item: DockItem; mouseX: MotionValue<number
   );
 }
 
-/** macOS-style magnifying dock: brains, agents and panels. */
+/**
+ * macOS-style magnifying dock: the microphone, typing and the panels. The wrapper centres it; the dock's
+ * own slide-in animation owns its transform, so centring can't live on the dock itself.
+ */
 export function Dock({ items }: { items: DockItem[] }) {
   const mouseX = useMotionValue(Infinity);
+  const scale = useFitScale(items);
   return (
-    <motion.nav
-      className="glass dock"
-      onMouseMove={(e) => mouseX.set(e.clientX)}
-      onMouseLeave={() => mouseX.set(Infinity)}
-      initial={{ y: 80, opacity: 0 }}
-      animate={{ y: 0, opacity: 1 }}
-      transition={{ type: 'spring', stiffness: 260, damping: 26, delay: 0.2 }}
-    >
-      {items.map((item, i) =>
-        item.id === '|' ? <span key={`sep-${i}`} className="dock__sep" /> : <DockIcon key={item.id} item={item} mouseX={mouseX} />,
-      )}
-    </motion.nav>
+    <div className="dock-wrap" style={scale < 1 ? { transform: `scale(${scale})`, transformOrigin: 'bottom center' } : undefined}>
+      <motion.nav
+        className="glass dock"
+        onMouseMove={(e) => mouseX.set(e.clientX)}
+        onMouseLeave={() => mouseX.set(Infinity)}
+        initial={{ y: 80, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        transition={{ type: 'spring', stiffness: 260, damping: 26, delay: 0.2 }}
+      >
+        {items.map((item, i) =>
+          item.id === '|' ? <span key={`sep-${i}`} className="dock__sep" /> : <DockIcon key={item.id} item={item} mouseX={mouseX} />,
+        )}
+      </motion.nav>
+    </div>
   );
 }

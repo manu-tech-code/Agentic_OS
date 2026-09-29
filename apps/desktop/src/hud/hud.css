@@ -1,0 +1,74 @@
+/* Nova's floating orb. The Mac app draws the frosted glass behind it and sizes its panel to .hud,
+   so the page itself is transparent and the card has fixed widths. */
+html.is-hud,
+html.is-hud body,
+html.is-hud #root {
+  background: transparent !important;
+  height: auto;
+  overflow: hidden;
+}
+
+.hud {
+  --hud-orb: 48px; /* the orb's size: set from its setting, or as it's resized by hand */
+  position: fixed;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  color: #fff;
+  cursor: pointer;
+  -webkit-font-smoothing: antialiased;
+}
+.hud--bottom-right { right: 0; bottom: 0; }
+.hud--top-right { right: 0; top: 0; }
+.hud--bottom-left { left: 0; bottom: 0; }
+.hud--top-left { left: 0; top: 0; }
+
+/* The card widens with the text size (half as fast), so bigger words still fit a few to a line. */
+.hud--card { width: calc(312px * (0.5 + 0.5 * var(--text-scale, 1)) + var(--hud-orb)); padding: 12px 18px 13px 12px; }
+.hud--orb,
+.hud--hidden { width: calc(var(--hud-orb) + 16px); height: calc(var(--hud-orb) + 16px); padding: 8px; }
+
+.hud__orb { position: relative; flex: none; width: var(--hud-orb); height: var(--hud-orb); }
+.hud .orb { --size: var(--hud-orb); }
+.hud.is-resizing .orb { transition: none; }
+
+/* The resize handle, on the orb's side away from its corner: dragging it outward grows the orb into the screen.
+   Nova.app says when the pointer is over the orb (is-hovered) - the panel's page can't tell by itself. */
+.hud__handle {
+  position: absolute;
+  z-index: 2;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  background: rgba(255, 255, 255, 0.16);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.4);
+  touch-action: none;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.hud.is-hovered .hud__handle,
+.hud.is-resizing .hud__handle { opacity: 1; }
+.hud--bottom-right .hud__handle { left: -4px; top: -4px; cursor: nwse-resize; }
+.hud--top-right .hud__handle { left: -4px; bottom: -4px; cursor: nesw-resize; }
+.hud--bottom-left .hud__handle { right: -4px; top: -4px; cursor: nesw-resize; }
+.hud--top-left .hud__handle { right: -4px; bottom: -4px; cursor: nwse-resize; }
+.hud .particle-orb { inset: -30%; }
+.hud .orb__glow { filter: blur(12px); }
+
+.hud__body { flex: 1; min-width: 0; display: grid; gap: 5px; padding-top: 4px; }
+.hud__body p { margin: 0; overflow-wrap: anywhere; }
+.hud__heard { font-size: calc(13px * var(--text-scale, 1)); line-height: 1.35; color: rgba(255, 255, 255, 0.6); }
+.hud__heard.is-live { color: rgba(255, 255, 255, 0.86); }
+.hud__status { font-size: calc(13px * var(--text-scale, 1)); line-height: 1.35; color: rgba(255, 255, 255, 0.7); }
+.hud__computer { font-size: calc(12.5px * var(--text-scale, 1)); line-height: 1.35; font-weight: 600; color: #7dd3fc; }
+.hud__reply {
+  font-size: calc(14.5px * var(--text-scale, 1));
+  line-height: 1.42;
+  display: -webkit-box;
+  -webkit-line-clamp: 7;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.hud__ask { font-size: calc(14px * var(--text-scale, 1)); font-weight: 600; line-height: 1.35; }
+.hud__ask span { font-weight: 400; color: rgba(255, 255, 255, 0.6); margin-left: 6px; }

@@ -40,7 +40,8 @@ function similarity(text: string, textTokens: Set<string>, phrase: string): numb
   const lowered = text.toLowerCase();
   const exact = lowered.includes(phrase.toLowerCase()) ? 0.5 : 0;
   const hits = p.filter((t) => textTokens.has(t)).length;
-  return hits / p.length + exact;
+  // Small bonus per matched word, so "stop the agent" beats a bare "stop" on the same text.
+  return hits / p.length + exact + 0.05 * hits;
 }
 
 export class HeuristicEvaluationModel implements EvaluationModelV4 {

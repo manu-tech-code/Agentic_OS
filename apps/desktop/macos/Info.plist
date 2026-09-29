@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>dev.nova.app</string>
+  <key>CFBundleName</key>
+  <string>Nova</string>
+  <key>CFBundleDisplayName</key>
+  <string>Nova</string>
+  <key>CFBundleExecutable</key>
+  <string>Nova</string>
+  <key>CFBundleIconFile</key>
+  <string>AppIcon</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.5</string>
+  <key>CFBundleVersion</key>
+  <string>1</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>14.0</string>
+  <key>LSUIElement</key>
+  <true/>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+  <key>NSPrincipalClass</key>
+  <string>NSApplication</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Nova listens for its name and for what you ask it. What it hears is turned into text on this Mac.</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>Nova turns what you say into text on this Mac.</string>
+  <key>NSCalendarsFullAccessUsageDescription</key>
+  <string>Nova reads today's events for your morning briefing, and stays quiet while you're in a meeting.</string>
+  <key>NSCalendarsUsageDescription</key>
+  <string>Nova reads today's events for your morning briefing, and stays quiet while you're in a meeting.</string>
+  <key>NSRemindersFullAccessUsageDescription</key>
+  <string>Nova adds reminders you ask for to the Reminders app, so they reach your iPhone, and tells you when they're due.</string>
+  <key>NSRemindersUsageDescription</key>
+  <string>Nova adds reminders you ask for to the Reminders app, so they reach your iPhone, and tells you when they're due.</string>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>Nova opens and quits apps when you ask it to, and reads the page in front when you ask about it.</string>
+</dict>
+</plist>

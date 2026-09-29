@@ -1,3 +1,8 @@
+import { parseTextSize, TEXT_SIZE, textSizeAfter } from '../appearance.ts';
+import type { UndoStep } from '../protocol.ts';
+import { spokenDuration } from '../when.ts';
+import { cancelling, cancelOnScreen, cancelPrompt, cancelReminders, cancelTier, reminderText, snoozeReminder, snoozesRecent } from './initiative.ts';
+import { toYou } from './memory.ts';
 import type { Skill } from './types.ts';
 
 const id = () => Math.random().toString(36).slice(2, 10);
@@ -9,36 +14,45 @@ const id = () => Math.random().toString(36).slice(2, 10);
 export const builtinSkills: Skill[] = [
   {
     id: 'open_app',
+    summary: "Open an app on the user's Mac, or switch to it.",
     tier: 0,
     needsApp: true,
     examples: ['open', 'open an application', 'open Safari', 'launch Spotify', 'start Slack', 'bring up Visual Studio Code', 'switch to Chrome'],
     async run({ app, platform }) {
+      // Undone by quitting it - but only if it wasn't running already (switching to it is no reason to close it).
+      const wasRunning = platform.isRunning ? await platform.isRunning(app!).catch(() => true) : true;
       await platform.openApp(app!);
       return {
         say: `Opening ${app}.`,
         activity: `Opened ${app}`,
         card: { id: id(), kind: 'app', title: app!, body: 'Opened', icon: 'app' },
+        undo: wasRunning ? undefined : { kind: 'app-quit', app: app! },
       };
     },
   },
   {
     id: 'quit_app',
+    summary: "Quit an app on the user's Mac.",
     tier: 2,
     needsApp: true,
     examples: ['quit', 'close', 'quit an application', 'close Spotify', 'quit Slack', 'shut down Chrome', 'kill Xcode'],
     confirmPrompt: ({ app }) => `Quit ${app}? Unsaved work could be lost.`,
+    rememberAs: ({ app }) => (app ? { key: `quit_app:${app}`, label: `Quit ${app}` } : null),
     async run({ app, platform }) {
       await platform.quitApp(app!);
       return {
         say: `${app} closed.`,
         activity: `Quit ${app}`,
         card: { id: id(), kind: 'app', title: app!, body: 'Quit', icon: 'app' },
+        undo: { kind: 'app-open', app: app! },
       };
     },
   },
   {
     id: 'tell_time',
+    summary: 'The local date and time right now.',
     tier: 0,
+    informs: true,
     examples: ['what time is it', 'tell me the time', 'what is the date today', 'what day is it'],
     async run({ platform }) {
       const now = platform.now();
@@ -49,13 +63,29 @@ export const builtinSkills: Skill[] = [
   },
   {
     id: 'set_timer',
+    summary: 'Start a countdown timer. Put the duration in request, e.g. "10 minutes".',
     tier: 1,
+    needsRequest: true,
     examples: ['set a timer for 5 minutes', 'timer 30 seconds', 'remind me in 10 minutes', 'start a countdown'],
-    async run({ utterance, timers }) {
+    async run(ctx) {
+      const { utterance, timers, reminders } = ctx;
+      if (snoozesRecent(ctx)) return snoozeReminder(ctx, reminders!.recent()!);
       // Durations are arithmetic: parsed in code, never by the decision model.
       const ms = parseDuration(utterance);
       if (!ms) return { say: 'For how long?', activity: 'Timer: missing duration' };
       const label = humanDuration(ms);
+      if (reminders) {
+        // Kept by the daemon, so it outlasts a restart. "Remind me in 10 minutes to check the oven" is a reminder too.
+        const { text, about, reminder } = countdownText(utterance);
+        const due = ctx.platform.now().getTime() + ms;
+        const item = await reminders.add({ text, about: reminder ? about : undefined, due, countdown: true, ms });
+        return {
+          say: reminder && text ? `Okay, I'll remind you to ${toYou(text)} in ${spokenDuration(ms)}.` : `Timer set for ${label}${text ? ` - ${toYou(text)}` : ''}.`,
+          activity: reminder && text ? `Reminder in ${label}: ${text}` : `Timer ${label}${text ? ` · ${text}` : ''}`,
+          card: { id: item.id, kind: 'timer', title: text ? `${text} · ${label}` : `Timer · ${label}`, endsAt: due },
+          undo: { kind: 'reminder-cancel', id: item.id },
+        };
+      }
       const timerId = timers.start(ms, label);
       return {
         say: `Timer set for ${label}.`,
@@ -65,12 +95,83 @@ export const builtinSkills: Skill[] = [
     },
   },
   {
+    id: 'stop_listening',
+    summary: "Turn the assistant's microphone off (only when the user asks).",
+    tier: 0,
+    examples: ['stop listening', 'go to sleep', 'turn off the microphone', 'mute yourself', 'stop listening to me'],
+    async run({ shell }) {
+      shell.setListening(false);
+      return { say: "Okay, I've stopped listening. Tap the microphone when you need me.", activity: 'Stopped listening' };
+    },
+  },
+  {
+    id: 'open_settings',
+    summary: "Show the assistant's settings window.",
+    tier: 0,
+    examples: ['open settings', 'show your settings', 'open nova settings', 'change your settings', 'open preferences'],
+    async run({ shell }) {
+      shell.openSettings();
+      return { say: 'Here are my settings.', activity: 'Opened settings' };
+    },
+  },
+  {
+    id: 'text_size',
+    summary:
+      'The size of the text the assistant shows - what the user said and its replies, in its window and the floating orb: bigger, smaller, a percent ("150 percent"), back to normal, or how big it is now. Put it in request.',
+    tier: 0,
+    examples: ['make the text bigger', 'make the text smaller', 'text size 150 percent', 'reset the text size', 'bigger font please', "what's the text size"],
+    async run({ utterance, prefs }) {
+      if (!prefs) return { say: "I can't change the text size here - Settings → Appearance can.", activity: 'Text size: not here' };
+      const req = parseTextSize(utterance);
+      if (!req) return { say: 'Bigger, smaller, or a size like 150 percent?', activity: 'Text size: how big' };
+      const now = prefs.get('appearance.textSize');
+      const said = (n: number) => (n === TEXT_SIZE.normal ? 'its normal size' : `${n} percent`);
+      if (req.action === 'query') return { say: `The text is at ${said(now)}.`, data: `${now}%`, activity: 'Checked the text size' };
+      const next = textSizeAfter(now, req);
+      if (next === now) {
+        const edge = req.action === 'bigger' && now >= TEXT_SIZE.max ? " - that's as big as it goes" : req.action === 'smaller' && now <= TEXT_SIZE.min ? " - that's as small as it goes" : '';
+        return { say: `The text is already at ${said(now)}${edge}.`, activity: `Text size: already ${now}%` };
+      }
+      await prefs.set('appearance.textSize', next);
+      return {
+        say: next === TEXT_SIZE.normal ? 'The text is back to its normal size.' : `The text is at ${next} percent now.`,
+        activity: `Text size: ${now}% → ${next}%`,
+        undo: { kind: 'pref-set', key: 'appearance.textSize', value: now },
+      };
+    },
+  },
+  {
     id: 'cancel_timer',
+    summary: 'Cancel the running timers (and waits of up to an hour, like "remind me in 10 minutes").',
     tier: 0,
     examples: ['cancel the timer', 'stop the timer', 'clear my timers'],
-    async run({ timers }) {
-      const n = timers.cancelAll();
-      return { say: n ? `Cancelled ${n === 1 ? 'your timer' : `${n} timers`}.` : 'No timers running.', activity: 'Cancelled timers' };
+    // "Cancel my reminder to call mum" names a reminder: that's confirmed first - all of them at once needs a tap.
+    tierFor: (ctx) => (cancelsReminder(ctx) ? cancelTier(ctx) : 0),
+    destructive: (ctx) => cancelsReminder(ctx),
+    confirmPrompt: (ctx) => cancelPrompt(ctx),
+    tapPrompt: (ctx) => cancelOnScreen(ctx),
+    async run(ctx) {
+      const { timers, reminders, utterance } = ctx;
+      if (cancelsReminder(ctx)) return cancelReminders(ctx);
+      let n = timers.cancelAll();
+      const back: UndoStep[] = [];
+      if (reminders) {
+        // Only countdowns - timers and short waits. Reminders at a time, or days away, are cancelled by name (cancel_reminder).
+        for (const { id, appleOnly: _only, ...r } of reminders.list().filter((r) => r.countdown)) {
+          if (!(await reminders.cancel(id))) continue;
+          n++;
+          back.push({ kind: 'reminder-restore', reminder: r });
+        }
+        if (!n && /\breminder/i.test(utterance) && reminders.list().length) {
+          return { say: 'No timers are running. To cancel a reminder, tell me which - like "cancel the reminder to call mum".', activity: 'No timers running' };
+        }
+      }
+      return {
+        say: n ? `Cancelled ${n === 1 ? 'your timer' : `${n} timers`}.` : 'No timers running.',
+        activity: n ? `Cancelled ${n === 1 ? 'a timer' : `${n} timers`}` : 'No timers running',
+        // Those Nova keeps come back as they were ("undo that"); one only in memory can't.
+        undo: back.length ? (back.length === 1 ? back[0] : { kind: 'batch', steps: back }) : undefined,
+      };
     },
   },
 ];
@@ -94,6 +195,27 @@ export function parseDuration(text: string): number | null {
     total += n * (UNIT[m[2]!] ?? 0);
   }
   return total > 0 ? total : null;
+}
+
+/** A reminder the words name ("cancel my reminder to call mum"): it's about that, whether or not a timer runs. */
+function cancelsReminder(ctx: Parameters<NonNullable<Skill['tierFor']>>[0]) {
+  if (!ctx.reminders || !/\breminder/i.test(ctx.utterance) || /\btimer/i.test(ctx.utterance)) return false;
+  return cancelling(ctx).items.length > 0;
+}
+
+/**
+ * What a countdown is for: "remind me in 10 minutes to check the oven" is a reminder ("check the
+ * oven"); "set a timer for the laundry, 40 minutes" is a timer with a label ("the laundry").
+ */
+export function countdownText(utterance: string): { text: string; about: 'to' | 'about' | 'that'; reminder: boolean } {
+  const reminder = /\b(?:remind|reminder|don'?t let me forget|tell me to|let me know)\b/i.test(utterance);
+  const spoken = utterance
+    .replace(/\b(?:in|for|after|within)?\s*(?:about\s+)?(?:\d+(?:\.\d+)?|an?|one|two|three|four|five|six|seven|eight|nine|ten|fifteen|twenty|thirty|forty-five|forty|sixty|ninety|half an?)\s*(?:and a half\s*)?(?:seconds?|secs?|minutes?|mins?|hours?|hrs?)\b(?:\s+from\s+now)?/gi, ' ')
+    .replace(/^\s*(?:(?:hey|okay|ok|so|please|nova|um)[\s,]+)*(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?(?:set|start|put|make|give me|get me|i need|i want)?\s*(?:me\s+)?(?:a|an|the|my)?\s*(?:timer|countdown|alarm)s?\b\s*(?:for|on)?\s*/i, ' ')
+    .replace(/\b(?:on the clock|please|thanks|now)\b/gi, ' ');
+  const { text, about } = reminderText(spoken);
+  const label = text.replace(/^(?:a|an|the)\s+(?:timer|countdown|alarm)$/i, '').replace(/^(?:tell me|let me know|ping me|alert me|notify me|nudge me)\s*/i, '');
+  return { text: label.length > 1 ? label : '', about, reminder };
 }
 
 export function humanDuration(ms: number): string {

@@ -4,10 +4,9 @@ import { answerFromWeights } from './distribution.ts';
 import type { CallOptions, EvaluationModelV4, Question, RawAnswer, RawResult } from './types.ts';
 
 /**
- * Makes any chat LLM (Claude, GPT, Gemini, a local model) behave like a
- * System One model: typed answers only, schema-constrained. Slower and pricier
- * than Jev and its probabilities are self-reported, but it always works - the
- * fallback while waiting on Jev access, and a baseline to compare Jev against.
+ * Makes a chat model on one of the user's local servers behave like a System One model: typed
+ * answers only, schema-constrained. Slower than Reflex or Jev and its probabilities are
+ * self-reported, but it keeps everything on the Mac - and it's a baseline to compare them against.
  */
 export class LlmEvaluationModel implements EvaluationModelV4 {
   readonly specificationVersion = 'v4' as const;
@@ -15,8 +14,8 @@ export class LlmEvaluationModel implements EvaluationModelV4 {
   readonly supportedQuestionTypes = ['choice', 'score', 'boolean'] as const;
 
   constructor(
-    private readonly model: LanguageModel,
-    readonly modelId: string = typeof model === 'string' ? model : 'custom-llm',
+    private readonly model: Exclude<LanguageModel, string>,
+    readonly modelId: string = 'custom-llm',
   ) {}
 
   async doEvaluate({ state, questions, abortSignal }: CallOptions): Promise<RawResult> {
@@ -32,7 +31,9 @@ export class LlmEvaluationModel implements EvaluationModelV4 {
         'You are a decision function inside software. Answer every question strictly from the STATE. ' +
         'Read instructions literally. For choice pick one option key; for score pick a level index (0 = first level); ' +
         'for boolean give P(true). Confidence/probability must be honest and calibrated.',
-      prompt: `STATE:\n${JSON.stringify(state, null, 2)}\n\nQUESTIONS:\n${JSON.stringify(questions, null, 2)}`,
+      prompt:
+        `STATE:\n${JSON.stringify(state, null, 2)}\n\nQUESTIONS:\n${JSON.stringify(questions, null, 2)}\n\n` +
+        `Reply with one JSON object in this shape:\n${JSON.stringify(answerShape(questions))}`,
     });
 
     const answers: Record<string, RawAnswer> = {};
@@ -41,6 +42,20 @@ export class LlmEvaluationModel implements EvaluationModelV4 {
     }
     return { answers, warnings: [] };
   }
+}
+
+/** The reply shape in plain words, for local servers that can't enforce the JSON schema. */
+function answerShape(questions: Record<string, Question>) {
+  const shape: Record<string, unknown> = {};
+  for (const [id, q] of Object.entries(questions)) {
+    shape[id] =
+      q.type === 'choice'
+        ? { choice: `one key of QUESTIONS.${id}.criteria`, confidence: 'number 0-1' }
+        : q.type === 'score'
+          ? { level: `integer 0-${q.criteria.length - 1}`, confidence: 'number 0-1' }
+          : { probability: 'number 0-1' };
+  }
+  return shape;
 }
 
 function schemaFor(q: Question): z.ZodTypeAny {

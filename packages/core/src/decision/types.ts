@@ -21,6 +21,17 @@ export type Questions = Record<string, Question>;
 export interface DecisionEngine {
   readonly name: string;
   decide<Q extends Questions>(state: StateInput, questions: Q): Promise<Decision<Q>>;
+  /** Hear which answer turned out right (the user confirmed it), for engines that learn. */
+  learn?(example: DecisionExample): void;
+}
+
+/** An utterance and the answer that turned out right for one question. */
+export interface DecisionExample {
+  utterance: string;
+  question: string;
+  choice: string;
+  /** How it became known: the user confirmed it, answered a follow-up, or the brain used that skill. */
+  source?: 'confirmed' | 'clarified' | 'brain';
 }
 
 export interface Decision<Q extends Questions> {
