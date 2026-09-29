@@ -10,7 +10,8 @@ directly - not even admins.
    - `hotfix/<name>` - an urgent fix
 2. **Open a pull request into `develop`.** CI runs (typecheck, tests, a build of the window) and
    checks the branch name. Review it, fix what the review finds, then turn on auto-merge
-   (squash): it merges once the checks pass, and the branch is deleted.
+   (squash): it merges once the checks pass, and the branch is deleted. If the change alters how
+   the window looks, `npm run readme:media` takes the README's pictures again.
 3. **Release: open a pull request from `develop` into `main`** (merge commit). When it merges,
    a workflow branches the release off `main` as `release/v<version>` (the version in the root
    `package.json`). Release branches can't be deleted or rewritten.
