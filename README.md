@@ -49,6 +49,7 @@ packages/core     brain: DecisionEngine (Jev / LLM / heuristic), NovaBrain orche
 apps/daemon       local service: WebSocket API on 127.0.0.1:7878, macOS app control, agent pairing, jev:ping latency spike
 apps/desktop      React + Vite glass UI (runs in a browser, or inside Nova.app)
 apps/desktop/macos  Nova.app: Nova in the menu bar - its microphone and speaker, the ⌥Space shortcut, the floating orb
+apps/ios          Nova on the iPhone (SwiftUI): the same Nova, reached through the daemon's door for paired phones
 ```
 
 One core, many shells: the desktop app, a web app and future IDE extensions are all thin clients of the daemon.
@@ -107,6 +108,7 @@ beside its name - point at it, or click it to keep it open:
 - **Local models** - LM Studio, Ollama, oMLX, mlx_lm, llama.cpp and any server you add: whether it's running, which models it offers, keys.
 - **Agents** - which are paired, the default, and each one's model, extra arguments and CLI path, plus your own agent CLIs.
 - **Projects** - the folders agents may work in.
+- **iPhone** - pair your iPhone, whether it may connect, and where what you say into it is heard.
 - **Privacy & trust** - what leaves the Mac and where it goes (a switch for each), what Nova may do without asking (revoke any), how long the record of actions is kept, and snapshots for undoing agents' changes.
 
 Your settings live in `~/.nova/settings.json`: plain JSON holding only what you've changed, so it's also fine to edit by
@@ -283,6 +285,38 @@ again after every rebuild.
   folder's code; restart it from its menu after a change).
 - Settings → System shows who signed each app and until when, and the setup checklist says when your certificate is
   about to run out.
+
+## Nova on your iPhone
+
+The same Nova in your pocket. What you say into the iPhone is heard and answered by Nova on your Mac - its hearing,
+Reflex, your agents, Nova's hands - and the reply is spoken on the phone, in Kokoro's voice.
+
+```bash
+npm run phone                 # build Nova for your iPhone and put it on it (paired with this Mac, Developer Mode on)
+npm run phone -- --simulator  # or in the iOS Simulator
+```
+
+1. On the Mac: Settings → iPhone → **Let your iPhone connect**, then **Pair an iPhone**.
+2. On the iPhone: open Nova and scan the code. (In the Simulator: **Copy the link**, then `xcrun simctl openurl booted "<the link>"`.)
+3. Hold the talk button and talk - or tap it, talk, and tap it again. The keyboard button types instead, and ■ stops
+   everything. Nova's cards show on the phone - a question waiting for a yes is answered right there - and ✳︎ is the
+   agents' task board, with Stop and Run again.
+
+- **Only your phone gets in.** The door - on your Wi-Fi, port 7879 (`NOVA_PHONE_PORT`) - is open only while *Let your
+  iPhone connect* is on. Every connection is encrypted (TLS), and the phone accepts only the certificate the pairing
+  code named. Each phone proves who it is by signing a challenge with a key its Secure Enclave keeps. A pairing code
+  works once, for ten minutes, and five wrong guesses end it. Forget a phone in Settings → iPhone and it's cut off at once.
+- **Heard on the Mac, or on the iPhone.** While you hold the button the phone streams its microphone to the Mac, and
+  Nova hears it as it hears you at the Mac. On a weak connection - or when Settings → iPhone says so - Apple's
+  recognizer on the iPhone does it, and only the text goes to the Mac (its speech model downloads once, from the
+  app's Mac page).
+- **What a phone may do.** Talk and type to Nova, answer its questions, stop it, and stop or rerun agents' tasks -
+  with the same rules and permissions as at the Mac. It can't change Settings, and it never sees your memories or the
+  record of actions. Replies to what you said on the phone are spoken there; Nova's news (a reminder, an agent
+  finishing) is still said at the Mac.
+- **For now:** on the same Wi-Fi as the Mac - Tailscale, for anywhere, comes next. With a free Apple account, Xcode's
+  signing lasts 7 days (run `npm run phone` again after that), and the Mac can't wake the phone with a push: it hears
+  from Nova while it's open.
 
 ## Reminders, briefings and routines
 
