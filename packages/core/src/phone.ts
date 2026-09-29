@@ -78,6 +78,17 @@ export const DOOR_CLOSE = {
   busy: 4429,
 } as const;
 
+/** A reminder or timer coming up, for the iPhone to ring for itself - even with Nova closed there. */
+export interface PhoneReminder {
+  id: string;
+  title: string;
+  /** What Nova says when it's due. */
+  body: string;
+  /** Epoch ms. */
+  due: number;
+  timer: boolean;
+}
+
 /** Nova on the iPhone, for Settings. */
 export interface PhoneStatus {
   /** The door is open for paired phones: its port, and the addresses a phone can reach it on. */

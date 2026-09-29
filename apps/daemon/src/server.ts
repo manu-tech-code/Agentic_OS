@@ -220,7 +220,7 @@ const send = (ws: WebSocket, event: ServerEvent) => ws.readyState === ws.OPEN &&
 /** Paired iPhones (Settings → iPhone): set up once Nova is. */
 let phones: Phones | undefined;
 /** What a phone is sent: what it shows and plays - never Settings, the record, or the Mac app's business. */
-const PHONE_EVENTS: ReadonlySet<ServerEvent['type']> = new Set(['hello', 'hearing', 'transcript', 'barge-in', 'phase', 'say', 'audio', 'card', 'dismiss', 'tasks', 'computer', 'settings-result', 'phone-config', 'error']);
+const PHONE_EVENTS: ReadonlySet<ServerEvent['type']> = new Set(['hello', 'hearing', 'transcript', 'barge-in', 'phase', 'say', 'audio', 'card', 'dismiss', 'tasks', 'computer', 'settings-result', 'phone-config', 'phone-reminders', 'error']);
 const broadcast = (event: ServerEvent) => {
   for (const ws of clients) if (!phones?.isPhone(ws) || PHONE_EVENTS.has(event.type)) send(ws, event);
 };
@@ -397,7 +397,11 @@ initiative = new Initiative({
   services: () => integrations.status().filter((s) => s.state === 'connected').map((s) => s.label),
   hasBrain: () => Boolean(runtime.options.reasoning),
   saveRoutine: (r) => saveSettings({ [`routines.${r.name}`]: { ...(r.phrase ? { phrase: r.phrase } : {}), ...(r.schedule ? { schedule: r.schedule } : {}), steps: r.steps } }),
-  changed: () => snapshotsReady && broadcastSnapshot(),
+  changed() {
+    if (!snapshotsReady) return;
+    broadcastSnapshot();
+    remindPhones();
+  },
   // News for a user away from the Mac, said on the phone they're using: its voice goes there.
   phone: {
     inUse: () => Boolean(phones?.inUse()),
@@ -408,6 +412,18 @@ initiative = new Initiative({
   },
 });
 let snapshotsReady = false;
+
+/** The reminders coming up, to the phones (or one phone): each rings for them itself. A burst of changes sends once. */
+let remindTimer: ReturnType<typeof setTimeout> | undefined;
+function remindPhones(only?: WebSocket) {
+  const go = () => {
+    const items = runtime.config.phone.reminders ? initiative!.phoneReminders() : [];
+    for (const ws of only ? [only] : clients) if (phones?.isPhone(ws)) send(ws, { type: 'phone-reminders', items });
+  };
+  if (only) return go();
+  clearTimeout(remindTimer);
+  remindTimer = setTimeout(go, 300);
+}
 
 // Nova's own looks a skill may change by voice ("make the text bigger"): these keys alone, each checked as Settings would.
 const PREFS: Record<PrefKey, () => number> = { 'appearance.textSize': () => runtime.config.ui.textSize };
@@ -639,6 +655,7 @@ function apply(next: Runtime) {
   trust.configure();
   void phones?.configure(next.config.phone.enabled);
   for (const ws of clients) if (phones?.isPhone(ws)) send(ws, { type: 'phone-config', hearing: next.config.phone.hearing });
+  remindPhones();
   broadcast(nova.hello());
   broadcastSnapshot();
   banner();
@@ -786,7 +803,7 @@ wss.on('connection', (ws, req) => {
 });
 
 /** What a phone may do: talk and type to Nova, stop it, and deal with agents' tasks - not Settings, memories or the Mac app's part. */
-const PHONE_MAY: ReadonlySet<ClientEvent['type']> = new Set(['utterance', 'talk-start', 'talk-end', 'audio-stop', 'speech-finished', 'cancel', 'stop-all', 'task-cancel', 'task-retry', 'phone-state']);
+const PHONE_MAY: ReadonlySet<ClientEvent['type']> = new Set(['utterance', 'talk-start', 'talk-end', 'audio-stop', 'speech-finished', 'cancel', 'stop-all', 'task-cancel', 'task-retry', 'phone-state', 'notification-action']);
 
 /**
  * One of Nova's clients connected: a window, Nova.app (`native`: a program on this Mac, not a page) or a
@@ -798,8 +815,10 @@ function attach(ws: WebSocket, peer: { native: boolean; phone?: PairedDevice }) 
   initiative!.onListener(); // someone can hear now: reminders that came due while Nova was off
   send(ws, nova.hello());
   send(ws, { type: 'tasks', tasks: initiative!.tasks.list().slice(0, 50) });
-  if (phone) send(ws, { type: 'phone-config', hearing: runtime.config.phone.hearing });
-  else {
+  if (phone) {
+    send(ws, { type: 'phone-config', hearing: runtime.config.phone.hearing });
+    remindPhones(ws);
+  } else {
     send(ws, { type: 'voice-owner', app: presence.connected });
     send(ws, { type: 'activity-history', items: trust.actions.history(200) });
   }
@@ -872,7 +891,8 @@ function attach(ws: WebSocket, peer: { native: boolean; phone?: PairedDevice }) 
     } else if (event.type === 'shell-context') {
       if (presence.isApp(ws)) initiative!.onContext(event.context);
     } else if (event.type === 'notification-action') {
-      if (presence.isApp(ws)) await initiative!.onNotification(event.ref, event.action);
+      // Snooze or Done on a notification: Nova.app's, or a phone's own for a reminder the Mac sent it.
+      if (presence.isApp(ws) || phone) await initiative!.onNotification(event.ref, event.action);
     } else if (event.type === 'task-cancel' || event.type === 'task-retry' || event.type === 'reminder-cancel') {
       if (event.type === 'task-cancel') initiative!.cancelTask(event.id);
       else if (event.type === 'task-retry') {

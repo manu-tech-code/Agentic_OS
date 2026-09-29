@@ -49,6 +49,11 @@ final class Nova {
   private var language = "en-US"
   /// Nova is in front on this phone: the Mac sends news here while the user is away from it.
   private var foreground = true
+  /// Snooze and Done pressed while the Mac couldn't be reached: sent once it can (kept across launches).
+  private var unsent: [[String]] {
+    get { UserDefaults.standard.array(forKey: "unsentActions") as? [[String]] ?? [] }
+    set { UserDefaults.standard.set(newValue, forKey: "unsentActions") }
+  }
   private var cardSeconds: Double = 8
   private var closing: [String: Task<Void, Never>] = [:]
   /// Watches a turn: the microphone getting through, and - tapped - the pause that ends it.
@@ -94,6 +99,12 @@ final class Nova {
     voice.onFinished = { [weak self] in self?.door?.send(.speechFinished) }
     voice.onProblem = { [weak self] message in self?.notice = message }
     phoneHearing.onPartial = { [weak self] text in self?.heard = text }
+    Notifications.shared.setUp()
+    Notifications.shared.quiet = { [weak self] in self?.link == .connected && self?.foreground == true }
+    Notifications.shared.onAction = { [weak self] ref, action in
+      guard let self, action != "open" else { return }
+      if self.link == .connected { self.door?.send(.notificationAction(ref: ref, action: action)) } else { self.unsent.append([ref, action]) }
+    }
   }
 
   // MARK: - Pairing
@@ -290,6 +301,8 @@ final class Nova {
     case .connected:
       link = .connected
       door?.send(.phoneState(active: foreground))
+      for pair in unsent where pair.count == 2 { door?.send(.notificationAction(ref: pair[0], action: pair[1])) }
+      unsent = []
     case .failed(let message, let unpaired):
       if unpaired {
         PairedMac.forget()
@@ -343,6 +356,8 @@ final class Nova {
       computer = !active ? nil : paused ? "Waiting while you use the Mac" : "\(caller ?? name) is using the computer\(app.map { " · \($0)" } ?? "")"
     case .phoneConfig(let hearing):
       hearingMode = hearing
+    case .phoneReminders(let items):
+      Task { await Notifications.shared.replace(items) }
     case .result(let ok, let message):
       if !ok { notice = message }
     case .error(let message):
