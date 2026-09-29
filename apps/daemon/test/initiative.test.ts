@@ -247,6 +247,75 @@ describe('speaking up', () => {
     expect(d.missed()).toEqual([]);
   });
 
+  describe('on the iPhone', () => {
+    /** A phone with Nova in front (or not), taking news when away from the Mac - or always. */
+    function withPhone(when: 'away' | 'always' = 'away', policy: 'free' | 'show' | 'always' = 'free') {
+      let moment: Moment = { away: false, call: false, busy: false };
+      let inUse = true;
+      const mac: string[] = [];
+      const phone: string[] = [];
+      const d = new Deliverer({
+        policy: () => policy,
+        moment: () => moment,
+        speak: (t) => mac.push(t),
+        phone: { wants: (away) => inUse && (when === 'always' || away), speak: (t) => phone.push(t) },
+        now: () => NOW,
+      });
+      return { d, mac, phone, set: (m: Partial<Moment>) => (moment = { ...moment, ...m }), use: (on: boolean) => (inUse = on) };
+    }
+
+    it('says it on the phone at once while the user is away from the Mac, and at the Mac while they are there', () => {
+      const { d, mac, phone, set } = withPhone();
+      d.deliver(news('Claude finished in Agentic_OS.'));
+      set({ away: true });
+      d.deliver(news("It's time to call your mum."));
+      expect(mac).toEqual(['Claude finished in Agentic_OS.']);
+      expect(phone).toEqual(["It's time to call your mum."]);
+      expect(d.missed()).toEqual([]);
+    });
+
+    it('says what was held when Nova comes to the front on the phone - and not again at the Mac', () => {
+      const { d, mac, phone, set, use } = withPhone();
+      use(false);
+      set({ away: true });
+      d.deliver(news("It's time to call your mum."));
+      expect(phone).toEqual([]);
+      use(true);
+      d.phoneBack();
+      expect(phone).toEqual(["While you were away - it's time to call your mum."]);
+      set({ away: false });
+      d.back();
+      expect(mac).toEqual([]);
+    });
+
+    it('holds it during a call, never speaks unasked when set to show, and takes it always when told to', () => {
+      const call = withPhone();
+      call.set({ away: true, call: true });
+      call.d.deliver(news('Your timer is done.'));
+      expect(call.phone).toEqual([]);
+      expect(call.d.missed()).toHaveLength(1);
+      const shy = withPhone('away', 'show');
+      shy.set({ away: true });
+      shy.d.deliver(news('Your timer is done.'));
+      shy.d.phoneBack();
+      expect(shy.phone).toEqual([]);
+      const always = withPhone('always');
+      always.d.deliver(news('Your timer is done.'));
+      expect(always.phone).toEqual(['Your timer is done.']);
+      expect(always.mac).toEqual([]);
+    });
+
+    it('waits for Nova to finish, then says it on the phone', () => {
+      const { d, phone, set } = withPhone();
+      set({ away: true, busy: true });
+      d.deliver(news('Codex finished.'));
+      expect(phone).toEqual([]);
+      set({ busy: false });
+      d.idle();
+      expect(phone).toEqual(['Codex finished.']);
+    });
+  });
+
   it('never speaks unasked when set to show, and always does when set to always', () => {
     const shy = setup('show');
     shy.d.deliver(news('A reminder about the dentist.'));

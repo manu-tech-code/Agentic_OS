@@ -266,6 +266,7 @@ export function loadConfig(settings: Settings, env: Env) {
     phone: {
       enabled: values['phone.enabled'] as boolean,
       hearing: text('phone.hearing') as PhoneHearing,
+      news: text('phone.news') as 'away' | 'always' | 'never',
     },
     hearing: {
       engine: text('hearing.engine') as 'auto' | 'apple' | 'parakeet' | 'browser',

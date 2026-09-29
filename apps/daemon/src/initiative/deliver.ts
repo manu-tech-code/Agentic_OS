@@ -14,7 +14,8 @@ export interface Moment {
  * Nova's news - a reminder due, an agent's result, the briefing - said at a good moment. It always
  * shows at once (the orb, a notification). By the user's choice it's also said: when they're free
  * (not on a call, not away - then it waits, and "while you were away…" tells them when they're
- * back), never, or always at once.
+ * back), never, or always at once. Away from the Mac with Nova open on their iPhone, it's said there
+ * (Settings → iPhone → News on your iPhone) - and what was held comes up there when they open it.
  */
 export class Deliverer implements NewsService {
   private held: { at: number; news: News }[] = [];
@@ -28,6 +29,8 @@ export class Deliverer implements NewsService {
       speak: (text: string) => void;
       /** Shown at once: a notification from Nova.app. */
       notify?: (news: News) => void;
+      /** A phone the user is using: whether it takes the news now (given whether they're away from the Mac), and saying it there. */
+      phone?: { wants: (away: boolean) => boolean; speak: (text: string) => void };
       now?: () => number;
     },
   ) {
@@ -37,11 +40,20 @@ export class Deliverer implements NewsService {
   deliver(news: News) {
     this.opts.notify?.(news);
     const policy = this.opts.policy();
-    if (policy === 'always') return this.opts.speak(news.text);
     const moment = this.opts.moment();
+    if (this.onPhone(moment)) {
+      if (moment.busy) return void this.waiting.push(news); // said there once Nova has finished
+      return this.opts.phone!.speak(news.text);
+    }
+    if (policy === 'always') return this.opts.speak(news.text);
     if (policy === 'show' || moment.away || moment.call) return void this.held.push({ at: this.now(), news });
     if (moment.busy) return void this.waiting.push(news);
     this.opts.speak(news.text);
+  }
+
+  /** Whether news goes to the phone the user is using: never during a call, nor when they chose never to be told unasked. */
+  private onPhone(moment: Moment) {
+    return this.opts.policy() !== 'show' && !moment.call && Boolean(this.opts.phone?.wants(moment.away));
   }
 
   /** Nova has finished what it was doing with the user: what waited for that, now. */
@@ -50,6 +62,7 @@ export class Deliverer implements NewsService {
     const moment = this.opts.moment();
     if (moment.busy) return;
     const news = this.waiting.splice(0);
+    if (this.onPhone(moment)) return this.opts.phone!.speak(news.map((n) => n.text).join(' '));
     if (moment.away || moment.call || this.opts.policy() === 'show') {
       for (const n of news) this.held.push({ at: this.now(), news: n });
       return;
@@ -62,11 +75,22 @@ export class Deliverer implements NewsService {
     if (this.opts.policy() !== 'free' || !this.held.length) return;
     const moment = this.opts.moment();
     if (moment.away || moment.call || moment.busy) return;
+    this.opts.speak(this.whileAway(this.held.splice(0)));
+  }
+
+  /** Nova came to the front on the user's phone, while they're away from the Mac: what was held, said there. */
+  phoneBack() {
+    if (this.opts.policy() !== 'free' || !this.held.length) return;
+    const moment = this.opts.moment();
+    if (moment.busy || !this.onPhone(moment)) return;
+    this.opts.phone!.speak(this.whileAway(this.held.splice(0)));
+  }
+
+  private whileAway(items: { at: number; news: News }[]) {
     const now = this.now();
-    const items = this.held.splice(0);
     // Old news says when it was: "At 3 PM: it's time to call your mum."
     const said = items.map(({ at, news }) => (now - at > 10 * 60_000 ? `${capital(onDay(new Date(at), new Date(now)))}: ${lower(news.text)}` : news.text));
-    this.opts.speak(items.length === 1 ? `While you were away - ${lower(said[0]!)}` : `While you were away, ${items.length} things came up. ${said.join(' ')}`);
+    return items.length === 1 ? `While you were away - ${lower(said[0]!)}` : `While you were away, ${items.length} things came up. ${said.join(' ')}`;
   }
 
   /** What hasn't been said yet: held back, or waiting for Nova to finish. */

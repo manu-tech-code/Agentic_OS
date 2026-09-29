@@ -688,6 +688,19 @@ export const FIELDS: SettingField[] = [
       { value: 'iphone', label: 'On the iPhone' },
     ],
   },
+  {
+    key: 'phone.news',
+    section: 'phone',
+    label: 'News on your iPhone',
+    help: "Reminders coming up, agents finishing, a question for you: while you're away from the Mac (it's locked, or untouched a while) and Nova is open on your iPhone, Nova says them there instead of holding them - and what it held comes up when you open Nova on the phone. Always: whenever Nova is open on the phone, even at the Mac. Never: only the Mac tells you, when you're back.",
+    type: 'select',
+    default: 'away',
+    options: [
+      { value: 'away', label: "When you're away from the Mac" },
+      { value: 'always', label: 'Whenever Nova is open on the iPhone' },
+      { value: 'never', label: 'Never - the Mac tells you' },
+    ],
+  },
 
   {
     key: 'appearance.orbStyle',

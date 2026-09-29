@@ -287,6 +287,8 @@ export type ClientEvent =
   | { type: 'activity-search'; query: string; days?: number }
   /** Stop everything: agents, questions, speech, routines - and mute the microphone. */
   | { type: 'stop-all' }
+  /** From an iPhone: Nova came to the front there, or left it - so news can go where the user is. */
+  | { type: 'phone-state'; active: boolean }
   /** From Settings: show a pairing QR code for an iPhone (for a few minutes), or stop showing it. */
   | { type: 'phone-pair'; action: 'start' | 'stop' }
   /** From Settings: this iPhone can no longer connect. */

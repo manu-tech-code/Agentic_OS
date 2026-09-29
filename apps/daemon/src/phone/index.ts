@@ -50,6 +50,8 @@ export class Phones {
   readonly devices: DeviceStore;
   private readonly door: PhoneDoor;
   private readonly live = new Map<WebSocket, PairedDevice>();
+  /** Phones with Nova in front, and since when. */
+  private readonly active = new Map<WebSocket, number>();
   private identity: DoorIdentity | null = null;
   private stopBonjour: (() => void) | null = null;
   private problem: string | undefined;
@@ -78,6 +80,7 @@ export class Phones {
         this.live.set(ws, device);
         ws.once('close', () => {
           this.live.delete(ws);
+          this.active.delete(ws);
           this.opts.changed();
         });
         this.opts.welcome(ws, device);
@@ -101,6 +104,21 @@ export class Phones {
   /** Whether this connection is a paired phone's. */
   isPhone(ws: WebSocket) {
     return this.live.has(ws);
+  }
+
+  /** Nova came to the front on this phone, or left it. */
+  setActive(ws: WebSocket, active: boolean) {
+    if (!this.live.has(ws)) return;
+    if (active) this.active.set(ws, Date.now());
+    else this.active.delete(ws);
+  }
+
+  /** The phone the user is using now - Nova in front on it - the latest if there are several. */
+  inUse(): WebSocket | null {
+    let latest: WebSocket | null = null;
+    let at = 0;
+    for (const [ws, since] of this.active) if (since > at) (latest = ws), (at = since);
+    return latest;
   }
 
   /** Open the door (Settings → iPhone → Let your iPhone connect), or shut it. */

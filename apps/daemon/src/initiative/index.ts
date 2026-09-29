@@ -65,6 +65,8 @@ export class Initiative {
       saveRoutine: (routine: Routine) => Promise<void>;
       /** Settings should show something new. */
       changed: () => void;
+      /** A paired iPhone with Nova open: whether there is one, and saying something on it. */
+      phone?: { inUse: () => boolean; tell: (text: string) => void };
     },
   ) {
     const { home, config } = opts;
@@ -74,6 +76,14 @@ export class Initiative {
       moment: () => this.moment(),
       speak: (text) => this.nova?.tell(text),
       notify: (news) => this.notify(news),
+      phone: {
+        wants: (away) => {
+          if (!opts.phone?.inUse()) return false;
+          const when = config().phone.news;
+          return when === 'always' || (when === 'away' && away);
+        },
+        speak: (text) => opts.phone?.tell(text),
+      },
     });
     this.reminders = new ReminderStore({
       file: join(home, 'reminders.json'),
@@ -158,6 +168,11 @@ export class Initiative {
       this.maybeBrief('unlock');
     }
     this.check();
+  }
+
+  /** Nova came to the front on the user's iPhone: what waited for them, said there if they're away from the Mac. */
+  onPhoneActive() {
+    this.deliverer.phoneBack();
   }
 
   onAppConnected() {
