@@ -10,7 +10,9 @@
     "./speech": "./src/speech.ts",
     "./shortcut": "./src/shortcut.ts",
     "./when": "./src/when.ts",
-    "./integrations": "./src/integrations.ts"
+    "./integrations": "./src/integrations.ts",
+    "./phone": "./src/phone.ts",
+    "./qr": "./src/qr.ts"
   },
   "scripts": {
     "test": "vitest run",

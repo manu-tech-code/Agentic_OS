@@ -11,6 +11,7 @@ import type { Reminder, Routine, TaskRecord } from './skills/types.ts';
 import { parseWhen } from './when.ts';
 
 // Shells reach integrations' presets and names through this module.
+import type { PhoneStatus } from './phone.ts';
 export { INTEGRATION_PRESETS, integrationName, secretRefs, type AskPolicy, type IntegrationEntry, type IntegrationPreset, type ToolPolicy } from './integrations.ts';
 
 export type SettingValue = string | number | boolean | string[] | { [key: string]: unknown };
@@ -121,6 +122,7 @@ export type SettingsSection =
   | 'voice'
   | 'hearing'
   | 'presence'
+  | 'phone'
   | 'appearance'
   | 'decisions'
   | 'answers'
@@ -146,6 +148,12 @@ export const SECTIONS: { id: SettingsSection; label: string; icon: string; blurb
     label: 'Menu bar',
     icon: '⌥',
     blurb: 'Nova in your menu bar: the shortcut that summons it, when it listens, and the orb that shows what it hears and says.',
+  },
+  {
+    id: 'phone',
+    label: 'iPhone',
+    icon: '▯',
+    blurb: 'Nova on your iPhone: pair it here, then talk to Nova from anywhere on your Wi-Fi - the same Nova, heard and answered by this Mac.',
   },
   { id: 'appearance', label: 'Appearance', icon: '◐', blurb: 'How Nova looks and moves.' },
   { id: 'decisions', label: 'Decisions', icon: '⚡︎', blurb: 'System 1 - what decides what each thing you say means. Reflex does it on this Mac in about a millisecond.' },
@@ -656,6 +664,28 @@ export const FIELDS: SettingField[] = [
     options: [
       { value: 'app', label: 'Nova.app - started for you' },
       { value: 'terminal', label: 'You, in a terminal (npm run dev)' },
+    ],
+  },
+
+  {
+    key: 'phone.enabled',
+    section: 'phone',
+    label: 'Let your iPhone connect',
+    help: "Opens a door on your Wi-Fi for the iPhones you pair, and for nothing else: every connection is encrypted (TLS, with a certificate the phone checks), and each phone proves who it is with a key only it holds. Off, nothing listens beyond this Mac.",
+    type: 'toggle',
+    default: false,
+  },
+  {
+    key: 'phone.hearing',
+    section: 'phone',
+    label: "Where your iPhone's speech is heard",
+    help: "On this Mac, the phone streams its microphone here and Nova hears it as it hears you at the Mac - the same recognizer, Smart Turn and speech detector. On the iPhone, Apple's recognizer on the phone does it and only the text comes here - lighter on a weak connection. Automatic uses this Mac unless the connection is weak.",
+    type: 'select',
+    default: 'auto',
+    options: [
+      { value: 'auto', label: 'Automatic - this Mac, or the iPhone on a weak connection' },
+      { value: 'mac', label: 'On this Mac' },
+      { value: 'iphone', label: 'On the iPhone' },
     ],
   },
 
@@ -1226,4 +1256,6 @@ export interface SettingsSnapshot {
   agents: { name: string; label: string; bin: string; path: string | null; custom: boolean }[];
   servers: { name: string; url: string; builtIn: boolean; defaultUrl?: string; keyVar: string; online: boolean; models: string[] }[];
   projects: { name: string; path: string }[];
+  /** Nova on the iPhone: the door for paired phones, the phones, and a pairing under way. */
+  phone: PhoneStatus;
 }

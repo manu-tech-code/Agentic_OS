@@ -4,6 +4,7 @@
  */
 import type { HearingStatus, SettingsSnapshot, SettingValue, ShellContext, ShellStatus } from './settings.ts';
 import type { TaskRecord } from './skills/types.ts';
+import type { PhoneHearing } from './phone.ts';
 
 export type Phase = 'idle' | 'listening' | 'thinking' | 'acting' | 'speaking';
 
@@ -211,6 +212,8 @@ export type ServerEvent =
    * is using the mouse or keyboard, so Nova waits.
    */
   | { type: 'computer'; active: boolean; caller?: string; app?: string; paused?: boolean; steps?: number }
+  /** To an iPhone, as it connects and when Settings change: where its speech is heard. */
+  | { type: 'phone-config'; hearing: PhoneHearing }
   | { type: 'error'; message: string };
 
 /**
@@ -218,7 +221,8 @@ export type ServerEvent =
  * sends its microphone as binary messages: 16 kHz mono 16-bit little-endian PCM, after `audio-start`.
  */
 export type ClientEvent =
-  | { type: 'utterance'; text: string; source: 'voice' | 'keyboard' }
+  /** What was said or typed. `phone`: said into the iPhone with its talk button held, and recognized there. */
+  | { type: 'utterance'; text: string; source: 'voice' | 'keyboard' | 'phone' }
   | { type: 'audio-start'; sampleRate: number }
   | { type: 'audio-stop' }
   | { type: 'speech-finished' }
@@ -283,5 +287,9 @@ export type ClientEvent =
   | { type: 'activity-search'; query: string; days?: number }
   /** Stop everything: agents, questions, speech, routines - and mute the microphone. */
   | { type: 'stop-all' }
+  /** From Settings: show a pairing QR code for an iPhone (for a few minutes), or stop showing it. */
+  | { type: 'phone-pair'; action: 'start' | 'stop' }
+  /** From Settings: this iPhone can no longer connect. */
+  | { type: 'phone-forget'; id: string }
   /** The first-run walkthrough is done (or skipped). */
   | { type: 'setup-done' };

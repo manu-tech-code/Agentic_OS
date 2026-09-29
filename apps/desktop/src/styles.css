@@ -546,3 +546,9 @@ select.setting__input { width: auto; max-width: 320px; }
   .toast.is-error { color: #b91c1c; }
   .welcome__dot { background: rgba(0,0,0,0.18); }
 }
+
+/* ---------- Settings → iPhone: the pairing code ---------- */
+.pairing { display: flex; flex-direction: row; gap: 20px; align-items: center; }
+.pairing__qr { width: 188px; height: 188px; flex: none; border-radius: 12px; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35); }
+.pairing__text { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.pairing__text .tile__actions { margin-left: 0; }

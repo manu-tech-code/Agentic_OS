@@ -107,6 +107,7 @@ export async function buildSnapshot(
   presence: SettingsSnapshot['presence'],
   initiative: SettingsSnapshot['initiative'],
   trust: TrustSnapshotInput,
+  phone: SettingsSnapshot['phone'],
   fileError?: string,
 ): Promise<SettingsSnapshot> {
   const [agents, projects, servers] = await Promise.all([
@@ -142,6 +143,7 @@ export async function buildSnapshot(
     projects: await Promise.all(projectList.map(async (p) => ({ name: p.name, git: await inGit(p.path) }))),
     screen,
     hands,
+    phone,
   });
   const privacy = privacyFlows({
     config,
@@ -155,6 +157,7 @@ export async function buildSnapshot(
     voiceInstalled: voice.installed,
     isLocal: modelResolver(config.localProviders).isLocal,
     voiceprint: voiceId.enrolled,
+    phone,
   });
   return {
     ...settingValues(settings, config, env),
@@ -183,5 +186,6 @@ export async function buildSnapshot(
     agents,
     servers,
     projects: projectList,
+    phone,
   };
 }

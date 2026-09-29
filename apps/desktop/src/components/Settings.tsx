@@ -11,6 +11,7 @@ import { MemoryPanel, ScreenPanel } from './settings/Memory';
 import { PresencePanel, ShortcutInput } from './settings/Presence';
 import { InitiativePanel } from './settings/Initiative';
 import { PrivacyPanel, SetupPanel } from './settings/Trust';
+import { PhonePanel } from './settings/Phone';
 import { inApp, tellApp, useVoiceOwner } from '../lib/shell';
 
 const LANGUAGES: [string, string][] = [
@@ -174,6 +175,7 @@ function SectionBody({
       {section === 'voice' && <VoiceIdPanel snapshot={snapshot} name={name} result={result} onAction={onAction} />}
       {section === 'hearing' && <HearingPanel snapshot={snapshot} name={name} result={result} onAction={onAction} />}
       {section === 'presence' && <PresencePanel snapshot={snapshot} name={name} onAction={onAction} />}
+      {section === 'phone' && <PhonePanel snapshot={snapshot} name={name} onAction={onAction} />}
       {section === 'initiative' && <InitiativePanel snapshot={snapshot} name={name} onSave={onSave} onAction={onAction} />}
       {section === 'appearance' && <OrbPreview snapshot={snapshot} />}
       {section === 'decisions' && <ReflexPanel snapshot={snapshot} name={name} result={result} onAction={onAction} />}

@@ -46,6 +46,7 @@ import { DEFAULT_REFLEX_MODEL, downloadModel, isInstalled, KOKORO_MODEL, MODELS,
 import { forgetLearned, loadReflex, reflexEmbedder, type ReflexRuntime } from './reflex/runtime.ts';
 import { buildSnapshot, validateChanges } from './snapshot.ts';
 import { Trust } from './trust/index.ts';
+import { Phones, type PairedDevice } from './phone/index.ts';
 import { kokoro, sentences, stopVoice, synthesize } from './voice/tts.ts';
 
 // Something that failed where nothing waited for it is logged, and Nova carries on. An exception
@@ -216,8 +217,12 @@ const port = runtime.config.port; // a constant from .env
 
 const clients = new Set<WebSocket>();
 const send = (ws: WebSocket, event: ServerEvent) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(event));
+/** Paired iPhones (Settings → iPhone): set up once Nova is. */
+let phones: Phones | undefined;
+/** What a phone is sent: what it shows and plays - never Settings, the record, or the Mac app's business. */
+const PHONE_EVENTS: ReadonlySet<ServerEvent['type']> = new Set(['hello', 'hearing', 'transcript', 'barge-in', 'phase', 'say', 'audio', 'card', 'dismiss', 'tasks', 'computer', 'settings-result', 'phone-config', 'error']);
 const broadcast = (event: ServerEvent) => {
-  for (const ws of clients) send(ws, event);
+  for (const ws of clients) if (!phones?.isPhone(ws) || PHONE_EVENTS.has(event.type)) send(ws, event);
 };
 
 // Nova's Mac app: while it's connected it hears and speaks for Nova, and windows only show what happens.
@@ -231,9 +236,17 @@ const presence = new Presence<WebSocket>({
 });
 /** Reminders, the briefing, routines, agents reporting back - set up once Nova is. */
 let initiative: Initiative | undefined;
-/** Nova's voice goes to the Mac app while it's there - else to every window. */
+/** The iPhone the user is talking to Nova on, and since when: the reply is spoken there. */
+let voiceTo: WebSocket | null = null;
+let voiceToAt = 0;
+/** How long after the last thing said into a phone Nova still speaks there - a reminder an hour later is said at the Mac. */
+const PHONE_VOICE_MS = 90_000;
+const talkingOn = (ws: WebSocket | null) => ((voiceTo = ws), (voiceToAt = Date.now()));
+/** Nova's voice goes to the phone the user is talking on - else to the Mac app while it's there, else to every window. */
 const toVoice = (event: ServerEvent) => {
-  for (const ws of presence.voice(clients)) send(ws, event);
+  const phone = voiceTo && clients.has(voiceTo) && Date.now() - voiceToAt < PHONE_VOICE_MS ? voiceTo : null;
+  if (phone) voiceToAt = Date.now(); // a long reply keeps going where it started
+  for (const ws of phone ? [phone] : presence.voice([...clients].filter((c) => !phones?.isPhone(c)))) send(ws, event);
 };
 
 // Replies are spoken in Kokoro's voice (it comes inside Nova.app): the daemon streams the audio
@@ -476,6 +489,10 @@ await voiceId.refresh();
 
 // Hearing on this Mac: the window streams its microphone, and finished turns come back to Nova.
 let micOwner: WebSocket | null = null;
+/** Whose microphone a phone took while its talk button is held: it's theirs again after. */
+let micBefore: WebSocket | null = null;
+/** The phone whose talk button started the turn being heard - its reply is spoken there. */
+let phoneTurn: WebSocket | null = null;
 /** The walkthrough was offered this run. */
 let welcomed = false;
 hearing = new Hearing({
@@ -486,7 +503,11 @@ hearing = new Hearing({
     if (snapshotsReady) broadcastSnapshot();
   },
   transcript: (text, final) => broadcast({ type: 'transcript', text, final }),
-  utterance: (text, explicit, speaker) => void nova.handle(text, explicit ? 'shortcut' : 'voice', speaker).catch((e) => console.warn(`  [nova] ${why(e)}`)),
+  utterance(text, explicit, speaker) {
+    // A turn held on a phone is answered there; one heard at the Mac, here.
+    talkingOn(explicit ? phoneTurn : null);
+    void nova.handle(text, explicit ? 'shortcut' : 'voice', speaker).catch((e) => console.warn(`  [nova] ${why(e)}`));
+  },
   bargeIn() {
     broadcast({ type: 'barge-in' }); // windows stop the audio
     speaking = null; // and the rest of the reply isn't synthesized
@@ -545,6 +566,7 @@ const snapshot = async () =>
       brain: runtime.options.reasoning?.name ?? null,
       trust: trust.snapshot(),
     },
+    phones?.status() ?? { door: null, devices: [], pairing: null },
     runtime.fileError,
   );
 
@@ -559,6 +581,16 @@ function broadcastSnapshot() {
 // Reminders due while Nova was off come up once a window or Nova.app connects; routines and the briefing get their times.
 snapshotsReady = true;
 await initiative.load();
+
+// Nova on the iPhone: a door on the network for the phones the user paired, and for nothing else (Settings → iPhone).
+phones = await new Phones({
+  dir: join(home, 'phone'),
+  port: runtime.config.phonePort,
+  assistant: () => runtime.config.name,
+  welcome: (ws, device) => attach(ws, { native: false, phone: device }),
+  changed: () => broadcastSnapshot(),
+}).load();
+void phones.configure(runtime.config.phone.enabled);
 
 // Start Nova Eyes now (it's built the first time), so the first question already knows what's on screen.
 if (runtime.config.screen.context) eyes?.warm();
@@ -597,6 +629,8 @@ function apply(next: Runtime) {
   if (!next.config.voiceId.keepRecordings) void recordings.clear().catch(() => {});
   initiative!.configure();
   trust.configure();
+  void phones?.configure(next.config.phone.enabled);
+  for (const ws of clients) if (phones?.isPhone(ws)) send(ws, { type: 'phone-config', hearing: next.config.phone.hearing });
   broadcast(nova.hello());
   broadcastSnapshot();
   banner();
@@ -739,17 +773,40 @@ wss.on('connection', (ws, req) => {
   const origin = req.headers.origin;
   // verifyClient already turned away everyone else; this is the same rule, where events are handled.
   if (refusal(origin, req.url, wsToken, windows)) return ws.close(1008, 'Not one of Nova’s windows');
-  /** A program on this Mac rather than a page: only it may be Nova's ears and voice. */
-  const native = origin === undefined;
+  // No Origin: a program on this Mac rather than a page - only it may be Nova's ears and voice.
+  attach(ws, { native: origin === undefined });
+});
+
+/** What a phone may do: talk and type to Nova, stop it, and deal with agents' tasks - not Settings, memories or the Mac app's part. */
+const PHONE_MAY: ReadonlySet<ClientEvent['type']> = new Set(['utterance', 'talk-start', 'talk-end', 'speech-finished', 'cancel', 'stop-all', 'task-cancel', 'task-retry']);
+
+/**
+ * One of Nova's clients connected: a window, Nova.app (`native`: a program on this Mac, not a page) or a
+ * paired iPhone that came in through its door.
+ */
+function attach(ws: WebSocket, peer: { native: boolean; phone?: PairedDevice }) {
+  const { native, phone } = peer;
   clients.add(ws);
   initiative!.onListener(); // someone can hear now: reminders that came due while Nova was off
   send(ws, nova.hello());
-  send(ws, { type: 'voice-owner', app: presence.connected });
   send(ws, { type: 'tasks', tasks: initiative!.tasks.list().slice(0, 50) });
-  send(ws, { type: 'activity-history', items: trust.actions.history(200) });
+  if (phone) send(ws, { type: 'phone-config', hearing: runtime.config.phone.hearing });
+  else {
+    send(ws, { type: 'voice-owner', app: presence.connected });
+    send(ws, { type: 'activity-history', items: trust.actions.history(200) });
+  }
   ws.on('close', () => {
     clients.delete(ws);
-    if (micOwner === ws) (micOwner = null), hearing!.pause();
+    if (micBefore === ws) micBefore = null;
+    if (micOwner === ws) {
+      // A phone let go mid-turn: that turn is dropped, and the microphone it took is given back.
+      micOwner = phone ? micBefore : null;
+      micBefore = null;
+      if (phone) hearing!.drop();
+      else hearing!.pause();
+    }
+    if (voiceTo === ws) voiceTo = null;
+    if (phoneTurn === ws) phoneTurn = null;
     presence.detach(ws);
   });
   // A broken connection (a bad frame, a reset) ends only that connection.
@@ -757,15 +814,24 @@ wss.on('connection', (ws, req) => {
 
   /** One event from this client, already checked to be one Nova understands. */
   const onEvent = async (event: ClientEvent) => {
+    if (phone ? !PHONE_MAY.has(event.type) || (event.type === 'utterance' && event.source === 'voice') : event.type === 'utterance' && event.source === 'phone') {
+      return send(ws, { type: 'error', message: phone ? "That can't be done from the iPhone." : 'Only an iPhone says what was said into it.' });
+    }
+    // On a phone: said into it with its talk button held (and recognized there), or typed - the user, either way.
+    if (phone && event.type === 'utterance') {
+      talkingOn(ws);
+      return nova.handle(event.text, event.source === 'phone' ? 'shortcut' : 'keyboard');
+    }
     // Speech a window recognised itself never reached Voice ID's ear: with Voice ID on it can't count as the
     // user (the talk shortcut still does). Typing is the user at the keyboard.
     if (event.type === 'utterance') {
+      talkingOn(null);
       // A window's own speech recognition: the master keyword works here too; otherwise, with Voice ID on, the voice
       // can't be checked - unless Voice ID is off since the keyword, when any voice is heard (held back).
       const rest = event.source === 'voice' ? voiceId.unlock(event.text) : null;
       if (rest !== null) {
         if (rest) await nova.handle(rest, 'voice', 'anyone');
-      } else await nova.handle(event.text, event.source, event.source === 'voice' && voiceId.status().on ? (voiceId.overridden() ? 'anyone' : 'unchecked') : undefined);
+      } else await nova.handle(event.text, event.source === 'keyboard' ? 'keyboard' : 'voice', event.source === 'voice' && voiceId.status().on ? (voiceId.overridden() ? 'anyone' : 'unchecked') : undefined);
     }
     else if (event.type === 'audio-start') {
       // The latest window to start its microphone hears for Nova - unless the Mac app does.
@@ -819,6 +885,12 @@ wss.on('connection', (ws, req) => {
       initiative!.state.setUp();
       broadcastSnapshot();
     } else if (event.type === 'talk-start') {
+      // A phone's talk button: the phone hears for Nova until it's let go, and the reply is spoken there.
+      if (phone) {
+        if (micOwner !== ws) micBefore = micOwner;
+        micOwner = ws;
+      }
+      phoneTurn = phone ? ws : null;
       // The shortcut went down: Nova stops talking (or thinking) and listens to what comes next.
       if (phase === 'speaking' || phase === 'thinking') {
         broadcast({ type: 'barge-in' });
@@ -827,7 +899,11 @@ wss.on('connection', (ws, req) => {
         nova.interrupt();
       } else nova.listenNow();
       hearing!.hold();
-    } else if (event.type === 'talk-end') hearing!.release(event.held);
+    } else if (event.type === 'talk-end') {
+      hearing!.release(event.held);
+      // Let go: the microphone it took is given back (the turn is heard to its end all the same).
+      if (phone && micOwner === ws) (micOwner = micBefore && clients.has(micBefore) ? micBefore : null), (micBefore = null);
+    }
     else if (event.type === 'listen-stop') {
       hearing!.drop();
       nova.stopListening();
@@ -843,6 +919,16 @@ wss.on('connection', (ws, req) => {
       const text = `Hi, I'm ${runtime.config.name}. This is how I sound.`;
       hearing?.setSpoken(text);
       void speakAloud(event.id, text, event.voice, presence.connected ? toVoice : (e) => send(ws, e)).finally(() => hearing?.setSpoken(replyText || null));
+    }
+    else if (event.type === 'phone-pair') {
+      try {
+        if (event.action === 'start') phones!.startPairing();
+        else phones!.stopPairing();
+      } catch (error) {
+        send(ws, { type: 'settings-result', ok: false, message: (error as Error).message });
+      }
+    } else if (event.type === 'phone-forget') {
+      if (await phones!.forget(event.id)) send(ws, { type: 'settings-result', ok: true, message: 'That iPhone can no longer connect.' });
     }
     else if (event.type === 'settings-get') send(ws, { type: 'settings', snapshot: await snapshot() });
     else if (event.type === 'settings-set') {
@@ -970,7 +1056,7 @@ wss.on('connection', (ws, req) => {
       send(ws, { type: 'error', message: `That didn't work: ${(e as Error).message}` });
     });
   });
-});
+}
 
 // Ctrl+C, tsx watch restarting after an edit, or an error nothing could handle: stop the voice
 // process and the agents kept running, and let what was just said to remember get to disk first.
@@ -978,7 +1064,7 @@ let stopping = false;
 shutdown = (code) => {
   if (stopping) return;
   stopping = true;
-  for (const stop of [stopVoice, () => hearing?.close(), () => integrations.close(), () => eyes?.close(), () => runtime.host?.close(), () => initiative?.close(), () => trust.close()]) {
+  for (const stop of [stopVoice, () => hearing?.close(), () => phones?.close(), () => integrations.close(), () => eyes?.close(), () => runtime.host?.close(), () => initiative?.close(), () => trust.close()]) {
     try {
       stop();
     } catch (e) {
@@ -988,6 +1074,16 @@ shutdown = (code) => {
   void Promise.race([Promise.all([memory.flushed(), initiative?.flushed(), trust.flushed(), voiceprints.flush(), recordings.flushed()]), new Promise((r) => setTimeout(r, 1000))]).finally(() => process.exit(code));
 };
 for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, () => shutdown(0));
+
+/** The banner's line for the iPhone: whether paired phones can connect, and how many there are. */
+function phoneLine() {
+  const status = phones?.status();
+  const paired = status?.devices.length ?? 0;
+  const count = `${paired} paired`;
+  if (!runtime.config.phone.enabled) return paired ? `${count}, but they can't connect (Settings → iPhone)` : 'off (Settings → iPhone to pair one)';
+  if (!status?.door) return status?.message ?? 'opening the door…';
+  return `door open on ${status.door.addresses.join(', ') || 'no network'} :${status.door.port} · ${count}`;
+}
 
 function banner() {
   const { config, options } = runtime;
@@ -1005,6 +1101,7 @@ function banner() {
   Integrations ${runtime.config.integrations && Object.keys(runtime.config.integrations).length ? Object.keys(runtime.config.integrations).join(', ') : '(none - add them in Settings → Integrations)'}
   Agents       ${agents ? `${agents.agents.map((a, i) => (i ? a.label : `${a.label} (default)`)).join(', ')} · ${agents.projects.length} projects` : '(none - install Claude Code, Codex, OpenCode or Gemini CLI)'}
   Wake words   ${config.requireWakeWord ? `${config.wakeWords.join(', ')} · then ${config.followUpMs / 1000}s without` : 'not needed (conversation mode)'}
+  iPhone       ${phoneLine()}
 `);
   for (const problem of runtime.fileError ? [runtime.fileError] : config.warnings) console.warn(`  [settings] ${problem}`);
 }

@@ -25,7 +25,7 @@ const SHELL_ACTIONS: readonly ShellAction[] = [
 ];
 
 const SHAPES: { [T in ClientEvent['type']]: Shape } = {
-  utterance: { text: 'string', source: ['voice', 'keyboard'] },
+  utterance: { text: 'string', source: ['voice', 'keyboard', 'phone'] },
   'audio-start': { 'sampleRate?': 'number' },
   'audio-stop': {},
   'speech-finished': {},
@@ -75,6 +75,8 @@ const SHAPES: { [T in ClientEvent['type']]: Shape } = {
   'activity-undo': { id: 'string' },
   'activity-search': { query: 'string', 'days?': 'number' },
   'stop-all': {},
+  'phone-pair': { action: ['start', 'stop'] },
+  'phone-forget': { id: 'string' },
   'setup-done': {},
 };
 

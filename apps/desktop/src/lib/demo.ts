@@ -1,5 +1,6 @@
 import type { TaskRecord } from '@nova/core';
 import type { ActivityItem, DecisionTrace, ServerEvent } from '@nova/core/protocol';
+import { pairingLink } from '@nova/core/phone';
 import { COLLECTIONS, FIELDS, type SettingsSnapshot, type SettingValue } from '@nova/core/settings';
 
 /**
@@ -155,6 +156,7 @@ function demoSettings(): SettingsSnapshot {
     'agents.enabled': ['claude', 'codex'],
     'projects.folder': '~/dev',
     'initiative.town': 'Lisbon',
+    'phone.enabled': true,
     routines: { 'start work': { phrase: 'start work', steps: ['open Slack', 'brief me'] } },
     'integrations.servers': { github: { url: 'https://api.githubcopilot.com/mcp/', headers: { Authorization: 'Bearer ${NOVA_GITHUB_TOKEN}' } } },
   };
@@ -282,5 +284,13 @@ function demoSettings(): SettingsSnapshot {
       { name: 'mobile-app', path: '~/dev/mobile-app' },
       { name: 'Agentic_OS', path: '~/dev/Agentic_OS' },
     ],
+    phone: {
+      door: { port: 7879, addresses: ['192.168.1.23'] },
+      devices: [{ id: 'p1', name: 'iPhone', model: 'iPhone 17', pairedAt: now - 2 * 86_400_000, lastSeen: now - 5 * MINUTE, connected: false }],
+      pairing: {
+        link: pairingLink({ mac: 'q8vhQPDU2vGUQjL_rojjFw', name: 'Nova on the MacBook Pro', hosts: ['192.168.1.23'], port: 7879, pin: 'n4bQgYhMLqWVNdzUbPrXxJ2mPZcDs6GwZ4IxVv0kC1c', code: 'm2ZrV0bq6FQ3n1pX8yT4dw' }),
+        expires: now + 9 * MINUTE,
+      },
+    },
   };
 }
