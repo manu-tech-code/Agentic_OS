@@ -398,6 +398,14 @@ initiative = new Initiative({
   hasBrain: () => Boolean(runtime.options.reasoning),
   saveRoutine: (r) => saveSettings({ [`routines.${r.name}`]: { ...(r.phrase ? { phrase: r.phrase } : {}), ...(r.schedule ? { schedule: r.schedule } : {}), steps: r.steps } }),
   changed: () => snapshotsReady && broadcastSnapshot(),
+  // News for a user away from the Mac, said on the phone they're using: its voice goes there.
+  phone: {
+    inUse: () => Boolean(phones?.inUse()),
+    tell(text) {
+      talkingOn(phones?.inUse() ?? null);
+      nova.tell(text);
+    },
+  },
 });
 let snapshotsReady = false;
 
@@ -778,7 +786,7 @@ wss.on('connection', (ws, req) => {
 });
 
 /** What a phone may do: talk and type to Nova, stop it, and deal with agents' tasks - not Settings, memories or the Mac app's part. */
-const PHONE_MAY: ReadonlySet<ClientEvent['type']> = new Set(['utterance', 'talk-start', 'talk-end', 'audio-stop', 'speech-finished', 'cancel', 'stop-all', 'task-cancel', 'task-retry']);
+const PHONE_MAY: ReadonlySet<ClientEvent['type']> = new Set(['utterance', 'talk-start', 'talk-end', 'audio-stop', 'speech-finished', 'cancel', 'stop-all', 'task-cancel', 'task-retry', 'phone-state']);
 
 /**
  * One of Nova's clients connected: a window, Nova.app (`native`: a program on this Mac, not a page) or a
@@ -923,7 +931,10 @@ function attach(ws: WebSocket, peer: { native: boolean; phone?: PairedDevice }) 
       hearing?.setSpoken(text);
       void speakAloud(event.id, text, event.voice, presence.connected ? toVoice : (e) => send(ws, e)).finally(() => hearing?.setSpoken(replyText || null));
     }
-    else if (event.type === 'phone-pair') {
+    else if (event.type === 'phone-state') {
+      phones!.setActive(ws, event.active);
+      if (event.active) initiative!.onPhoneActive();
+    } else if (event.type === 'phone-pair') {
       try {
         if (event.action === 'start') phones!.startPairing();
         else phones!.stopPairing();

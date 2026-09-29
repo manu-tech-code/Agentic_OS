@@ -16,6 +16,7 @@ struct NovaApp: App {
     }
     .onChange(of: scenePhase) { _, phase in
       if phase == .active { nova.resume() }
+      nova.setForeground(phase == .active)
     }
   }
 }

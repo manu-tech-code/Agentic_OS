@@ -47,6 +47,8 @@ final class Nova {
   private let voice = Voice()
   private let phoneHearing = PhoneHearing()
   private var language = "en-US"
+  /// Nova is in front on this phone: the Mac sends news here while the user is away from it.
+  private var foreground = true
   private var cardSeconds: Double = 8
   private var closing: [String: Task<Void, Never>] = [:]
   /// Watches a turn: the microphone getting through, and - tapped - the pause that ends it.
@@ -124,6 +126,13 @@ final class Nova {
   func resume() {
     door?.resume()
     Task { await checkPhoneHearing() }
+  }
+
+  /// Nova came to the front on this phone, or went: the Mac says news here while the user is away from it.
+  func setForeground(_ on: Bool) {
+    guard on != foreground else { return }
+    foreground = on
+    if link == .connected { door?.send(.phoneState(active: on)) }
   }
 
   // MARK: - Talking
@@ -278,7 +287,9 @@ final class Nova {
     switch state {
     case .idle: link = mac == nil ? .unpaired : .offline("Not connected.")
     case .connecting: if link != .connected || mac == nil { link = .connecting }
-    case .connected: link = .connected
+    case .connected:
+      link = .connected
+      door?.send(.phoneState(active: foreground))
     case .failed(let message, let unpaired):
       if unpaired {
         PairedMac.forget()

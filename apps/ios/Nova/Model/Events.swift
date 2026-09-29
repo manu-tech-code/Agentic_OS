@@ -158,6 +158,8 @@ enum Outgoing {
   case talkEnd(held: Bool)
   /// A tapped turn is over (the Mac heard the pause): the phone stops streaming.
   case audioStop
+  /// Nova came to the front on this phone, or left it: news goes where the user is.
+  case phoneState(active: Bool)
   /// Said into the phone and recognized here (`phone`), or typed (`keyboard`).
   case utterance(String, source: String)
   case speechFinished
@@ -171,6 +173,7 @@ enum Outgoing {
     case .talkStart: return ["type": "talk-start"]
     case .talkEnd(let held): return ["type": "talk-end", "held": held]
     case .audioStop: return ["type": "audio-stop"]
+    case .phoneState(let active): return ["type": "phone-state", "active": active]
     case .utterance(let text, let source): return ["type": "utterance", "text": text, "source": source]
     case .speechFinished: return ["type": "speech-finished"]
     case .cancel: return ["type": "cancel"]
