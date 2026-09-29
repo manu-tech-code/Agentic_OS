@@ -12,6 +12,7 @@ import { Tasks } from './components/Tasks';
 import { Timeline } from './components/Timeline';
 import { formatShortcut } from '@nova/core/shortcut';
 import type { SettingsSection } from '@nova/core/settings';
+import { demoVoice } from './lib/demo';
 import { appLevel, inApp, onShellOpen, openOnLoad, tellApp, useAppState } from './lib/shell';
 import { orbAtLargest, sizeRange, useLiveSetting, useResizable, useViewport, zoomKeySize } from './lib/resize';
 import { useNova, type SayEvent } from './lib/useNova';
@@ -31,8 +32,10 @@ import {
 } from './voice/voice';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+/** The scripted session (lib/demo.ts): it plays what Nova hears and does, with no microphone and no daemon. */
+const DEMO = location.hash === '#demo';
 // Listening as soon as the page opens is a setting (Voice → Listen when Nova opens); #demo never listens.
-const AUTO_LISTEN = location.hash !== '#demo';
+const AUTO_LISTEN = !DEMO;
 
 const titleCase = (s: string) => s.replace(/\b\w/g, (c) => c.toUpperCase());
 
@@ -325,11 +328,14 @@ export default function App() {
   // What the Mac hears, as captions: words while you speak, then the turn Nova acts on.
   useEffect(() => {
     const t = state.transcript;
-    if (!t || !(localRef.current || handsOffRef.current)) return;
+    if (!t || !(localRef.current || handsOffRef.current || DEMO)) return;
     if (!t.final) return setInterim(t.text);
     setInterim('');
     if (t.text) setHeard(t.text);
   }, [state.transcript]);
+
+  // The demo's "you" talks: the Orb follows a made-up voice.
+  useEffect(() => (DEMO ? demoVoice(levelRef) : undefined), []);
 
   // The user talked over Nova: stop speaking at once.
   useEffect(() => {
@@ -449,7 +455,7 @@ export default function App() {
   // While the Mac app hears for Nova, "listening" is whatever it says (muted, locked, ...).
   const appListening = inApp ? app?.listening : state.settings?.presence.app?.listening;
   const heardByApp = !['muted', 'no-mic', 'locked'].includes(appListening ?? 'wake-word');
-  const listening = handsOff ? heardByApp : awake;
+  const listening = DEMO || (handsOff ? heardByApp : awake);
   // The shortcut, from the app itself - or, in a browser, from what the app told Settings.
   const reported = state.settings?.presence.app?.shortcut;
   const shortcut = app?.shortcut ?? (reported?.ok ? formatShortcut(reported.keys) : undefined);

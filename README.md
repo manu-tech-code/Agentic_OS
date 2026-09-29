@@ -2,6 +2,10 @@
 
 A voice-first, model-agnostic agentic OS layer. You talk; it acts.
 
+<p align="center">
+  <img src=".github/readme/nova-demo.webp" width="100%" alt="Nova's window: &quot;Hey Nova, open Figma&quot; is done at once, decided on the Mac by Reflex in 3 ms; Claude answers a question about git; a task handed to Claude starts, and Claude asks out loud before it runs npm test.">
+</p>
+
 - **System 1 - fast decisions.** Every utterance gets one typed decision call (intent, target app, "was that meant for me?") through a swappable `DecisionEngine`. Default: **Reflex**, Nova's own model, on your Mac in about a millisecond. Or **Jev**, TypeSafe's System One model, called directly with your own key. Also: a model on your own server, or an offline keyword matcher.
 - **System 2 - reasoning.** Open questions go to any model you plug in (Claude, GPT, Gemini, local).
 - **Paired agents.** Claude Code, Codex, OpenCode, Gemini CLI or any agent CLI answer questions and do project
@@ -9,6 +13,34 @@ A voice-first, model-agnostic agentic OS layer. You talk; it acts.
 - **Glass UI.** macOS-inspired shell: the Orb, Live Pill, frosted cards, magnifying dock, Decision Inspector.
 
 Design docs and decisions are in `doc/` as PDFs.
+
+## A look around
+
+The window, with Activity (⌘J) and the task board (⌘U) open: what Nova did and who asked, the agents' tasks, Claude's
+question waiting for a yes, and the Decision Inspector (⌘I) - how System 1 read the last thing said, with its
+probabilities.
+
+![Nova's window: the Activity panel and the task board on the left, the Orb in the middle with what was heard and Nova's reply, and on the right Claude's question waiting for a yes, its task, an answer card and the Decision Inspector](.github/readme/window.webp)
+
+<table>
+  <tr>
+    <td width="50%"><img src=".github/readme/settings-setup.webp" alt="Settings, Setup: each part of Nova - its voice, hearing, Reflex, the agents, Nova.app - with where it stands"><br><sub><b>Setup</b> - each part of Nova, where it stands, and the fix for what isn't there yet</sub></td>
+    <td width="50%"><img src=".github/readme/settings-hearing.webp" alt="Settings, Hearing: Parakeet on this Mac, with Smart Turn and the speech detector, and the settings for speech recognition"><br><sub><b>Hearing</b> - speech turned into text on the Mac, and the models that do it</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src=".github/readme/settings-agents.webp" alt="Settings, Agents: Claude (the default), Codex, OpenCode and Gemini CLI, each with its model, extra arguments and CLI path"><br><sub><b>Agents</b> - each vendor's own CLI, signed in with your account</sub></td>
+    <td width="50%"><img src=".github/readme/settings-privacy.webp" alt="Settings, Privacy and trust: what leaves this Mac, where it goes, and a switch for each"><br><sub><b>Privacy &amp; trust</b> - what leaves the Mac, where it goes, and a switch for each</sub></td>
+  </tr>
+</table>
+
+<p align="center">
+  <img src=".github/readme/orb.webp" width="300" alt="The Orb up close: it ripples as you speak, swirls and turns pink while Claude thinks, and pulses as Nova answers">
+  <br><sub>The Orb (<code>ParticleOrb.tsx</code>): listening to a voice, thinking while Claude answers, then speaking.</sub>
+</p>
+
+All of these come from the window's scripted session (`#demo`, in `apps/desktop/src/lib/demo.ts`), with made-up
+settings - nothing from anyone's Mac. After a change to the window, `npm run readme:media` takes them all again in
+headless Chrome (it needs Google Chrome, and `brew install webp` for the animations).
 
 ## Layout
 
@@ -55,7 +87,7 @@ entirely (conversation mode) - Nova's "was that for me?" check then filters back
 with Jev or local-model decisions rather than the keyword matcher.
 
 Press **⌘K** to type instead, **⌘I** for the Decision Inspector, **⌘J** for Activity, **Esc** to stop.
-`http://localhost:5173/#demo` plays a scripted session with no daemon, for design work.
+`http://localhost:5173/#demo` plays a scripted session with no daemon, made-up settings included, for design work.
 
 For Nova in the menu bar - always there, no browser tab - build **Nova.app** with `npm run app` (below).
 
