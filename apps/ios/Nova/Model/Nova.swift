@@ -38,6 +38,8 @@ final class Nova {
   private(set) var phoneHearingReady = false
   /// This turn is being heard on the iPhone.
   private(set) var hearingHere = false
+  /// The button was tapped, not held: the turn ends when you pause, as the Mac's ⌥Space tapped.
+  private(set) var tapped = false
   /// A short message to show: an error, or what happened.
   var notice: String?
 
@@ -47,6 +49,10 @@ final class Nova {
   private var language = "en-US"
   private var cardSeconds: Double = 8
   private var closing: [String: Task<Void, Never>] = [:]
+  /// Watches a turn: the microphone getting through, and - tapped - the pause that ends it.
+  private var watch: Task<Void, Never>?
+  /// When the microphone last heard speech in this turn (heard on the iPhone, tapped).
+  private var spokeAt: Date?
 
   init() {
     var problem: String?
@@ -78,7 +84,11 @@ final class Nova {
       guard let self else { return }
       if self.hearingHere { self.phoneHearing.feed(pcm) } else { self.door?.send(audio: pcm) }
     }
-    voice.onLevel = { [weak self] level in self?.level = level }
+    voice.onLevel = { [weak self] level in
+      guard let self else { return }
+      self.level = level
+      if self.talking, level > 0.06 { self.spokeAt = Date() }
+    }
     voice.onFinished = { [weak self] in self?.door?.send(.speechFinished) }
     voice.onProblem = { [weak self] message in self?.notice = message }
     phoneHearing.onPartial = { [weak self] text in self?.heard = text }
@@ -122,6 +132,8 @@ final class Nova {
   func talkStart() async {
     guard link == .connected, !talking else { return }
     talking = true
+    tapped = false
+    spokeAt = nil
     hearingHere = hearOnPhone
     voice.stopPlayback()
     if hearingHere {
@@ -138,13 +150,58 @@ final class Nova {
     if !(await voice.startTalking()) {
       talking = false
       if !hearingHere { door?.send(.talkEnd(held: false)) }
+      return
+    }
+    watchTurn()
+  }
+
+  /// Tapped rather than held: just talk, and the turn ends when you pause. Heard on the Mac, its turn-taking
+  /// (Smart Turn) hears the pause, as for ⌥Space; heard here, the phone listens for a second of quiet itself.
+  func talkTapped() {
+    guard talking, !tapped else { return }
+    tapped = true
+    if !hearingHere { door?.send(.talkEnd(held: false)) }
+  }
+
+  /// The microphone must be getting through; and a tapped turn ends at a pause, or after half a minute however long.
+  private func watchTurn() {
+    watch?.cancel()
+    let started = Date()
+    watch = Task { [weak self] in
+      while !Task.isCancelled {
+        try? await Task.sleep(for: .milliseconds(150))
+        guard let self, self.talking else { return }
+        let now = Date()
+        if now.timeIntervalSince(started) > 1.5, self.voice.frames == 0 {
+          self.notice = "The microphone isn't sending anything. Check Settings → Privacy & Security → Microphone → Nova, then try again."
+          return await self.talkEnd()
+        }
+        guard self.tapped else { continue }
+        let quiet = self.spokeAt.map { now.timeIntervalSince($0) > 1.2 } ?? (now.timeIntervalSince(started) > 8)
+        if now.timeIntervalSince(started) > 30 || (self.hearingHere && quiet) {
+          return self.hearingHere ? await self.talkEnd() : self.turnHeard()
+        }
+      }
     }
   }
 
-  /// The talk button came up.
+  /// The Mac heard the end of a tapped turn: the phone stops streaming and gives the microphone back.
+  private func turnHeard() {
+    guard talking, tapped, !hearingHere else { return }
+    watch?.cancel()
+    talking = false
+    tapped = false
+    voice.stopTalking()
+    door?.send(.audioStop)
+  }
+
+  /// The talk button came up after a hold, or was tapped again.
   func talkEnd() async {
     guard talking else { return }
+    watch?.cancel()
     talking = false
+    let wasTapped = tapped
+    tapped = false
     voice.stopTalking()
     if hearingHere {
       let said = await phoneHearing.finish()
@@ -152,6 +209,8 @@ final class Nova {
       if said.isEmpty { return }
       heard = said
       door?.send(.utterance(said, source: "phone"))
+    } else if wasTapped {
+      door?.send(.audioStop) // the Mac already ends the turn at the pause
     } else {
       door?.send(.talkEnd(held: true))
     }
@@ -247,13 +306,15 @@ final class Nova {
       cardSeconds = hello.cardSeconds ?? 8
     case .hearing(let status):
       macHearing = status
-    case .transcript(let text, _):
+    case .transcript(let text, let final):
       if !hearingHere { heard = text }
+      if final { turnHeard() }
     case .bargeIn:
       voice.stopPlayback()
     case .phase(let phase, let label):
       self.phase = phase
       phaseLabel = label
+      if ["thinking", "acting", "speaking"].contains(phase) { turnHeard() }
     case .say(let text, _, _, _):
       reply = text
     case .audio(let id, let seq, let rate, let pcm, let last, _):

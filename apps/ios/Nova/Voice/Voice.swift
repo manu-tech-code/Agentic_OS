@@ -21,7 +21,11 @@ final class Voice {
   private let player = AVAudioPlayerNode()
   private var started = false
   private(set) var talking = false
+  /// The microphone's tap is on (it's taken off before the engine is set up again).
+  private var tapped = false
   private var pending = Data()
+  /// 20 ms frames sent in this turn: none after a moment means the microphone isn't getting through.
+  private(set) var frames = 0
 
   // What's playing: one reply at a time, its pieces in order.
   private(set) var playing: String?
@@ -44,10 +48,16 @@ final class Voice {
       _ = self.start()
     }
     NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
-      // Headphones in or out: the engine stopped - start it on the new route.
-      self?.started = false
-      if self?.talking == true { self?.talking = false }
-      _ = self?.start()
+      // The engine stopped because its setup changed - echo cancellation coming on, headphones in or out. Start it
+      // again on the new route, and if the user is talking, keep hearing them: the turn goes on.
+      guard let self else { return }
+      self.removeTap()
+      self.started = false
+      guard self.start(), self.talking else { return }
+      if !self.installTap() {
+        self.talking = false
+        self.onProblem("The microphone stopped when the audio changed - press the button again.")
+      }
     }
   }
 
@@ -101,32 +111,48 @@ final class Voice {
     }
     // Allowed just now: start again, with echo cancellation this time.
     if started, !engine.inputNode.isVoiceProcessingEnabled {
+      removeTap()
       engine.stop()
       started = false
     }
     guard start(), !talking else { return talking }
-    let input = engine.inputNode
-    let format = input.outputFormat(forBus: 0)
-    guard format.sampleRate > 0, let mono = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: format.sampleRate, channels: 1, interleaved: false),
-      let converter = AVAudioConverter(from: mono, to: Voice.sendFormat)
-    else {
+    pending.removeAll()
+    frames = 0
+    guard installTap() else {
       onProblem("There's no microphone to listen with.")
       return false
-    }
-    pending.removeAll()
-    input.installTap(onBus: 0, bufferSize: AVAudioFrameCount(format.sampleRate / 50), format: format) { [weak self] buffer, _ in
-      guard let one = Voice.firstChannel(buffer, as: mono), let pcm = Voice.convert(one, with: converter) else { return }
-      let level = Voice.rms(one)
-      DispatchQueue.main.async { self?.heard(pcm, level: level) }
     }
     talking = true
     return true
   }
 
+  /// The microphone's tap: its first channel (voice processing's cleaned-up microphone), resampled for the Mac.
+  private func installTap() -> Bool {
+    removeTap()
+    let input = engine.inputNode
+    let format = input.outputFormat(forBus: 0)
+    guard format.sampleRate > 0, format.channelCount > 0,
+      let mono = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: format.sampleRate, channels: 1, interleaved: false),
+      let converter = AVAudioConverter(from: mono, to: Voice.sendFormat)
+    else { return false }
+    input.installTap(onBus: 0, bufferSize: AVAudioFrameCount(format.sampleRate / 50), format: format) { [weak self] buffer, _ in
+      guard let one = Voice.firstChannel(buffer, as: mono), let pcm = Voice.convert(one, with: converter) else { return }
+      let level = Voice.rms(one)
+      DispatchQueue.main.async { self?.heard(pcm, level: level) }
+    }
+    tapped = true
+    return true
+  }
+
+  private func removeTap() {
+    if tapped { engine.inputNode.removeTap(onBus: 0) }
+    tapped = false
+  }
+
   /// The talk button came up.
   func stopTalking() {
+    removeTap()
     guard talking else { return }
-    engine.inputNode.removeTap(onBus: 0)
     talking = false
     if !pending.isEmpty {
       onFrame(pending)
@@ -141,6 +167,7 @@ final class Voice {
     while pending.count >= Voice.frameBytes {
       onFrame(Data(pending.prefix(Voice.frameBytes)))
       pending.removeFirst(Voice.frameBytes)
+      frames += 1
     }
     onLevel(min(1, level * 5))
   }

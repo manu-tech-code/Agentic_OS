@@ -778,7 +778,7 @@ wss.on('connection', (ws, req) => {
 });
 
 /** What a phone may do: talk and type to Nova, stop it, and deal with agents' tasks - not Settings, memories or the Mac app's part. */
-const PHONE_MAY: ReadonlySet<ClientEvent['type']> = new Set(['utterance', 'talk-start', 'talk-end', 'speech-finished', 'cancel', 'stop-all', 'task-cancel', 'task-retry']);
+const PHONE_MAY: ReadonlySet<ClientEvent['type']> = new Set(['utterance', 'talk-start', 'talk-end', 'audio-stop', 'speech-finished', 'cancel', 'stop-all', 'task-cancel', 'task-retry']);
 
 /**
  * One of Nova's clients connected: a window, Nova.app (`native`: a program on this Mac, not a page) or a
@@ -838,7 +838,9 @@ function attach(ws: WebSocket, peer: { native: boolean; phone?: PairedDevice }) 
       if (presence.mayListen(ws)) micOwner = ws;
     }
     else if (event.type === 'audio-stop') {
-      if (micOwner === ws) (micOwner = null), hearing!.pause();
+      // A phone that was tapped (not held) says when its turn is over: the microphone it took is given back.
+      if (micOwner === ws && phone) (micOwner = micBefore && clients.has(micBefore) ? micBefore : null), (micBefore = null);
+      else if (micOwner === ws) (micOwner = null), hearing!.pause();
     }
     else if (event.type === 'speech-finished') nova.speechFinished();
     else if (event.type === 'shell-hello') {
@@ -901,8 +903,9 @@ function attach(ws: WebSocket, peer: { native: boolean; phone?: PairedDevice }) 
       hearing!.hold();
     } else if (event.type === 'talk-end') {
       hearing!.release(event.held);
-      // Let go: the microphone it took is given back (the turn is heard to its end all the same).
-      if (phone && micOwner === ws) (micOwner = micBefore && clients.has(micBefore) ? micBefore : null), (micBefore = null);
+      // Let go after a hold: the microphone it took is given back (the turn is heard to its end all the same). Tapped,
+      // the phone keeps streaming until the turn ends at a pause, then says so (audio-stop).
+      if (phone && event.held && micOwner === ws) (micOwner = micBefore && clients.has(micBefore) ? micBefore : null), (micBefore = null);
     }
     else if (event.type === 'listen-stop') {
       hearing!.drop();

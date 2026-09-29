@@ -79,8 +79,9 @@ struct HomeView: View {
 
   private var pill: some View {
     HStack(spacing: 8) {
-      Circle().fill(nova.talking ? Color.cyan : nova.phase == "idle" ? Style.faint : Style.accent).frame(width: 8, height: 8)
-      Text(nova.talking ? (nova.hearingHere ? "Listening · on this iPhone" : "Listening") : phaseText(nova.phase, label: nova.phaseLabel))
+      Circle().fill(nova.talking ? Color.cyan : ["idle", "listening"].contains(nova.phase) ? Style.faint : Style.accent).frame(width: 8, height: 8)
+      // Listening is what this iPhone's microphone is doing: the Mac's own listening window needs the button here.
+      Text(nova.talking ? (nova.hearingHere ? "Listening · on this iPhone" : "Listening") : phaseText(nova.phase == "listening" ? "idle" : nova.phase, label: nova.phaseLabel))
         .font(.subheadline.weight(.semibold))
     }
     .padding(.horizontal, 16).padding(.vertical, 9)
@@ -96,7 +97,7 @@ struct HomeView: View {
         Text(nova.reply).font(.title3.weight(.semibold)).multilineTextAlignment(.center).lineLimit(6)
           .transition(.opacity.combined(with: .move(edge: .bottom)))
       } else if nova.heard.isEmpty {
-        Text(nova.link == .connected ? "Hold the button and talk to \(nova.name)." : "Waiting for your Mac…").font(.callout).foregroundStyle(Style.faint)
+        Text(nova.link == .connected ? "Hold the button and talk - or tap it and just talk." : "Waiting for your Mac…").font(.callout).foregroundStyle(Style.faint)
       }
     }
     .foregroundStyle(.white)
@@ -152,11 +153,11 @@ struct HomeView: View {
   }
 }
 
-/// Hold to talk - let go when you're done; or tap it, talk, and tap it again (as the Mac's ⌥Space).
+/// Hold to talk and let go when you're done - or tap it and just talk: the turn ends when you pause, or tap it
+/// again (as the Mac's ⌥Space).
 struct TalkButton: View {
   @Environment(Nova.self) private var nova
   @State private var pressedAt: Date?
-  @State private var latched = false
 
   var body: some View {
     let on = nova.talking
@@ -173,8 +174,8 @@ struct TalkButton: View {
             guard pressedAt == nil else { return }
             pressedAt = Date()
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-            if latched {
-              latched = false
+            // Tapped again while a tapped turn listens: that's the end of it.
+            if nova.talking, nova.tapped {
               Task { await nova.talkEnd() }
             } else {
               Task { await nova.talkStart() }
@@ -182,10 +183,10 @@ struct TalkButton: View {
           }
           .onEnded { _ in
             defer { pressedAt = nil }
-            guard let pressedAt, nova.talking else { return }
-            // A quick tap keeps listening until the next one; a hold ends with the lift.
+            guard let pressedAt, nova.talking, !nova.tapped else { return }
+            // A quick tap: talk, and the turn ends when you pause. A hold ends when it's let go.
             if Date().timeIntervalSince(pressedAt) < 0.35 {
-              latched = true
+              nova.talkTapped()
             } else {
               Task { await nova.talkEnd() }
             }
