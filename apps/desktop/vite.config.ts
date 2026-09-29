@@ -50,5 +50,8 @@ export default defineConfig({
     headers: { 'X-Frame-Options': 'DENY', 'Content-Security-Policy': "frame-ancestors 'none'" },
   },
   envPrefix: ['VITE_', 'TAURI_ENV_'],
-  build: { target: 'es2022', outDir: 'dist' },
+  // The browsers the CSS is for: named, the minifier keeps both -webkit-backdrop-filter (Safari 17, Nova.app on
+  // macOS 14) and backdrop-filter (Chrome, Edge). Without them it keeps only the last of the two - the glass then
+  // doesn't blur in one or the other.
+  build: { target: 'es2022', cssTarget: ['safari17', 'chrome120', 'edge120', 'firefox121'], outDir: 'dist' },
 });
