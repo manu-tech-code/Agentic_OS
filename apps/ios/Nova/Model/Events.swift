@@ -156,6 +156,8 @@ struct AgentTask: Identifiable, Equatable {
 enum Outgoing {
   case talkStart
   case talkEnd(held: Bool)
+  /// A tapped turn is over (the Mac heard the pause): the phone stops streaming.
+  case audioStop
   /// Said into the phone and recognized here (`phone`), or typed (`keyboard`).
   case utterance(String, source: String)
   case speechFinished
@@ -168,6 +170,7 @@ enum Outgoing {
     switch self {
     case .talkStart: return ["type": "talk-start"]
     case .talkEnd(let held): return ["type": "talk-end", "held": held]
+    case .audioStop: return ["type": "audio-stop"]
     case .utterance(let text, let source): return ["type": "utterance", "text": text, "source": source]
     case .speechFinished: return ["type": "speech-finished"]
     case .cancel: return ["type": "cancel"]
