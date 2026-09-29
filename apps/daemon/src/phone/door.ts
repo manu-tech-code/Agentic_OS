@@ -87,7 +87,8 @@ export class PhoneDoor {
     if (this.server && this.opened === identity) return this.port!;
     this.close();
     const server = createServer({ key: identity.key, cert: identity.cert, minVersion: 'TLSv1.2' }, (_, res) => res.writeHead(404).end());
-    const wss = new WebSocketServer({ server, path: '/phone', maxPayload: 1 << 20 });
+    // Any path: a phone that found the Mac by Bonjour asks for the service, not an address.
+    const wss = new WebSocketServer({ server, maxPayload: 1 << 20 });
     wss.on('connection', (ws) => this.handshake(ws));
     wss.on('error', () => {}); // the server's own errors come just below
     await new Promise<void>((ok, fail) => {

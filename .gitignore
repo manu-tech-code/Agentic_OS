@@ -12,6 +12,8 @@ apps/daemon/native/*/.build/
 apps/daemon/native/*/.swiftpm/
 apps/daemon/native/*/.vendor/
 apps/desktop/macos/.build/
+apps/ios/.build/
+xcuserdata/
 apps/desktop/macos/.swiftpm/
 
 # Claude Code: agents' worktrees and personal settings stay local

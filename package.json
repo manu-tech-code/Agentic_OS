@@ -19,6 +19,7 @@
     "hearing:download": "npm run hearing:download -w @nova/daemon",
     "hearing:build": "npm run hearing:build -w @nova/daemon",
     "app": "npm run app -w @nova/daemon --",
+    "phone": "npm run phone -w @nova/daemon --",
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "build": "npm run build -w @nova/desktop",
