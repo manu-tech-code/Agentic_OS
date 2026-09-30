@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Security
 
 /// Small things kept in this iPhone's Keychain, for this app alone and never synced to iCloud: the phone's
@@ -25,7 +26,10 @@ enum Keychain {
     var q = query(account)
     q[kSecValueData as String] = data
     q[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-    return SecItemAdd(q as CFDictionary, nil) == errSecSuccess
+    let status = SecItemAdd(q as CFDictionary, nil)
+    // An app built without signing (the Simulator's -34018) has no Keychain: nothing it keeps outlasts it.
+    if status != errSecSuccess { Logger(subsystem: "dev.nova.phone", category: "keychain").error("keychain: couldn't keep \(account, privacy: .public): \(status)") }
+    return status == errSecSuccess
   }
 
   static func delete(_ account: String) {

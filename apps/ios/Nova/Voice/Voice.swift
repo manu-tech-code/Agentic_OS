@@ -4,6 +4,10 @@ import AVFoundation
 /// Apple's voice processing (echo cancellation, noise suppression), and goes to the Mac as 16 kHz 16-bit PCM,
 /// 20 ms at a time - as Nova.app's does. Nova's replies, in Kokoro's voice, play through the same engine,
 /// so the echo canceller knows Nova's voice: talking over it works.
+///
+/// Away from the front - answering Siri, or a reply still coming when the phone was locked - Nova only speaks:
+/// on an engine of its own with no microphone, in a session that ducks other audio rather than interrupting it
+/// (the only kind iOS lets an app start in the background). Once it's done, everything is let go.
 final class Voice {
   /// 20 ms of microphone while talking, for the Mac (or the phone's own hearing).
   var onFrame: (Data) -> Void = { _ in }
@@ -20,6 +24,14 @@ final class Voice {
   private let engine = AVAudioEngine()
   private let player = AVAudioPlayerNode()
   private var started = false
+  /// Speaking away from the front: no microphone, so no echo cancellation and no recording light.
+  private let speaker = AVAudioEngine()
+  private let speakerPlayer = AVAudioPlayerNode()
+  private var speakerStarted = false
+  /// Nova isn't in front on this phone (until it first comes there).
+  private(set) var away = true
+  /// Where the reply playing now plays.
+  private var output: AVAudioPlayerNode
   private(set) var talking = false
   /// The microphone's tap is on (it's taken off before the engine is set up again).
   private var tapped = false
@@ -29,10 +41,14 @@ final class Voice {
 
   // What's playing: one reply at a time, its pieces in order.
   private(set) var playing: String?
+  /// The last reply that started playing.
+  private(set) var lastPlayed: String?
   private var pieces: [Int: AVAudioPCMBuffer] = [:]
   private var nextPiece = 0
   private var lastPiece: Int?
   private var outstanding = 0
+  /// Handed to the player and not heard yet, by piece: moved to the speaker if Nova leaves the front mid-reply.
+  private var inFlight: [Int: AVAudioPCMBuffer] = [:]
   private var generation = 0
   private var cut: [String] = []
   private var resamplers: [Double: AVAudioConverter] = [:]
@@ -40,17 +56,33 @@ final class Voice {
   var speaking: Bool { playing != nil }
 
   init() {
+    output = player
     engine.attach(player)
+    speaker.attach(speakerPlayer)
+    speaker.connect(speakerPlayer, to: speaker.mainMixerNode, format: playFormat)
     NotificationCenter.default.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
-      // A call, Siri, another app's audio: when it's over, pick up again.
-      guard let self, let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt, AVAudioSession.InterruptionType(rawValue: raw) == .ended else { return }
+      // A call, Siri, another app's audio: what Nova was saying stops there; when it's over, pick up again.
+      guard let self, let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt, let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+      if type == .began {
+        if self.playing != nil { self.stopPlayback() }
+        return
+      }
+      self.speakerStarted = false
+      guard !self.away else { return }
       self.started = false
       _ = self.start()
     }
+    NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: speaker, queue: .main) { [weak self] _ in
+      // The route changed while Nova spoke away from the front: that reply ends there rather than hang half-played.
+      guard let self else { return }
+      self.speakerStarted = false
+      if self.playing != nil, self.output === self.speakerPlayer { self.stopPlayback() }
+    }
     NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
       // The engine stopped because its setup changed - echo cancellation coming on, headphones in or out. Start it
-      // again on the new route, and if the user is talking, keep hearing them: the turn goes on.
-      guard let self else { return }
+      // again on the new route, and if the user is talking, keep hearing them: the turn goes on. Away from the
+      // front it stays stopped: nothing may take the microphone there.
+      guard let self, !self.away else { return }
       self.removeTap()
       self.started = false
       guard self.start(), self.talking else { return }
@@ -65,6 +97,7 @@ final class Voice {
   @discardableResult
   func start() -> Bool {
     guard !started else { return true }
+    stopSpeaker() // one engine at a time
     let session = AVAudioSession.sharedInstance()
     do {
       try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothA2DP])
@@ -172,6 +205,77 @@ final class Voice {
     onLevel(min(1, level * 5))
   }
 
+  // MARK: Away from the front
+
+  /// Nova left the front of the phone, or came back. Away, the microphone and the engine that runs it are let go -
+  /// a reply that's playing carries on from the speaker - and what Nova says next plays there too; back, it's all as before.
+  func setAway(_ on: Bool) {
+    guard on != away else { return }
+    away = on
+    if on {
+      stopTalking()
+      if playing == nil { letGo() } else if output === player { moveToSpeaker() }
+    } else if playing == nil || output !== speakerPlayer {
+      stopSpeaker() // a reply still being said away finishes there first
+    }
+  }
+
+  /// Nothing to say and no one talking, away from the front: the engines stop and the audio session is given back,
+  /// so music comes back up and iOS can let Nova sleep.
+  private func letGo() {
+    removeTap()
+    talking = false
+    if started {
+      engine.stop()
+      started = false
+    }
+    stopSpeaker()
+    try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+  }
+
+  /// Nova left the front mid-reply: the rest of it goes to the speaker, so echo cancellation - and the microphone it
+  /// holds open - can stop. The sentence that was playing starts again there.
+  private func moveToSpeaker() {
+    let rest = inFlight.sorted { $0.key < $1.key }
+    generation += 1 // what the old player reports as it stops is ignored
+    player.stop()
+    outstanding = 0
+    inFlight.removeAll()
+    output = speakerPlayer
+    guard startSpeaker() else { return endPlayback(finished: true) }
+    for (seq, buffer) in rest { enqueue(buffer, seq: seq) }
+    checkFinished()
+  }
+
+  /// The speaker, running: Nova's voice away from the front.
+  private func startSpeaker() -> Bool {
+    if speakerStarted, speaker.isRunning { return true }
+    if started {
+      removeTap()
+      engine.stop()
+      started = false
+    }
+    let session = AVAudioSession.sharedInstance()
+    do {
+      // Ducking other audio makes the session mixable: iOS lets an app start that in the background, not one that interrupts.
+      try session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
+      try session.setActive(true)
+      speaker.prepare()
+      try speaker.start()
+      speakerStarted = true
+    } catch {
+      onProblem("Nova's voice couldn't start: \(error.localizedDescription)")
+    }
+    return speakerStarted
+  }
+
+  private func stopSpeaker() {
+    guard speakerStarted else { return }
+    speakerPlayer.stop()
+    speaker.stop()
+    speakerStarted = false
+  }
+
   // MARK: Speaking
 
   /// A piece of a reply in Kokoro's voice: 16-bit PCM, in order by `seq`, the last one marked.
@@ -180,7 +284,9 @@ final class Voice {
     if playing != id {
       stopPlayback()
       playing = id
+      lastPlayed = id
       nextPiece = seq
+      output = away ? speakerPlayer : player
     }
     if last { lastPiece = seq }
     pieces[seq] = (pcm.isEmpty ? nil : floatBuffer(pcm, rate: sampleRate)) ?? silence()
@@ -191,6 +297,7 @@ final class Voice {
   func stopPlayback() {
     generation += 1
     player.stop()
+    if speakerStarted { speakerPlayer.stop() }
     if let id = playing {
       cut.append(id)
       if cut.count > 20 { cut.removeFirst(cut.count - 20) }
@@ -200,21 +307,36 @@ final class Voice {
 
   private func schedule() {
     while let buffer = pieces.removeValue(forKey: nextPiece) {
+      let seq = nextPiece
       nextPiece += 1
-      guard buffer.frameLength > 0 else { continue }
-      outstanding += 1
-      start()
-      let generation = self.generation
-      player.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
-        DispatchQueue.main.async {
-          guard let self, generation == self.generation else { return }
-          self.outstanding -= 1
-          self.checkFinished()
-        }
-      }
-      if engine.isRunning, !player.isPlaying { player.play() }
+      // A piece that can't be played is passed over: the reply still ends, and the Mac hears that it did.
+      guard buffer.frameLength > 0, running() else { continue }
+      enqueue(buffer, seq: seq)
     }
     checkFinished()
+  }
+
+  /// A piece onto the player the reply plays on; once it's been heard, the reply may be over.
+  private func enqueue(_ buffer: AVAudioPCMBuffer, seq: Int) {
+    outstanding += 1
+    inFlight[seq] = buffer
+    let generation = self.generation
+    output.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
+      DispatchQueue.main.async {
+        guard let self, generation == self.generation else { return }
+        self.inFlight[seq] = nil
+        self.outstanding -= 1
+        self.checkFinished()
+      }
+    }
+    if !output.isPlaying { output.play() }
+  }
+
+  /// The engine this reply plays on, running: the speaker away from the front, else the one that listens too.
+  private func running() -> Bool {
+    if output === speakerPlayer { return startSpeaker() }
+    if started, !engine.isRunning { started = false } // stopped under it - Siri, a call - so it starts again
+    return start() && engine.isRunning
   }
 
   private func checkFinished() {
@@ -223,11 +345,15 @@ final class Voice {
   }
 
   private func endPlayback(finished: Bool) {
+    let was = output
     playing = nil
     pieces.removeAll()
+    inFlight.removeAll()
     lastPiece = nil
     outstanding = 0
+    output = player
     onLevel(0)
+    if away { letGo() } else if was === speakerPlayer { stopSpeaker() }
     if finished { onFinished() }
   }
 
