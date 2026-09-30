@@ -327,6 +327,9 @@ npm run phone -- --simulator  # or in the iOS Simulator
   word from the Mac (while it's open, when Siri asks, when it checks in - sooner while an agent works), and it says how
   old that is once it's gone quiet. A task gets its activity once Nova has been in front since it started - iOS's rule.
   Settings → iPhone → *Agents on your Lock Screen* turns them off.
+- **One voice.** An answer is said where you asked: on the phone - locked or not, however long Nova thinks (it stays
+  awake for the answer) - or at the Mac, never some of it in each. As Nova starts speaking in one place, it stops in
+  the other.
 - **Nova speaking, in the Dynamic Island.** Leave Nova while it's answering you - for the Home Screen, another app or
   the Lock Screen - and the answer stays with you in the Dynamic Island: an ellipsis while Nova thinks, then bars that
   move with its voice, as music's do. Hold the island for what it's saying and **Stop**, which ends that answer

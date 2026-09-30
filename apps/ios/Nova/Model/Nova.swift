@@ -341,14 +341,13 @@ final class Nova {
   /// you've left Nova, and meanwhile the line to the Mac stays open (and Nova awake) for it.
   private var answer: String? {
     if voice.speaking { return "speaking" }
+    let busy = ["thinking", "acting", "speaking"].contains(phase)
     // Its words are in and its voice is on the way: the Mac is still at it, however long Kokoro takes over a long sentence.
-    if let audio = answerAudio, voice.lastPlayed != audio.id, ["thinking", "acting", "speaking"].contains(phase),
-      Date().timeIntervalSince(audio.since) < 60
-    {
-      return "speaking"
-    }
-    guard let since = owedSince, Date().timeIntervalSince(since) < 60 else { return nil }
-    return "thinking"
+    if let audio = answerAudio, voice.lastPlayed != audio.id, busy, Date().timeIntervalSince(audio.since) < 60 { return "speaking" }
+    // The Mac is at work on your turn - however long it thinks, within reason - or has only just got it.
+    guard let since = owedSince else { return nil }
+    let waited = Date().timeIntervalSince(since)
+    return waited < 180 && (busy || waited < 8) ? "thinking" : nil
   }
 
   private func showVoice() {
@@ -359,6 +358,8 @@ final class Nova {
       answerTime = nil
     }
     if now == nil, !foreground { restLater() }
+    // Out of the front, until the voice plays: silence keeps Nova awake for it, so it's said here, when it comes.
+    voice.stayAwake(!foreground && now != nil && !voice.speaking)
     if now != nil, voiceTick == nil {
       // Nothing may come to say it's over (the Mac gone quiet): look again every couple of seconds.
       voiceTick = Task { [weak self] in
@@ -638,6 +639,8 @@ final class Nova {
       talking = false
       voice.stopTalking()
     }
+    // A reply still coming in ends with what came: the Mac doesn't send the rest anywhere else.
+    if link != .connected { voice.streamLost() }
   }
 
   private func handle(_ event: Incoming) {

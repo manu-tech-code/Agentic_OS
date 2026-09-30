@@ -32,6 +32,12 @@ final class Voice {
   private let speaker = AVAudioEngine()
   private let speakerPlayer = AVAudioPlayerNode()
   private var speakerStarted = false
+  /// The speaker's session ducks other audio (Nova speaking), or only mixes with it (Nova waiting, `stayAwake`).
+  private var ducking = false
+  /// Silence, looping on the speaker while Nova waits for its answer away from the front: iOS doesn't put an app to
+  /// sleep while it plays audio.
+  private let idler = AVAudioPlayerNode()
+  private var awake = false
   private let spectrum = Spectrum()
   /// Nova isn't in front on this phone (until it first comes there).
   private(set) var away = true
@@ -65,6 +71,8 @@ final class Voice {
     engine.attach(player)
     speaker.attach(speakerPlayer)
     speaker.connect(speakerPlayer, to: speaker.mainMixerNode, format: playFormat)
+    speaker.attach(idler)
+    speaker.connect(idler, to: speaker.mainMixerNode, format: playFormat)
     // Nova's voice away from the front, as it plays: its spectrum moves the bars in the Dynamic Island.
     speakerPlayer.installTap(onBus: 0, bufferSize: 2048, format: playFormat) { [weak self, spectrum] buffer, _ in
       let bands = spectrum.levels(buffer)
@@ -81,7 +89,7 @@ final class Voice {
         return
       }
       self.speakerStarted = false
-      guard !self.away else { return }
+      guard !self.away else { return self.wakeAgain() }
       self.started = false
       _ = self.start()
     }
@@ -90,6 +98,7 @@ final class Voice {
       guard let self else { return }
       self.speakerStarted = false
       if self.playing != nil, self.output === self.speakerPlayer { self.stopPlayback() }
+      self.wakeAgain()
     }
     NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
       // The engine stopped because its setup changed - echo cancellation coming on, headphones in or out. Start it
@@ -260,9 +269,10 @@ final class Voice {
     checkFinished()
   }
 
-  /// The speaker, running: Nova's voice away from the front.
-  private func startSpeaker() -> Bool {
-    if speakerStarted, speaker.isRunning { return true }
+  /// The speaker, running: Nova's voice away from the front, ducking other audio - or, only waiting (`stayAwake`),
+  /// under it.
+  private func startSpeaker(ducking duck: Bool = true) -> Bool {
+    if speakerStarted, speaker.isRunning, ducking == duck { return true }
     if started {
       removeTap()
       engine.stop()
@@ -270,12 +280,16 @@ final class Voice {
     }
     let session = AVAudioSession.sharedInstance()
     do {
-      // Ducking other audio makes the session mixable: iOS lets an app start that in the background, not one that interrupts.
-      try session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
+      // Mixing with other audio (ducking it or not) keeps the session mixable: iOS lets an app start that in the
+      // background, not one that interrupts.
+      try session.setCategory(.playback, mode: .spokenAudio, options: duck ? [.duckOthers] : [.mixWithOthers])
       try session.setActive(true)
-      speaker.prepare()
-      try speaker.start()
-      speakerStarted = true
+      ducking = duck
+      if !speakerStarted || !speaker.isRunning {
+        speaker.prepare()
+        try speaker.start()
+        speakerStarted = true
+      }
     } catch {
       onProblem("Nova's voice couldn't start: \(error.localizedDescription)")
     }
@@ -283,10 +297,44 @@ final class Voice {
   }
 
   private func stopSpeaker() {
+    awake = false
     guard speakerStarted else { return }
     speakerPlayer.stop()
+    idler.stop()
     speaker.stop()
     speakerStarted = false
+  }
+
+  /// Away from the front, with Nova's answer still to come: silence plays, mixed under other audio, so iOS keeps Nova
+  /// awake - and its line to the Mac open - until the voice comes, however long the Mac thinks. Off, it's let go.
+  func stayAwake(_ on: Bool) {
+    guard on != awake else { return }
+    if on {
+      guard away, playing == nil, startSpeaker(ducking: false), let silence = Voice.silence(playFormat, seconds: 0.5) else { return }
+      awake = true
+      idler.scheduleBuffer(silence, at: nil, options: .loops)
+      idler.play()
+    } else {
+      awake = false
+      idler.stop()
+      if away, playing == nil { letGo() }
+    }
+  }
+
+  /// The speaker stopped under Nova while it waited (a call, a new route): the silence starts again.
+  private func wakeAgain() {
+    guard awake, playing == nil else { return }
+    awake = false
+    stayAwake(true)
+  }
+
+  /// The line to the Mac went while a reply was still coming: what came is said, and the reply ends there - the Mac
+  /// sends the rest nowhere else, and a line made again doesn't bring it.
+  func streamLost() {
+    guard playing != nil, lastPiece == nil else { return }
+    pieces.removeAll()
+    lastPiece = nextPiece - 1
+    checkFinished()
   }
 
   // MARK: Speaking
@@ -413,6 +461,15 @@ final class Voice {
     }
     guard error == nil, out.frameLength > 0, let samples = out.int16ChannelData?[0] else { return nil }
     return Data(bytes: samples, count: Int(out.frameLength) * 2)
+  }
+
+  /// Silence, for as long as asked.
+  static func silence(_ format: AVAudioFormat, seconds: Double) -> AVAudioPCMBuffer? {
+    let frames = AVAudioFrameCount(format.sampleRate * seconds)
+    guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames), let samples = buffer.floatChannelData?[0] else { return nil }
+    buffer.frameLength = frames
+    samples.update(repeating: 0, count: Int(frames))
+    return buffer
   }
 
   private func silence() -> AVAudioPCMBuffer? {
