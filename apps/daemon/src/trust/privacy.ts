@@ -96,16 +96,22 @@ export function privacyFlows(input: PrivacyInput): PrivacyFlow[] {
     section: 'voice',
   });
 
-  // An iPhone: what's said into it comes here, over the Wi-Fi, and its replies go back - nowhere else.
+  // An iPhone: what's said into it comes here - over the Wi-Fi, or through Tailscale away from home - and its replies
+  // go back, nowhere else.
+  const anywhere = config.phone.anywhere && Boolean(input.phone?.door?.tailnet.length);
   flows.push({
     id: 'phone',
     what: 'What you say to Nova on your iPhone, and its replies',
-    where: `${THIS_MAC}, from the iPhones you paired - over your Wi-Fi, encrypted`,
+    where: `${THIS_MAC}, from the iPhones you paired - over your Wi-Fi${anywhere ? ', or through Tailscale away from home' : ''}, encrypted`,
     detail: `${
       config.phone.hearing === 'iphone'
         ? "Apple's recognizer on the iPhone turns it into text, and only the text comes here."
         : "The iPhone streams its microphone here while you hold its talk button, and Nova hears it as it hears you at the Mac. On a weak connection, Apple's recognizer on the iPhone can do it instead."
-    }${config.phone.reminders ? " Your reminders and timers of the next week go to the phone too, so it can ring for them - they stay on it, as its own notifications." : ''}`,
+    }${config.phone.reminders ? " Your reminders and timers of the next week go to the phone too, so it can ring for them - they stay on it, as its own notifications." : ''}${
+      anywhere
+        ? " Away from home it goes through Tailscale, encrypted from the phone to this Mac (and Nova's own TLS inside that): when the two can't reach each other directly, Tailscale's relays carry it without being able to read it."
+        : ''
+    }`,
     leaves: false,
     on: config.phone.enabled && Boolean(input.phone?.devices.length),
     toggle: toggle('phone.enabled'),

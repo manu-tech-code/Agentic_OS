@@ -328,7 +328,8 @@ The iPhone needs to have met this Mac once by cable (unlock it and tap **Trust**
 2. On the iPhone: open Nova and tap **Scan the code**. (In the Simulator: **Copy the link** on the Mac, then
    `xcrun simctl openurl booted "<the link>"`.)
 
-That's all: from then on Nova finds your Mac by itself, on the same Wi-Fi. The first time, iOS asks to let Nova use
+That's all: from then on Nova finds your Mac by itself on your Wi-Fi - and anywhere else once Tailscale is on both
+(below). The first time, iOS asks to let Nova use
 the camera (for the code), find devices on your network (your Mac), use the microphone (for the talk button), and
 send notifications (your reminders).
 
@@ -413,8 +414,14 @@ send notifications (your reminders).
   few times a day): reminders set at the Mac since then will ring on it, the widget is brought up to date, and news
   that waited for you shows as a notification. Otherwise it hears from Nova while it's open, and when Siri or a
   shortcut asks something. Out of the front with nothing to do, it lets its connection go.
-- **For now:** on the same Wi-Fi as the Mac - Tailscale, for anywhere, comes next. With a free Apple account, Xcode's
-  signing lasts 7 days: run `npm run phone` again after that.
+- **Anywhere, through Tailscale.** At home the phone reaches the Mac on your Wi-Fi; anywhere else - another Wi-Fi,
+  mobile data - through [Tailscale](https://tailscale.com), with it on the Mac (`brew install --cask tailscale-app`)
+  and the iPhone (the App Store), signed in to the same account. Nothing else to set up: the Mac tells the phone its
+  Tailscale address each time they talk, and the phone tries every way at once, so the one that can answer does. The
+  phone still accepts only your Mac's certificate and signs in with its own key, so no one else on your tailnet gets
+  in. Settings → iPhone shows whether it's there; *Reach Nova away from home* turns it off, and then connections over
+  Tailscale are refused.
+- **Signing:** with a free Apple account, Xcode's signing lasts 7 days: run `npm run phone` again after that.
 
 ## Reminders, briefings and routines
 

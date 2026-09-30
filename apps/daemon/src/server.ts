@@ -617,7 +617,7 @@ phones = await new Phones({
   welcome: (ws, device) => attach(ws, { native: false, phone: device }),
   changed: () => broadcastSnapshot(),
 }).load();
-void phones.configure(runtime.config.phone.enabled);
+void phones.configure(runtime.config.phone.enabled, runtime.config.phone.anywhere);
 
 // Start Nova Eyes now (it's built the first time), so the first question already knows what's on screen.
 if (runtime.config.screen.context) eyes?.warm();
@@ -656,7 +656,7 @@ function apply(next: Runtime) {
   if (!next.config.voiceId.keepRecordings) void recordings.clear().catch(() => {});
   initiative!.configure();
   trust.configure();
-  void phones?.configure(next.config.phone.enabled);
+  void phones?.configure(next.config.phone.enabled, next.config.phone.anywhere);
   for (const ws of clients) if (phones?.isPhone(ws)) send(ws, { type: 'phone-config', hearing: next.config.phone.hearing, activities: next.config.phone.activities, voiceActivity: next.config.phone.voiceActivity });
   remindPhones();
   broadcast(nova.hello());

@@ -19,6 +19,16 @@ enum PhoneProtocol {
     case version = 4426
     /// Too many wrong codes.
     case busy = 4429
+    /// Over Tailscale, while the Mac's Settings → iPhone keeps Nova to the Wi-Fi.
+    case away = 4404
+  }
+
+  /// A Tailscale address - 100.64.0.0/10, or fd7a:115c:a1e0::/48 - the way to the Mac from anywhere.
+  static func isTailnet(_ address: String) -> Bool {
+    let a = address.lowercased().replacingOccurrences(of: "::ffff:", with: "")
+    guard a.contains(".") else { return a.hasPrefix("fd7a:115c:a1e0:") }
+    let parts = a.split(separator: ".").compactMap { Int($0) }
+    return parts.count == 4 && parts[0] == 100 && (64..<128).contains(parts[1])
   }
 }
 

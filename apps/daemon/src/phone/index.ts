@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { hostname, networkInterfaces } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { DOOR_CLOSE, pairingLink, PHONE_PROTOCOL, type PhoneStatus } from '@nova/core';
+import { DOOR_CLOSE, isTailnet, pairingLink, PHONE_PROTOCOL, type PhoneStatus } from '@nova/core';
 import type { WebSocket } from 'ws';
 import { advertise } from './bonjour.ts';
 import { DeviceStore, type PairedDevice } from './devices.ts';
@@ -11,22 +11,30 @@ import { doorIdentity, type DoorIdentity } from './tls.ts';
 
 export type { PairedDevice } from './devices.ts';
 
-/**
- * The Mac's addresses a phone can reach it on: the Wi-Fi's (or a wired network's) first, then a
- * tailnet's (Tailscale hands out 100.64.0.0/10). Loopback and self-assigned addresses are no use to a phone.
- */
-export function reachableAddresses(interfaces: ReturnType<typeof networkInterfaces> = networkInterfaces()): string[] {
+type Interfaces = ReturnType<typeof networkInterfaces>;
+
+/** The Mac's addresses a phone could reach it on, by way: the Wi-Fi's (or a wired network's), and a tailnet's. */
+function addresses(interfaces: Interfaces = networkInterfaces()) {
   const local: string[] = [];
   const tailnet: string[] = [];
   for (const list of Object.values(interfaces)) {
     for (const a of list ?? []) {
       if (a.family !== 'IPv4' || a.internal) continue;
       const [x = 0, y = 0] = a.address.split('.').map(Number);
-      if (x === 100 && y >= 64 && y < 128) tailnet.push(a.address);
+      if (isTailnet(a.address)) tailnet.push(a.address);
       else if (x === 10 || (x === 172 && y >= 16 && y < 32) || (x === 192 && y === 168)) local.push(a.address);
     }
   }
-  return [...new Set([...local, ...tailnet])].slice(0, 4);
+  return { local: [...new Set(local)], tailnet: [...new Set(tailnet)] };
+}
+
+/**
+ * The Mac's addresses a phone can reach it on: the Wi-Fi's (or a wired network's) first, then - `anywhere` - a
+ * tailnet's (Tailscale hands out 100.64.0.0/10). Loopback and self-assigned addresses are no use to a phone.
+ */
+export function reachableAddresses(interfaces: Interfaces = networkInterfaces(), anywhere = true): string[] {
+  const { local, tailnet } = addresses(interfaces);
+  return [...local.slice(0, 3), ...(anywhere ? tailnet.slice(0, 1) : [])];
 }
 
 const run = promisify(execFile);
@@ -56,6 +64,8 @@ export class Phones {
   private stopBonjour: (() => void) | null = null;
   private problem: string | undefined;
   private enabled = false;
+  /** Settings → iPhone → Reach Nova away from home: phones may come in over Tailscale. */
+  private anywhere = true;
   private computer = 'this Mac';
   private expiry: ReturnType<typeof setTimeout> | undefined;
 
@@ -76,6 +86,8 @@ export class Phones {
     this.door = new PhoneDoor({
       devices: this.devices,
       name: () => this.name,
+      hosts: () => reachableAddresses(undefined, this.anywhere),
+      allows: (local) => this.anywhere || !isTailnet(local),
       welcome: (ws, device) => {
         this.live.set(ws, device);
         ws.once('close', () => {
@@ -121,8 +133,14 @@ export class Phones {
     return latest;
   }
 
-  /** Open the door (Settings → iPhone → Let your iPhone connect), or shut it. */
-  async configure(enabled: boolean) {
+  /** Open the door (Settings → iPhone → Let your iPhone connect), or shut it - and let phones in over Tailscale, or not. */
+  async configure(enabled: boolean, anywhere = true) {
+    const kept = this.anywhere && !anywhere;
+    this.anywhere = anywhere;
+    if (kept) {
+      this.door.closeTailnet();
+      this.opts.changed();
+    }
     this.enabled = enabled;
     if (!enabled) return this.shut();
     if (this.door.port !== null) return;
@@ -157,7 +175,7 @@ export class Phones {
   /** Show a pairing code in Settings: it works for one phone, for ten minutes. */
   startPairing() {
     if (this.door.port === null) throw new Error(this.problem ?? 'Turn on "Let your iPhone connect" first.');
-    if (!reachableAddresses().length) throw new Error("This Mac isn't on a network an iPhone can reach - join the Wi-Fi your iPhone is on.");
+    if (!reachableAddresses(undefined, this.anywhere).length) throw new Error("This Mac isn't on a network an iPhone can reach - join the Wi-Fi your iPhone is on.");
     const offer = this.door.startPairing();
     clearTimeout(this.expiry);
     this.expiry = setTimeout(() => this.opts.changed(), offer.expires - Date.now() + 250); // the QR code goes when it stops working
@@ -180,12 +198,12 @@ export class Phones {
 
   status(): PhoneStatus {
     const port = this.door.port;
-    const addresses = port === null ? [] : reachableAddresses();
+    const addresses = port === null ? [] : reachableAddresses(undefined, this.anywhere);
     const connected = new Set([...this.live.values()].map((d) => d.id));
     const pairing = this.door.pairing;
     const message = this.problem ?? (port !== null && !addresses.length ? "This Mac isn't on a network an iPhone can reach - join the Wi-Fi your iPhone is on." : undefined);
     return {
-      door: port === null ? null : { port, addresses },
+      door: port === null ? null : { port, addresses, tailnet: reachableAddresses(undefined, true).filter(isTailnet) },
       ...(message ? { message } : {}),
       devices: this.devices.list().map((d) => ({
         id: d.id,

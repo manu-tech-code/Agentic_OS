@@ -35,6 +35,27 @@ function PairingCode({ link }: { link: string }) {
   );
 }
 
+/** Away from home: whether the phone reaches this Mac through Tailscale, and what's needed for it to. */
+function Anywhere({ tailnet, on, name }: { tailnet: string[]; on: boolean; name: string }) {
+  if (!tailnet.length) {
+    return (
+      <span className="muted">
+        {personalize(
+          'Away from home: install Tailscale on this Mac and your iPhone, signed in to the same account, and Nova reaches this Mac from anywhere (brew install --cask tailscale-app, and Tailscale from the App Store).',
+          name,
+        )}
+      </span>
+    );
+  }
+  return (
+    <span className="muted">
+      {on
+        ? `Away from home: through Tailscale, at ${tailnet[0]} - with Tailscale on your iPhone too, signed in to the same account.`
+        : `Kept to your Wi-Fi: Tailscale is on this Mac (${tailnet[0]}), but "Reach Nova away from home" is off.`}
+    </span>
+  );
+}
+
 /** Settings → iPhone: the door for paired phones, pairing one, and the phones paired. */
 export function PhonePanel({ snapshot, name, onAction }: { snapshot: SettingsSnapshot; name: string; onAction: (event: ClientEvent) => void }) {
   const { phone } = snapshot;
@@ -72,6 +93,7 @@ export function PhonePanel({ snapshot, name, onAction }: { snapshot: SettingsSna
             {personalize('Turn on "Let your iPhone connect" below, then pair your iPhone here. Nova on the iPhone is built from apps/ios on this Mac (npm run phone).', name)}
           </span>
         )}
+        {phone.door && <Anywhere tailnet={phone.door.tailnet} on={snapshot.values['phone.anywhere'] !== false} name={name} />}
         {phone.message && <div className="banner banner--error">{phone.message}</div>}
       </div>
 
