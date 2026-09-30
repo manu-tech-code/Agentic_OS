@@ -654,7 +654,7 @@ function apply(next: Runtime) {
   initiative!.configure();
   trust.configure();
   void phones?.configure(next.config.phone.enabled);
-  for (const ws of clients) if (phones?.isPhone(ws)) send(ws, { type: 'phone-config', hearing: next.config.phone.hearing });
+  for (const ws of clients) if (phones?.isPhone(ws)) send(ws, { type: 'phone-config', hearing: next.config.phone.hearing, activities: next.config.phone.activities });
   remindPhones();
   broadcast(nova.hello());
   broadcastSnapshot();
@@ -816,7 +816,7 @@ function attach(ws: WebSocket, peer: { native: boolean; phone?: PairedDevice }) 
   send(ws, nova.hello());
   send(ws, { type: 'tasks', tasks: initiative!.tasks.list().slice(0, 50) });
   if (phone) {
-    send(ws, { type: 'phone-config', hearing: runtime.config.phone.hearing });
+    send(ws, { type: 'phone-config', hearing: runtime.config.phone.hearing, activities: runtime.config.phone.activities });
     remindPhones(ws);
   } else {
     send(ws, { type: 'voice-owner', app: presence.connected });

@@ -697,6 +697,14 @@ export const FIELDS: SettingField[] = [
     default: true,
   },
   {
+    key: 'phone.activities',
+    section: 'phone',
+    label: 'Agents on your Lock Screen',
+    help: "While an agent works on a task, your iPhone shows it on the Lock Screen and in the Dynamic Island: the task, its latest step and how long it's been at it - with Stop - and what it found once it's done. With no push on a free Apple account, the step is brought up to date whenever Nova on the phone hears from the Mac (while it's open, when Siri asks something, when it checks in); the time counts on by itself. A task shows up there once Nova has been in front on the phone since it started.",
+    type: 'toggle',
+    default: true,
+  },
+  {
     key: 'phone.news',
     section: 'phone',
     label: 'News on your iPhone',

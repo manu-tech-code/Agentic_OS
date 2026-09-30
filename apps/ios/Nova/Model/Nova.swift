@@ -132,6 +132,7 @@ final class Nova {
     voice.onProblem = { [weak self] message in self?.notice = message }
     phoneHearing.onPartial = { [weak self] text in self?.heard = text }
     TalkToNova.listen = { [weak self] in self?.listenSoon() }
+    StopAgentTask.stop = { [weak self] id in await self?.stopTask(id) }
     Notifications.shared.setUp()
     Notifications.shared.quiet = { [weak self] in self?.link == .connected && self?.foreground == true }
     Notifications.shared.onAction = { [weak self] ref, action in
@@ -165,6 +166,7 @@ final class Nova {
     reply = ""
     heard = ""
     updateWidgets { $0 = WidgetState(name: $0.name) }
+    Task { await LiveActivities.shared.endAll() }
   }
 
   /// A nova:// link: a pairing code - or, from a widget or the control, Nova listening, or the agents' task board.
@@ -348,6 +350,21 @@ final class Nova {
     door?.send(.taskCancel(id))
   }
 
+  /// Stop from a task's Live Activity - Nova may be in the background: the Mac stops it, and the activity ends with it.
+  func stopTask(_ id: String) async {
+    asking += 1
+    defer {
+      asking -= 1
+      restLater()
+    }
+    guard await reachMac() else { return }
+    door?.send(.taskCancel(id))
+    let until = Date().addingTimeInterval(4)
+    while tasks.first(where: { $0.id == id })?.status == "running", link == .connected, Date() < until {
+      try? await Task.sleep(for: .milliseconds(100))
+    }
+  }
+
   func retryTask(_ id: String) {
     door?.send(.taskRetry(id))
   }
@@ -387,11 +404,12 @@ final class Nova {
   /// What iOS runs when it lets Nova check in (Background App Refresh).
   static let checkInTask = "dev.nova.phone.check-in"
 
-  /// Out of the front: ask iOS to wake Nova in a while to check in with the Mac. When is up to iOS - it goes by how
-  /// the phone is used, and may be hours - which is all a free Apple account, with no push, allows.
+  /// Out of the front: ask iOS to wake Nova in a while to check in with the Mac - sooner while an agent's task is on the
+  /// Lock Screen. When is up to iOS - it goes by how the phone is used, and may be hours - which is all a free Apple
+  /// account, with no push, allows.
   func scheduleCheckIn() {
     let request = BGAppRefreshTaskRequest(identifier: Self.checkInTask)
-    request.earliestBeginDate = Date().addingTimeInterval(20 * 60)
+    request.earliestBeginDate = Date().addingTimeInterval((LiveActivities.shared.anyAtWork ? 5 : 20) * 60)
     do {
       try BGTaskScheduler.shared.submit(request)
     } catch {
@@ -584,14 +602,17 @@ final class Nova {
       dismiss(id)
     case .tasks(let tasks):
       self.tasks = tasks
+      let inFront = foreground
+      Task { await LiveActivities.shared.update(tasks, inFront: inFront) }
       let work = tasks.prefix(12).map { WidgetState.Work(agent: $0.label, task: $0.task, status: $0.status, step: $0.step) }
       updateWidgets { state in
         if state.work != work { (state.work, state.at) = (work, Date()) }
       }
     case .computer(let active, let caller, let app, let paused):
       computer = !active ? nil : paused ? "Waiting while you use the Mac" : "\(caller ?? name) is using the computer\(app.map { " · \($0)" } ?? "")"
-    case .phoneConfig(let hearing):
+    case .phoneConfig(let hearing, let activities):
       hearingMode = hearing
+      Task { await LiveActivities.shared.setEnabled(activities) }
     case .phoneNews(let items):
       Task {
         let shown = await Notifications.shared.news(items)

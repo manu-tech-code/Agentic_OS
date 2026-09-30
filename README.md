@@ -321,6 +321,12 @@ npm run phone -- --simulator  # or in the iOS Simulator
   reminders coming up (a timer counts down) and what your agents are doing, and a tap talks to Nova (on the big one,
   the rest opens the agents' task board). **Talk to Nova** is a control too, for Control Center, the Lock Screen and
   the Action button. The widget shows what Nova on the phone last heard from the Mac: it can't reach the Mac itself.
+- **Agents on the Lock Screen.** While an agent works on a task, it's a Live Activity on the Lock Screen and in the
+  Dynamic Island: the task, its latest step and how long it's been at it, with **Stop** - and what it found once it's
+  done. The time counts on by itself; with no push on a free account, the step is as fresh as Nova on the phone's last
+  word from the Mac (while it's open, when Siri asks, when it checks in - sooner while an agent works), and it says how
+  old that is once it's gone quiet. A task gets its activity once Nova has been in front since it started - iOS's rule.
+  Settings → iPhone → *Agents on your Lock Screen* turns them off.
 - **News where you are.** While you're away from the Mac (it's locked, or untouched a while) and Nova is open on the
   phone, reminders coming up and agents finishing are said there - and what Nova held comes up when you open it, or,
   with Nova closed, as a notification when the phone next checks in (Settings → iPhone → *News on your iPhone*). What

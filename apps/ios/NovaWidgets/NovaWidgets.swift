@@ -12,6 +12,7 @@ struct NovaWidgets: WidgetBundle {
   var body: some Widget {
     NovaWidget()
     TalkControl()
+    AgentActivityWidget()
   }
 }
 
