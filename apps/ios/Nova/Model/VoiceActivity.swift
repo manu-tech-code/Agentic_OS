@@ -15,6 +15,8 @@ final class VoiceActivity {
   /// Settings → iPhone → Nova speaking, in the Dynamic Island, as the Mac last said.
   private(set) var enabled = UserDefaults.standard.object(forKey: "voiceActivity") as? Bool ?? true
   private var current: Activity<NovaVoiceActivity>?
+  /// Above an agent's task (0): while Nova speaks, the Dynamic Island - which shows one of an app's activities - is Nova's.
+  private let relevance: Double = 100
   private var shown: NovaVoiceActivity.ContentState?
 
   func setEnabled(_ on: Bool) {
@@ -71,14 +73,14 @@ final class VoiceActivity {
       guard state != shown else { return }
       shown = state
       updated = Date()
-      await current.update(ActivityContent(state: state, staleDate: nil))
+      await current.update(ActivityContent(state: state, staleDate: nil, relevanceScore: relevance))
     } else if !inFront {
       log.info("activities: Nova's voice can't start out of the front")
     } else if !ActivityAuthorizationInfo().areActivitiesEnabled {
       log.notice("activities: Live Activities are off for Nova (Settings → Nova)")
     } else {
       do {
-        current = try Activity.request(attributes: NovaVoiceActivity(name: name), content: ActivityContent(state: state, staleDate: nil))
+        current = try Activity.request(attributes: NovaVoiceActivity(name: name), content: ActivityContent(state: state, staleDate: nil, relevanceScore: relevance))
         shown = state
         updated = Date()
         log.info("activities: Nova's voice shows (\(phase, privacy: .public))")
@@ -86,6 +88,12 @@ final class VoiceActivity {
         log.notice("activities: Nova's voice couldn't show: \(error.localizedDescription, privacy: .public)")
       }
     }
+  }
+
+  /// Nothing of Nova's voice on show, nor any left from before: the README's scripted session starts clean.
+  func clear() async {
+    phase = nil
+    await end()
   }
 
   private func end() async {

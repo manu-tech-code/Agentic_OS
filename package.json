@@ -23,7 +23,8 @@
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "build": "npm run build -w @nova/desktop",
-    "readme:media": "npm run readme:media -w @nova/desktop"
+    "readme:media": "npm run readme:media -w @nova/desktop",
+    "readme:phone": "npm run readme:phone -w @nova/daemon"
   },
   "devDependencies": {
     "concurrently": "^9.2.0"
