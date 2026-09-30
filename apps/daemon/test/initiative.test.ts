@@ -530,6 +530,46 @@ describe('what came due before anyone could hear', () => {
   });
 });
 
+describe('reminders for the iPhone', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("are the next week's, worded as Nova says them, timers told apart", async () => {
+    const home = await temp();
+    const day = 86_400_000;
+    await writeFile(
+      join(home, 'reminders.json'),
+      JSON.stringify({
+        reminders: [
+          { id: 'mum', text: 'call mum', about: 'to', due: NOW + 3_600_000, created: 0 },
+          { id: 'tea', text: 'the tea', ms: 300_000, countdown: true, due: NOW + 300_000, created: 0 },
+          { id: 'far', text: 'renew the passport', about: 'to', due: NOW + 30 * day, created: 0 },
+          { id: 'someday', text: 'milk', due: null, created: 0 },
+        ],
+      }),
+    );
+    const config = { name: 'Nova', routines: {}, initiative: { briefing: 'off', briefingTime: '08:30', awayMinutes: 10, speak: 'free', appleReminders: 'never', remindersList: '', calendar: false, briefingBrain: false, town: '', units: 'celsius' } };
+    const initiative = await new Initiative({
+      home,
+      config: () => config as never,
+      presence: { connected: false, status: null, send: () => false } as never,
+      broadcast: () => {},
+      services: () => [],
+      hasBrain: () => false,
+      saveRoutine: async () => {},
+      changed: () => {},
+    }).load();
+    expect(initiative.phoneReminders(NOW)).toEqual([
+      { id: 'tea', title: 'Timer · the tea', body: expect.stringMatching(/tea/i), due: NOW + 300_000, timer: true },
+      { id: 'mum', title: 'Reminder', body: "It's time to call mum.", due: NOW + 3_600_000, timer: false },
+    ]);
+    initiative.close();
+  });
+});
+
 describe("Nova's own files", () => {
   it("are kept beside when they can't be read, never written over", async () => {
     const dir = await temp();

@@ -4,7 +4,7 @@
  */
 import type { HearingStatus, SettingsSnapshot, SettingValue, ShellContext, ShellStatus } from './settings.ts';
 import type { TaskRecord } from './skills/types.ts';
-import type { PhoneHearing } from './phone.ts';
+import type { PhoneHearing, PhoneReminder } from './phone.ts';
 
 export type Phase = 'idle' | 'listening' | 'thinking' | 'acting' | 'speaking';
 
@@ -214,6 +214,8 @@ export type ServerEvent =
   | { type: 'computer'; active: boolean; caller?: string; app?: string; paused?: boolean; steps?: number }
   /** To an iPhone, as it connects and when Settings change: where its speech is heard. */
   | { type: 'phone-config'; hearing: PhoneHearing }
+  /** To an iPhone: the reminders and timers coming up, for it to ring for itself (all of them, each time: it replaces what it had). */
+  | { type: 'phone-reminders'; items: PhoneReminder[] }
   | { type: 'error'; message: string };
 
 /**

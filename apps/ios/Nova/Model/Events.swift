@@ -19,6 +19,7 @@ enum Incoming {
   case tasks([AgentTask])
   case computer(active: Bool, caller: String?, app: String?, paused: Bool)
   case phoneConfig(hearing: String)
+  case phoneReminders([PhoneReminder])
   case result(ok: Bool, message: String)
   case error(String)
 
@@ -66,6 +67,8 @@ enum Incoming {
       return .computer(active: m["active"] as? Bool ?? false, caller: m["caller"] as? String, app: m["app"] as? String, paused: m["paused"] as? Bool ?? false)
     case "phone-config":
       return .phoneConfig(hearing: m["hearing"] as? String ?? "auto")
+    case "phone-reminders":
+      return .phoneReminders((m["items"] as? [[String: Any]] ?? []).compactMap(PhoneReminder.init))
     case "settings-result":
       return .result(ok: m["ok"] as? Bool ?? false, message: m["message"] as? String ?? "")
     case "error":
@@ -160,6 +163,8 @@ enum Outgoing {
   case audioStop
   /// Nova came to the front on this phone, or left it: news goes where the user is.
   case phoneState(active: Bool)
+  /// Snooze or Done on one of the phone's own reminder notifications.
+  case notificationAction(ref: String, action: String)
   /// Said into the phone and recognized here (`phone`), or typed (`keyboard`).
   case utterance(String, source: String)
   case speechFinished
@@ -174,6 +179,7 @@ enum Outgoing {
     case .talkEnd(let held): return ["type": "talk-end", "held": held]
     case .audioStop: return ["type": "audio-stop"]
     case .phoneState(let active): return ["type": "phone-state", "active": active]
+    case .notificationAction(let ref, let action): return ["type": "notification-action", "ref": ref, "action": action]
     case .utterance(let text, let source): return ["type": "utterance", "text": text, "source": source]
     case .speechFinished: return ["type": "speech-finished"]
     case .cancel: return ["type": "cancel"]

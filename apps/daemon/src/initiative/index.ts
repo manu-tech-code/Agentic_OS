@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { dueText, nextTime, onDay, type News, type Phase, type Reminder, type Routine, type ServerEvent, type SettingsSnapshot, type ShellContext, type TaskRecord } from '@nova/core';
+import { dueText, nextTime, onDay, type News, type Phase, type PhoneReminder, type Reminder, type Routine, type ServerEvent, type SettingsSnapshot, type ShellContext, type TaskRecord } from '@nova/core';
 import type { Config } from '../config.ts';
 import type { Presence } from '../shell/presence.ts';
 import { ShellRpc } from '../shell/rpc.ts';
@@ -168,6 +168,18 @@ export class Initiative {
       this.maybeBrief('unlock');
     }
     this.check();
+  }
+
+  /** The reminders and timers of the next week, for a phone to ring for itself: what Nova would say, when. */
+  phoneReminders(now = Date.now()): PhoneReminder[] {
+    return this.reminders
+      .list()
+      .filter((r) => r.due !== null && r.due > now && r.due < now + 7 * 86_400_000)
+      .slice(0, 50)
+      .map((r) => {
+        const timer = Boolean(r.countdown && !r.about);
+        return { id: r.id, title: timer ? (r.text ? `Timer · ${r.text}` : 'Timer') : 'Reminder', body: dueText(r), due: r.due!, timer };
+      });
   }
 
   /** Nova came to the front on the user's iPhone: what waited for them, said there if they're away from the Mac. */

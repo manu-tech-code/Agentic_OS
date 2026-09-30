@@ -689,6 +689,14 @@ export const FIELDS: SettingField[] = [
     ],
   },
   {
+    key: 'phone.reminders',
+    section: 'phone',
+    label: 'Reminders on your iPhone',
+    help: "Your reminders and timers ring on the iPhone too - as its own notifications, so even with Nova closed there - with Snooze and Done, which reach the Mac. While Nova is open on the phone, the Mac says them instead. The Mac sends the phone what's coming up (the next week) whenever it connects.",
+    type: 'toggle',
+    default: true,
+  },
+  {
     key: 'phone.news',
     section: 'phone',
     label: 'News on your iPhone',
