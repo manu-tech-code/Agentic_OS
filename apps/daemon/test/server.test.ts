@@ -8,10 +8,13 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 
-// The daemon itself, started as `npm run dev` starts it - on a port of its own, with a settings
+// The daemon itself, started as Nova.app starts it - on a port of its own, with a settings
 // folder of its own and a dry-run Mac (it opens and quits nothing), nothing to download.
+// tsx's loader runs inside the daemon's own process: tsx's command-line wrapper would stand
+// between the test and the daemon, and it kills a daemon that hasn't answered a signal it passed
+// on within 30 ms - one a busy machine hadn't let run just then (143, and nothing saved).
 const DAEMON = fileURLToPath(new URL('..', import.meta.url));
-const TSX = fileURLToPath(new URL('../../../node_modules/tsx/dist/cli.mjs', import.meta.url));
+const TSX = new URL('../../../node_modules/tsx/dist/', import.meta.url);
 
 let daemon: ChildProcess;
 let home = '';
@@ -36,7 +39,7 @@ beforeAll(async () => {
     JSON.stringify({ decisions: { engine: 'heuristic' }, hearing: { engine: 'browser', smartTurn: false }, screen: { context: false }, agents: { enabled: [] }, trust: { askFirst: true } }),
   );
   port = await freePort();
-  daemon = spawn(process.execPath, [TSX, 'src/server.ts'], {
+  daemon = spawn(process.execPath, ['--require', fileURLToPath(new URL('preflight.cjs', TSX)), '--import', new URL('loader.mjs', TSX).href, 'src/server.ts'], {
     cwd: DAEMON,
     env: {
       PATH: process.env.PATH,
@@ -157,8 +160,11 @@ describe('the daemon', () => {
     client.ws!.close();
   });
 
-  it('stops cleanly when asked', async () => {
+  it('stops cleanly when asked - even on a machine too busy to let it run just then', async () => {
+    // Stopped, the daemon can't answer the signal until it runs again, as on a CI machine short of time.
+    process.kill(daemon.pid!, 'SIGSTOP');
     daemon.kill('SIGTERM');
+    setTimeout(() => process.kill(daemon.pid!, 'SIGCONT'), 200);
     expect(await exited).toBe(0);
   });
 });
