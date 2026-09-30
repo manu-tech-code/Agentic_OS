@@ -96,6 +96,14 @@ final class Nova {
   private var widgetReload: Task<Void, Never>?
 
   private init() {
+    if let scene = Demo.scene {
+      // The README's scripted session: no Mac at all, and this phone's own pairing left as it was.
+      door = nil
+      mac = scene == "pair" ? nil : Demo.mac
+      link = scene == "pair" ? .unpaired : .connected
+      Task { self.playDemo(scene) }
+      return
+    }
     var problem: String?
     let key: DeviceKey?
     do {
@@ -351,6 +359,7 @@ final class Nova {
   }
 
   private func showVoice() {
+    guard Demo.scene == nil else { return } // the demo shows its own
     let now = answer
     // Out of the front, time from iOS while Nova thinks - until its voice plays, which keeps it awake by itself.
     if now == nil || voice.speaking {
@@ -807,5 +816,58 @@ final class BackgroundTime {
     guard id != .invalid else { return }
     UIApplication.shared.endBackgroundTask(id)
     id = .invalid
+  }
+}
+
+// MARK: - The README's scripted session
+
+extension Nova {
+  /// One of Demo's scenes: what the made-up Mac says comes in as a real Mac's events do, and the rest - talking, the
+  /// Orb moving, the task board open, Nova's voice in the Dynamic Island - is set as the scene needs.
+  fileprivate func playDemo(_ scene: String) {
+    Task {
+      // Each scene starts clean: activities outlive the app that started them.
+      await LiveActivities.shared.endAll()
+      await VoiceActivity.shared.clear()
+      let start = Date()
+      Task {
+        for (at, event) in Demo.script(scene) {
+          try? await Task.sleep(for: .seconds(max(0, at - Date().timeIntervalSince(start))))
+          if let data = try? JSONSerialization.data(withJSONObject: event), let incoming = Incoming.read(data) { handle(incoming) }
+        }
+      }
+      switch scene {
+      case "talk", "answer", "faceid":
+        talking = scene == "talk"
+        // A voice: the Orb moves with it.
+        while !Task.isCancelled {
+          level = Float(0.18 + 0.3 * abs(sin(Date().timeIntervalSince(start) * 4.2)))
+          try? await Task.sleep(for: .milliseconds(80))
+        }
+      case "tasks":
+        try? await Task.sleep(for: .seconds(0.7))
+        showingTasks = true
+      case "island":
+        // Nova speaking, and Claude at work: once Nova is sent to the background, the Dynamic Island shows Nova's voice
+        // (Claude's task has it again once Nova is done), its bars moving with a made-up voice.
+        let time = BackgroundTime("Nova's demo")
+        try? await Task.sleep(for: .seconds(0.6))
+        VoiceActivity.shared.show("speaking", text: Demo.saying, name: name, inFront: true)
+        var away = false
+        while Date().timeIntervalSince(start) < 25 {
+          if !foreground, !away {
+            away = true
+            voice.stayAwake(true) // as when Nova really speaks: an app playing audio isn't held back
+          }
+          VoiceActivity.shared.show("speaking", text: Demo.saying, name: name, inFront: foreground)
+          VoiceActivity.shared.hear(Demo.bands(at: Date().timeIntervalSince(start)))
+          try? await Task.sleep(for: .milliseconds(250))
+        }
+        voice.stayAwake(false)
+        time.end()
+      default:
+        break
+      }
+    }
   }
 }

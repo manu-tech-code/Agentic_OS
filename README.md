@@ -291,16 +291,76 @@ again after every rebuild.
 The same Nova in your pocket. What you say into the iPhone is heard and answered by Nova on your Mac - its hearing,
 Reflex, your agents, Nova's hands - and the reply is spoken on the phone, in Kokoro's voice.
 
+<table>
+  <tr>
+    <td width="25%"><img src=".github/readme/phone-talk.webp" alt="Nova on the iPhone, listening: the talk button glows and the words appear as they're heard - ask Claude to fix the failing tests in web-app"><br><sub><b>Talk</b> - hold the button; your words show as they're heard</sub></td>
+    <td width="25%"><img src=".github/readme/phone-answer.webp" alt="Nova speaking its answer - Claude's on it in web-app - with Claude's question underneath: Claude wants to run npm install date-fns, allow it? with No and Yes"><br><sub><b>Answer</b> - what Nova says, and a question waiting for a yes</sub></td>
+    <td width="25%"><img src=".github/readme/phone-faceid.webp" alt="A question only a tap answers: Claude wants to use Stripe to pay $12.00, allow it? with No and Allow with Face ID"><br><sub><b>Face ID</b> - what moves money or can't be undone takes a tap</sub></td>
+    <td width="25%"><img src=".github/readme/phone-tasks.webp" alt="The agents' task board: Claude working in web-app on npm test, with Stop; Gemini CLI failed in api, with Run again; Codex done in docs, with what it did"><br><sub><b>Agent tasks</b> - what each agent is doing, did, or why it failed</sub></td>
+  </tr>
+</table>
+
+<p align="center">
+  <img src=".github/readme/phone-island.webp" width="420" alt="The Dynamic Island while Nova speaks with the app closed: bars that move with Nova's voice, and Nova's name">
+  <br><sub>Out of the app, Nova's answer stays in the Dynamic Island - its bars move with Nova's voice.</sub>
+</p>
+
+These come from the app's scripted session (`-demo`, in `apps/ios/Nova/Model/Demo.swift`) in the iOS Simulator, with a
+made-up Mac - nothing from anyone's. `npm run readme:phone` takes them all again (it needs Xcode, and `brew install
+webp`).
+
+### Setting it up
+
+<table>
+  <tr>
+    <td width="30%"><img src=".github/readme/phone-pair.webp" alt="Nova on the iPhone before pairing: open Nova's Settings, iPhone on your Mac, turn on Let your iPhone connect and press Pair an iPhone, then scan the code - with the Scan the code button"></td>
+    <td>
+
 ```bash
-npm run phone                 # build Nova for your iPhone and put it on it (paired with this Mac, Developer Mode on)
+npm run phone                 # build Nova for your iPhone and put it on it
 npm run phone -- --simulator  # or in the iOS Simulator
 ```
 
-1. On the Mac: Settings → iPhone → **Let your iPhone connect**, then **Pair an iPhone**.
-2. On the iPhone: open Nova and scan the code. (In the Simulator: **Copy the link**, then `xcrun simctl openurl booted "<the link>"`.)
-3. Hold the talk button and talk - or tap it, talk, and tap it again. The keyboard button types instead, and ■ stops
-   everything. Nova's cards show on the phone - a question waiting for a yes is answered right there - and ✳︎ is the
-   agents' task board, with Stop and Run again.
+The iPhone needs to have met this Mac once by cable (unlock it and tap **Trust**), with Developer Mode on
+(Settings → Privacy & Security). Then:
+
+1. On the Mac: Settings → iPhone → **Let your iPhone connect**, then **Pair an iPhone**. A code appears.
+2. On the iPhone: open Nova and tap **Scan the code**. (In the Simulator: **Copy the link** on the Mac, then
+   `xcrun simctl openurl booted "<the link>"`.)
+
+That's all: from then on Nova finds your Mac by itself, on the same Wi-Fi. The first time, iOS asks to let Nova use
+the camera (for the code), find devices on your network (your Mac), use the microphone (for the talk button), and
+send notifications (your reminders).
+
+</td>
+  </tr>
+</table>
+
+### Using it
+
+- **The screen.** At the top, Nova and the Mac it's on - the dot is green while they're connected. **✳︎** opens the
+  agents' task board (it has a dot while one is at work), and the **laptop** shows your Mac, where what you say is
+  heard, and **Unpair this iPhone**. Under them, what Nova is doing - *Ready*, *Listening*, *Thinking*, *On it*,
+  *Speaking* - and the Orb, which moves with your voice and Nova's. Then what it heard, its answer, and its cards.
+- **Talk.** Hold the talk button, say it, and let go. Or tap it and just talk: the turn ends when you pause, or when
+  you tap it again. No wake word needed - the button is the "Hey Nova". While Nova speaks, holding it again talks over
+  it.
+- **Type.** The keyboard button, for when you can't talk out loud.
+- **Answer Nova's questions.** When Nova or an agent needs a yes - "Claude wants to run `npm install date-fns`. Allow
+  it?" - the card has **No** and **Yes**; you can say them too, or "yes, always". What only a tap allows - paying, or
+  what can't be taken back - has **Allow with Face ID** instead, and a spoken yes never does it.
+- **Agents' tasks.** **✳︎** shows each task: the agent, the project, its latest step while it works (with **Stop**),
+  what it found when it's done, and why it failed (with **Run again**). You start them by asking: "ask Claude to fix
+  the failing tests in web-app".
+- **Stop.** **■** stops everything: what Nova is saying and thinking, its hands on your Mac, and every agent's task.
+  An open question is refused.
+- **Leave the app.** Go to the Home Screen or another app - or lock the phone - while Nova answers, and the answer
+  stays with you: said on the phone, and shown in the Dynamic Island (hold it for the words and **Stop**) and on the
+  Lock Screen. An agent at work is there too, with its step and **Stop**.
+- **Without opening it.** "Hey Siri, ask Nova …", the Action button or Control Center (**Talk to Nova**), Nova's widget
+  on the Home Screen, the Lock Screen and StandBy, and your reminders as notifications with Snooze and Done - all below.
+
+### What it does
 
 - **Only your phone gets in.** The door - on your Wi-Fi, port 7879 (`NOVA_PHONE_PORT`) - is open only while *Let your
   iPhone connect* is on. Every connection is encrypted (TLS), and the phone accepts only the certificate the pairing
@@ -333,7 +393,8 @@ npm run phone -- --simulator  # or in the iOS Simulator
 - **Nova speaking, in the Dynamic Island.** Leave Nova while it's answering you - for the Home Screen, another app or
   the Lock Screen - and the answer stays with you in the Dynamic Island: an ellipsis while Nova thinks, then bars that
   move with its voice, as music's do. Hold the island for what it's saying and **Stop**, which ends that answer
-  (agents go on); it's gone as soon as Nova is done. Settings → iPhone → *Nova speaking, in the Dynamic Island* turns
+  (agents go on); it's gone as soon as Nova is done. While Nova speaks the island is Nova's, and an agent at work has it
+  back after. Settings → iPhone → *Nova speaking, in the Dynamic Island* turns
   it off.
 - **News where you are.** While you're away from the Mac (it's locked, or untouched a while) and Nova is open on the
   phone, reminders coming up and agents finishing are said there - and what Nova held comes up when you open it, or,
