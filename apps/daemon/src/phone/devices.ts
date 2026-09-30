@@ -48,9 +48,12 @@ export class DeviceStore {
     return this.stored.mac;
   }
 
-  /** The newest first. */
+  /** The newest first - paired in the same millisecond, the one added later. */
   list(): readonly PairedDevice[] {
-    return [...this.stored.devices].sort((a, b) => b.pairedAt - a.pairedAt);
+    return this.stored.devices
+      .map((device, order) => ({ device, order }))
+      .sort((a, b) => b.device.pairedAt - a.device.pairedAt || b.order - a.order)
+      .map((d) => d.device);
   }
 
   find(id: string) {
