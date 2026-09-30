@@ -23,7 +23,8 @@ export class Deliverer implements NewsService {
   private held: { id: string; at: number; news: News; away: boolean }[] = [];
   private waiting: News[] = [];
   private readonly now: () => number;
-  private count_ = 0;
+  /** Numbers held news, with the time, for ids a phone can key its notifications by. */
+  private serial = 0;
 
   constructor(
     private readonly opts: {
@@ -91,7 +92,7 @@ export class Deliverer implements NewsService {
 
   private hold(news: News, away: boolean) {
     // Unique across restarts too: the phone keys its notifications by it.
-    this.held.push({ id: `${this.now().toString(36)}-${++this.count_}`, at: this.now(), news, away });
+    this.held.push({ id: `${this.now().toString(36)}-${++this.serial}`, at: this.now(), news, away });
   }
 
   /**
