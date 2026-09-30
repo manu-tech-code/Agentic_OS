@@ -2,7 +2,12 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- What Xcode can't write from build settings (the rest is generated): Bonjour, and nova:// pairing links. -->
+	<!-- What Xcode can't write from build settings (the rest is generated): Bonjour, nova:// pairing links, and
+	     finishing a reply out of the front - answering Siri, or after the phone was locked (never the microphone). -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_nova._tcp</string>

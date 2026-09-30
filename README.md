@@ -310,16 +310,28 @@ npm run phone -- --simulator  # or in the iOS Simulator
   Nova hears it as it hears you at the Mac. On a weak connection - or when Settings → iPhone says so - Apple's
   recognizer on the iPhone does it, and only the text goes to the Mac (its speech model downloads once, from the
   app's Mac page).
+- **Siri, Shortcuts and the Action button.** "Hey Siri, ask Nova" - then say what you want - reaches Nova on your Mac
+  without opening the app: the answer shows on screen and is said in Nova's own voice on the phone, never Siri's.
+  "Hey Siri, talk to Nova" opens Nova listening, and so can the Action button (Settings → Action Button → Shortcut →
+  Nova → **Talk**). **Nova's Briefing**, **What Nova's Agents Are Doing**, **Nova's Reminders** and **Stop Nova** are
+  there too - by voice, in Spotlight and in the Shortcuts app, where **Ask Nova** hands its answer to the next step.
+  When Nova asks something back it opens and listens for your answer, and for what only a tap allows it shows **Allow
+  with Face ID**. A locked phone asks for Face ID first: no one talks to your Mac through your phone but you.
+- **News where you are.** While you're away from the Mac (it's locked, or untouched a while) and Nova is open on the
+  phone, reminders coming up and agents finishing are said there - and what Nova held comes up when you open it
+  (Settings → iPhone → *News on your iPhone*).
+- **Reminders ring on the phone.** Your reminders and timers are the iPhone's own notifications too, so they ring even
+  with Nova closed, with Snooze and Done that reach the Mac (*Reminders on your iPhone*).
 - **Face ID for what can't be taken back.** What only a tap allows - paying through a service, cancelling every
   reminder at once - shows **Allow with Face ID** on the phone, and nothing happens until Face ID (or the passcode) says
   it's you. A spoken "yes" never does it, and "no" still refuses.
 - **What a phone may do.** Talk and type to Nova, answer its questions, stop it, and stop or rerun agents' tasks -
   with the same rules and permissions as at the Mac. It can't change Settings, and it never sees your memories or the
-  record of actions. Replies to what you said on the phone are spoken there; Nova's news (a reminder, an agent
-  finishing) is still said at the Mac.
+  record of actions. Replies to what you said on the phone are spoken there.
 - **For now:** on the same Wi-Fi as the Mac - Tailscale, for anywhere, comes next. With a free Apple account, Xcode's
-  signing lasts 7 days (run `npm run phone` again after that), and the Mac can't wake the phone with a push: it hears
-  from Nova while it's open.
+  signing lasts 7 days (run `npm run phone` again after that), and the Mac can't wake the phone with a push: the phone
+  hears from Nova while it's open, when Siri or a shortcut asks something, and through the reminders it rings itself.
+  Out of the front with nothing to do, it lets its connection go, and makes it again in a moment when it needs it.
 
 ## Reminders, briefings and routines
 

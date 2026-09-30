@@ -1,11 +1,19 @@
 import Foundation
 import LocalAuthentication
 import Observation
+import os
+import UIKit
+
+/// What Siri and Shortcuts asked, and how long each step took - never what was said (Console.app, `dev.nova.phone`).
+private let log = Logger(subsystem: "dev.nova.phone", category: "siri")
 
 /// Nova on this iPhone: the connection to the Mac, what Nova is doing and saying, and what the user does.
+/// One for the app - its window, and Siri, Shortcuts and the Action button, which may start it in the background.
 @MainActor
 @Observable
 final class Nova {
+  static let shared = Nova()
+
   enum Link: Equatable {
     case unpaired
     case connecting
@@ -18,8 +26,8 @@ final class Nova {
 
   private(set) var link: Link
   private(set) var mac: PairedMac?
-  /// The assistant's name, from the Mac.
-  private(set) var name = "Nova"
+  /// The assistant's name, from the Mac (kept, for when Siri asks while it can't be reached).
+  private(set) var name = UserDefaults.standard.string(forKey: "assistantName") ?? "Nova"
   private(set) var phase = "idle"
   private(set) var phaseLabel: String?
   /// What Nova heard: the words as they come, then the whole turn.
@@ -48,8 +56,9 @@ final class Nova {
   private let voice = Voice()
   private let phoneHearing = PhoneHearing()
   private var language = "en-US"
-  /// Nova is in front on this phone: the Mac sends news here while the user is away from it.
-  private var foreground = true
+  /// Nova is in front on this phone: the Mac sends news here while the user is away from it. Not until it
+  /// comes there - Siri and Shortcuts start the app in the background.
+  private(set) var foreground = false
   /// Snooze and Done pressed while the Mac couldn't be reached: sent once it can (kept across launches).
   private var unsent: [[String]] {
     get { UserDefaults.standard.array(forKey: "unsentActions") as? [[String]] ?? [] }
@@ -61,8 +70,16 @@ final class Nova {
   private var watch: Task<Void, Never>?
   /// When the microphone last heard speech in this turn (heard on the iPhone, tapped).
   private var spokeAt: Date?
+  /// Questions from Siri, Shortcuts or the Action button under way.
+  private var asking = 0
+  /// The one being answered now: what's come back since it was asked.
+  private var waiting: Waiting?
+  /// Siri or the Action button asked for Nova to listen, once it can.
+  private var listening: Task<Void, Never>?
+  /// Letting the connection go, out of the front with nothing to do.
+  private var resting: Task<Void, Never>?
 
-  init() {
+  private init() {
     var problem: String?
     let key: DeviceKey?
     do {
@@ -97,7 +114,10 @@ final class Nova {
       self.level = level
       if self.talking, level > 0.06 { self.spokeAt = Date() }
     }
-    voice.onFinished = { [weak self] in self?.door?.send(.speechFinished) }
+    voice.onFinished = { [weak self] in
+      self?.door?.send(.speechFinished)
+      self?.restLater()
+    }
     voice.onProblem = { [weak self] message in self?.notice = message }
     phoneHearing.onPartial = { [weak self] text in self?.heard = text }
     Notifications.shared.setUp()
@@ -140,11 +160,40 @@ final class Nova {
     Task { await checkPhoneHearing() }
   }
 
-  /// Nova came to the front on this phone, or went: the Mac says news here while the user is away from it.
+  /// Nova came to the front on this phone, or went: the Mac says news here while the user is away from it. Gone,
+  /// the microphone stops, a reply that's playing finishes, and then the connection is let go.
   func setForeground(_ on: Bool) {
     guard on != foreground else { return }
     foreground = on
+    let wasTalking = talking
+    voice.setAway(!on)
     if link == .connected { door?.send(.phoneState(active: on)) }
+    if on {
+      resting?.cancel()
+    } else if wasTalking {
+      // What was said so far still counts: the turn ends, and then the connection may rest.
+      Task {
+        await talkEnd()
+        restLater()
+      }
+    } else {
+      restLater()
+    }
+  }
+
+  /// Out of the front with nothing left to do - no question from Siri under way, nothing being said, nothing
+  /// waiting to be sent: the connection is let go, so the Mac knows this phone isn't there (it's made again when
+  /// Nova comes back, or Siri asks something).
+  private func restLater() {
+    resting?.cancel()
+    guard !foreground else { return }
+    resting = Task { [weak self] in
+      let time = BackgroundTime("Nova finishing up")
+      defer { time.end() }
+      try? await Task.sleep(for: .milliseconds(800)) // what was just sent goes out first
+      guard let self, !Task.isCancelled, !self.foreground, self.asking == 0, !self.voice.speaking, self.unsent.isEmpty else { return }
+      self.door?.pause()
+    }
   }
 
   // MARK: - Talking
@@ -309,6 +358,103 @@ final class Nova {
     phoneHearingReady = await PhoneHearing.ready(language)
   }
 
+  // MARK: - Siri, Shortcuts and the Action button
+
+  /// A question from Siri, a shortcut or Spotlight, said to Nova as if into this phone: what Nova answers. Its voice
+  /// plays here as it would in the app - in the background too - so this waits until the answer has started playing.
+  func ask(_ question: String) async -> Answer {
+    let question = question.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !question.isEmpty else { return Answer(heard: "", text: "Ask \(name) something.", failed: true) }
+    guard mac != nil else { return Answer(heard: question, text: "This iPhone isn't paired with \(name) yet: open \(name) and pair it with your Mac.", failed: true) }
+    asking += 1
+    let time = BackgroundTime("Asking Nova")
+    defer {
+      asking -= 1
+      time.end()
+      restLater()
+    }
+    let asked = Date()
+    guard await reachMac() else {
+      log.notice("ask: the Mac couldn't be reached (\(Date().timeIntervalSince(asked), format: .fixed(precision: 2)) s)")
+      return Answer(heard: question, text: unreachable, failed: true)
+    }
+    log.notice("ask: connected after \(Date().timeIntervalSince(asked), format: .fixed(precision: 2)) s")
+    let waiting = Waiting()
+    self.waiting = waiting
+    defer { if self.waiting === waiting { self.waiting = nil } }
+    heard = question
+    door?.send(.utterance(question, source: "phone"))
+    let until = Date().addingTimeInterval(Self.answerSeconds)
+    while !waiting.done, link == .connected, Date() < until { try? await Task.sleep(for: .milliseconds(50)) }
+    guard waiting.done else {
+      let failed = link != .connected
+      return Answer(
+        heard: question,
+        text: failed ? "The connection to your Mac dropped before \(name) answered." : waiting.text.isEmpty ? "\(name) is still working on that - open \(name) for the answer." : "\(waiting.text)…",
+        failed: failed || waiting.text.isEmpty)
+    }
+    log.notice("ask: answered after \(Date().timeIntervalSince(asked), format: .fixed(precision: 2)) s")
+    if let failure = waiting.failure { return Answer(heard: question, text: failure, failed: true) }
+    // Said aloud too: once it's playing here, iOS keeps Nova awake to finish saying it.
+    if let audio = waiting.audio {
+      let until = Date().addingTimeInterval(4)
+      while voice.lastPlayed != audio, link == .connected, Date() < until { try? await Task.sleep(for: .milliseconds(50)) }
+      log.notice("ask: \(self.voice.lastPlayed == audio ? "speaking" : "not speaking") after \(Date().timeIntervalSince(asked), format: .fixed(precision: 2)) s")
+    }
+    return Answer(heard: question, text: waiting.text, asks: waiting.card != nil || waiting.text.hasSuffix("?"), tap: waiting.card?.tap ?? false)
+  }
+
+  /// How long Siri is kept waiting for Nova's answer: a brain can take a while, and past this Siri gives up anyway.
+  static let answerSeconds: TimeInterval = 20
+
+  /// Stop everything, from Siri or a shortcut: as the Stop button.
+  func stopEverything() async -> Answer {
+    asking += 1
+    defer {
+      asking -= 1
+      restLater()
+    }
+    guard mac != nil, await reachMac() else { return Answer(heard: "", text: mac == nil ? "This iPhone isn't paired with \(name) yet." : unreachable, failed: true) }
+    stop()
+    try? await Task.sleep(for: .milliseconds(300)) // it goes out before the connection may be let go
+    return Answer(heard: "", text: "\(name) stopped everything.")
+  }
+
+  /// Siri, the Action button or a question Nova asked back: Nova, in front, listens - as if its talk button were
+  /// tapped, so the turn ends when you pause - once it's connected and has finished what it's saying.
+  func listenSoon() {
+    listening?.cancel()
+    listening = Task { [weak self] in
+      guard let self, await self.reachMac() else { return }
+      let until = Date().addingTimeInterval(15)
+      while !Task.isCancelled, Date() < until, !self.foreground || self.voice.speaking || self.talking {
+        try? await Task.sleep(for: .milliseconds(100))
+      }
+      guard !Task.isCancelled, self.foreground, !self.talking, self.link == .connected else { return }
+      try? await Task.sleep(for: .milliseconds(300)) // Siri lets go of the microphone
+      await self.talkStart()
+      self.talkTapped()
+    }
+  }
+
+  /// Connected to the Mac - now, or after trying again straight away.
+  private func reachMac(within seconds: TimeInterval = 10) async -> Bool {
+    if link == .connected { return true }
+    guard mac != nil else { return false }
+    door?.hurry()
+    let until = Date().addingTimeInterval(seconds)
+    while link != .connected, Date() < until {
+      if case .lost = link { return false }
+      try? await Task.sleep(for: .milliseconds(100))
+    }
+    return link == .connected
+  }
+
+  private var unreachable: String {
+    if case .lost(let why) = link { return why }
+    return "\(name) on your Mac can't be reached. Is the Mac awake with \(name) open, and this iPhone on its Wi-Fi?"
+  }
+
   // MARK: - What the Mac says
 
   private func doorState(_ state: Door.State) {
@@ -320,6 +466,7 @@ final class Nova {
       door?.send(.phoneState(active: foreground))
       for pair in unsent where pair.count == 2 { door?.send(.notificationAction(ref: pair[0], action: pair[1])) }
       unsent = []
+      restLater()
     case .failed(let message, let unpaired):
       if unpaired {
         PairedMac.forget()
@@ -342,6 +489,7 @@ final class Nova {
     switch event {
     case .hello(let hello):
       name = hello.name
+      UserDefaults.standard.set(hello.name, forKey: "assistantName")
       macHearing = hello.hearing
       if let lang = hello.language { language = lang }
       cardSeconds = hello.cardSeconds ?? 8
@@ -356,11 +504,13 @@ final class Nova {
       self.phase = phase
       phaseLabel = label
       if ["thinking", "acting", "speaking"].contains(phase) { turnHeard() }
-    case .say(let text, _, _, _):
+    case .say(let text, _, let partial, let audio):
       reply = text
+      waiting?.said(text, audio: audio, final: !partial)
     case .audio(let id, let seq, let rate, let pcm, let last, _):
       voice.play(id: id, seq: seq, sampleRate: rate, pcm: pcm, last: last)
     case .card(let card):
+      if card.kind == "confirm" { waiting?.asks(card) }
       cards.removeAll { $0.id == card.id }
       cards.insert(card, at: 0)
       if cards.count > 6 { cards.removeLast(cards.count - 6) }
@@ -376,9 +526,13 @@ final class Nova {
     case .phoneReminders(let items):
       Task { await Notifications.shared.replace(items) }
     case .result(let ok, let message):
-      if !ok { notice = message }
+      if !ok {
+        notice = message
+        waiting?.failed(message)
+      }
     case .error(let message):
       notice = message
+      waiting?.failed(message)
     case .challenge, .welcome:
       break
     }
@@ -394,5 +548,63 @@ final class Nova {
       guard !Task.isCancelled else { return }
       self?.dismiss(card.id)
     }
+  }
+}
+
+/// What Nova said to a question from Siri, Shortcuts or the Action button.
+struct Answer {
+  var heard: String
+  var text: String
+  /// Nova asked something back: a yes or no, or which one - or, `tap`, something only Allow with Face ID answers.
+  var asks = false
+  var tap = false
+  /// It didn't reach Nova, or Nova couldn't do it.
+  var failed = false
+}
+
+/// A question being answered: what's come back since it was asked. The answer is the first reply Nova finishes.
+@MainActor
+private final class Waiting {
+  private(set) var text = ""
+  /// The reply is being said aloud, as this audio.
+  private(set) var audio: String?
+  /// Nova asked for a yes or no (or a tap) with this.
+  private(set) var card: Card?
+  private(set) var failure: String?
+  private(set) var done = false
+
+  func said(_ text: String, audio: String?, final: Bool) {
+    guard !done else { return }
+    self.text = text
+    if let audio { self.audio = audio }
+    done = final
+  }
+
+  func asks(_ card: Card) {
+    if !done { self.card = card }
+  }
+
+  func failed(_ message: String) {
+    guard !done else { return }
+    failure = message
+    done = true
+  }
+}
+
+/// A little time iOS gives an app out of the front, to finish what it started (a question from Siri, a last message).
+@MainActor
+final class BackgroundTime {
+  private var id = UIBackgroundTaskIdentifier.invalid
+
+  init(_ name: String) {
+    id = UIApplication.shared.beginBackgroundTask(withName: name) { [weak self] in
+      MainActor.assumeIsolated { self?.end() }
+    }
+  }
+
+  func end() {
+    guard id != .invalid else { return }
+    UIApplication.shared.endBackgroundTask(id)
+    id = .invalid
   }
 }

@@ -1,6 +1,10 @@
 import CryptoKit
 import Foundation
 import Network
+import os
+
+/// How connecting went, for Console.app (`dev.nova.phone`): which way, how long, and why it failed.
+private let log = Logger(subsystem: "dev.nova.phone", category: "door")
 
 /// The phone's side of Nova's door. It finds the Mac - by Bonjour on the Wi-Fi, or at the addresses it last
 /// had - connects over TLS accepting only the certificate the pairing QR code named, and proves who the
@@ -65,10 +69,14 @@ final class Door {
   private var retry: DispatchWorkItem?
   private var backoff: TimeInterval = 1
   private var attempt = 0
+  /// Ways tried since the last pause: each is tried in turn at once, and only then does the phone wait.
+  private var triedInRound = 0
   /// Bumped for every new connection, so an old one's callbacks are ignored.
   private var generation = 0
   private var pinger: DispatchSourceTimer?
   private var lastRoundTrip: TimeInterval?
+  /// When this try to get in began.
+  private var tryingSince = Date()
 
   init(key: DeviceKey) {
     self.key = key
@@ -84,12 +92,35 @@ final class Door {
     queue.async { self.start(.pairing(offer)) }
   }
 
-  /// Try again now - the app came back to the front - rather than wait out the backoff.
+  /// Try again now - the app came back to the front, or Siri asks something - rather than wait out the backoff.
   func resume() {
     queue.async {
       guard let target = self.target, !self.welcomed else { return }
       self.backoff = 1
       self.start(target)
+    }
+  }
+
+  /// Connect as soon as it can - Siri is waiting: straight away if it's resting or waiting to try again, while an
+  /// attempt under way is left to finish.
+  func hurry() {
+    queue.async {
+      guard let target = self.target, !self.welcomed else { return }
+      if self.connection != nil, self.retry == nil { return }
+      self.backoff = 1
+      self.start(target)
+    }
+  }
+
+  /// Let the connection go for now - Nova left the front with nothing to do - and don't look for the Mac again
+  /// until `resume`. The Mac sees the phone go, so it speaks for itself again.
+  func pause() {
+    queue.async {
+      guard self.target != nil, self.connection != nil || self.retry != nil else { return }
+      self.stop()
+      self.browser?.cancel()
+      self.browser = nil // where it last saw the Mac is kept: that's tried first next time
+      self.report(.idle)
     }
   }
 
@@ -115,6 +146,8 @@ final class Door {
 
   private func start(_ target: Target) {
     stop()
+    tryingSince = Date()
+    triedInRound = 0
     self.target = target
     browse(for: target.mac)
     open()
@@ -144,6 +177,7 @@ final class Door {
     guard !ways.isEmpty else { return report(.failed("Looking for your Mac on this Wi-Fi…", unpaired: false)) }
     report(.connecting)
     let endpoint = ways[attempt % ways.count]
+    log.info("door: trying \(String(describing: endpoint), privacy: .private) (attempt \(self.attempt))")
     let generation = self.generation
     let connection = NWConnection(to: endpoint, using: parameters(pin: target.pin))
     self.connection = connection
@@ -152,7 +186,8 @@ final class Door {
       switch state {
       case .ready:
         self.receive(connection, generation: generation)
-      case .waiting, .failed:
+      case .waiting(let error), .failed(let error):
+        log.notice("door: couldn't connect: \(error.localizedDescription, privacy: .public)")
         self.again()
       case .cancelled, .setup, .preparing:
         break
@@ -164,6 +199,7 @@ final class Door {
     // A connection that never gets anywhere (an address from another network) gives way to the next.
     queue.asyncAfter(deadline: .now() + 6) { [weak self] in
       guard let self, generation == self.generation, !self.welcomed else { return }
+      log.notice("door: no answer that way in 6 s")
       self.again()
     }
   }
@@ -192,7 +228,8 @@ final class Door {
       .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
   }
 
-  /// This way didn't work (or the connection dropped): the next one, after a pause that grows.
+  /// This way didn't work (or the connection dropped): the next way straight away - and once every way has been
+  /// tried, the next round after a pause that grows.
   private func again() {
     guard target != nil, retry == nil else { return }
     let wasWelcomed = welcomed
@@ -202,8 +239,14 @@ final class Door {
     welcomed = false
     pinger?.cancel()
     attempt += 1
-    let wait = wasWelcomed ? 0.5 : backoff
-    backoff = min(backoff * 2, 15)
+    triedInRound += 1
+    let roundDone = triedInRound >= endpoints.count
+    let wait = wasWelcomed ? 0.5 : roundDone ? backoff : 0.05
+    if roundDone {
+      triedInRound = 0
+      backoff = min(backoff * 2, 15)
+    }
+    log.info("door: trying again in \(wait, format: .fixed(precision: 2)) s")
     if !wasWelcomed { report(.connecting) }
     let item = DispatchWorkItem { [weak self] in
       self?.retry = nil
@@ -277,9 +320,11 @@ final class Door {
         fail("This iPhone couldn't sign in to the Mac: \(error.localizedDescription)", unpaired: false)
       }
     case .welcome(let device, let name):
+      log.notice("door: in after \(Date().timeIntervalSince(self.tryingSince), format: .fixed(precision: 2)) s")
       welcomed = true
       backoff = 1
       attempt = 0
+      triedInRound = 0
       if case .pairing(let offer) = target {
         let paired = PairedMac(mac: offer.mac, name: name, hosts: offer.hosts, port: offer.port, pin: offer.pin, device: device)
         self.target = .paired(paired)
