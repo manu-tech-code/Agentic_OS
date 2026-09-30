@@ -10,6 +10,9 @@
 		<string>audio</string>
 		<string>fetch</string>
 	</array>
+	<!-- Agents' tasks as Live Activities, on the Lock Screen and in the Dynamic Island. -->
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
 		<string>dev.nova.phone.check-in</string>
