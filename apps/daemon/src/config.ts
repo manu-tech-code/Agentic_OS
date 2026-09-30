@@ -269,6 +269,7 @@ export function loadConfig(settings: Settings, env: Env) {
       news: text('phone.news') as 'away' | 'always' | 'never',
       reminders: values['phone.reminders'] as boolean,
       activities: values['phone.activities'] as boolean,
+      voiceActivity: values['phone.voiceActivity'] as boolean,
     },
     hearing: {
       engine: text('hearing.engine') as 'auto' | 'apple' | 'parakeet' | 'browser',

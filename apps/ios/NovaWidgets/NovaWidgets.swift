@@ -13,6 +13,7 @@ struct NovaWidgets: WidgetBundle {
     NovaWidget()
     TalkControl()
     AgentActivityWidget()
+    NovaVoiceActivityWidget()
   }
 }
 

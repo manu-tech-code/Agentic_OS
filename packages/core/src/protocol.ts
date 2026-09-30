@@ -218,8 +218,8 @@ export type ServerEvent =
    */
   | { type: 'computer'; active: boolean; caller?: string; app?: string; paused?: boolean; steps?: number }
   /** To an iPhone, as it connects and when Settings change: where its speech is heard. */
-  /** To a phone: how Settings → iPhone has it - where its speech is heard, and whether agents' tasks show on its Lock Screen. */
-  | { type: 'phone-config'; hearing: PhoneHearing; activities: boolean }
+  /** To a phone: how Settings → iPhone has it - where its speech is heard, and what shows on its Lock Screen and in its Dynamic Island. */
+  | { type: 'phone-config'; hearing: PhoneHearing; activities: boolean; voiceActivity: boolean }
   /** To an iPhone: the reminders and timers coming up, for it to ring for itself (all of them, each time: it replaces what it had). */
   | { type: 'phone-reminders'; items: PhoneReminder[] }
   /** To a phone checking in by itself: what was held for the user while they were away, to show as notifications. */

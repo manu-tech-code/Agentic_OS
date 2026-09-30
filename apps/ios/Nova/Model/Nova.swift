@@ -84,6 +84,13 @@ final class Nova {
   private var resting: Task<Void, Never>?
   /// A check-in waiting for what the Mac held for you.
   private var checkingIn = false
+  /// Your turn went to the Mac then, and Nova hasn't finished answering it.
+  private var owedSince: Date?
+  /// The answer's words are in, and its voice (this audio) is on the way.
+  private var answerAudio: (id: String, since: Date)?
+  /// Time iOS gives Nova out of the front while it's answering you - until its voice (which keeps it awake) starts.
+  private var answerTime: BackgroundTime?
+  private var voiceTick: Task<Void, Never>?
   /// What the widgets show, as last written for them.
   private var widgetState = WidgetState.load() ?? WidgetState()
   private var widgetReload: Task<Void, Never>?
@@ -129,10 +136,16 @@ final class Nova {
       self?.door?.send(.speechFinished)
       self?.restLater()
     }
-    voice.onProblem = { [weak self] message in self?.notice = message }
+    voice.onProblem = { [weak self] message in
+      log.notice("voice: \(message, privacy: .public)")
+      self?.notice = message
+    }
     phoneHearing.onPartial = { [weak self] text in self?.heard = text }
     TalkToNova.listen = { [weak self] in self?.listenSoon() }
     StopAgentTask.stop = { [weak self] id in await self?.stopTask(id) }
+    StopNovaSpeaking.stop = { [weak self] in self?.hush() }
+    voice.onPlaying = { [weak self] _ in self?.showVoice() }
+    voice.onBands = { VoiceActivity.shared.hear($0) }
     Notifications.shared.setUp()
     Notifications.shared.quiet = { [weak self] in self?.link == .connected && self?.foreground == true }
     Notifications.shared.onAction = { [weak self] ref, action in
@@ -167,6 +180,7 @@ final class Nova {
     heard = ""
     updateWidgets { $0 = WidgetState(name: $0.name) }
     Task { await LiveActivities.shared.endAll() }
+    VoiceActivity.shared.show(nil, text: "", name: name, inFront: false)
   }
 
   /// A nova:// link: a pairing code - or, from a widget or the control, Nova listening, or the agents' task board.
@@ -193,6 +207,8 @@ final class Nova {
     voice.setAway(!on)
     if link == .connected { door?.send(.phoneState(active: on)) }
     if !on { scheduleCheckIn() }
+    if !on, answer != nil, answerTime == nil { answerTime = BackgroundTime("Nova answering") }
+    showVoice()
     if on {
       resting?.cancel()
     } else if wasTalking {
@@ -217,7 +233,7 @@ final class Nova {
       defer { time.end() }
       // What was just sent goes out first - and an app Siri just started has time to ask its question.
       try? await Task.sleep(for: .seconds(2))
-      guard let self, !Task.isCancelled, !self.foreground, self.asking == 0, !self.voice.speaking, self.unsent.isEmpty else { return }
+      guard let self, !Task.isCancelled, !self.foreground, self.asking == 0, self.answer == nil, self.unsent.isEmpty else { return }
       self.door?.pause()
     }
   }
@@ -289,6 +305,7 @@ final class Nova {
     tapped = false
     voice.stopTalking()
     door?.send(.audioStop)
+    answering()
   }
 
   /// The talk button came up after a hold, or was tapped again.
@@ -310,6 +327,61 @@ final class Nova {
     } else {
       door?.send(.talkEnd(held: true))
     }
+    answering()
+  }
+
+  /// Your turn is with the Mac now: Nova is working on its answer to you.
+  private func answering() {
+    owedSince = Date()
+    answerAudio = nil
+    showVoice()
+  }
+
+  /// Nova's answer to you, as it stands: thinking, or speaking - nil once it's done. The Dynamic Island shows it once
+  /// you've left Nova, and meanwhile the line to the Mac stays open (and Nova awake) for it.
+  private var answer: String? {
+    if voice.speaking { return "speaking" }
+    // Its words are in and its voice is on the way: the Mac is still at it, however long Kokoro takes over a long sentence.
+    if let audio = answerAudio, voice.lastPlayed != audio.id, ["thinking", "acting", "speaking"].contains(phase),
+      Date().timeIntervalSince(audio.since) < 60
+    {
+      return "speaking"
+    }
+    guard let since = owedSince, Date().timeIntervalSince(since) < 60 else { return nil }
+    return "thinking"
+  }
+
+  private func showVoice() {
+    let now = answer
+    // Out of the front, time from iOS while Nova thinks - until its voice plays, which keeps it awake by itself.
+    if now == nil || voice.speaking {
+      answerTime?.end()
+      answerTime = nil
+    }
+    if now == nil, !foreground { restLater() }
+    if now != nil, voiceTick == nil {
+      // Nothing may come to say it's over (the Mac gone quiet): look again every couple of seconds.
+      voiceTick = Task { [weak self] in
+        while let self, !Task.isCancelled, self.answer != nil {
+          try? await Task.sleep(for: .seconds(2))
+          self.showVoice()
+        }
+        self?.voiceTick = nil
+      }
+    }
+    let text = now == "speaking" ? reply : heard.isEmpty ? "" : "“\(heard)”"
+    VoiceActivity.shared.show(now, text: text, name: name, inFront: foreground)
+  }
+
+  /// Stop, on Nova speaking in the Dynamic Island or on the Lock Screen: it stops saying, or thinking about, that
+  /// answer (agents go on).
+  func hush() {
+    log.notice("stop: Nova stops answering, from its Live Activity")
+    voice.stopPlayback()
+    door?.send(.cancel)
+    owedSince = nil
+    answerAudio = nil
+    showVoice()
   }
 
   func type(_ text: String) {
@@ -317,6 +389,7 @@ final class Nova {
     guard !text.isEmpty else { return }
     heard = text
     door?.send(.utterance(text, source: "keyboard"))
+    answering()
   }
 
   /// A yes or no to the question on a card - as the window's buttons send it.
@@ -586,10 +659,18 @@ final class Nova {
     case .phase(let phase, let label):
       self.phase = phase
       phaseLabel = label
+      // Nothing came of your turn (nothing was heard): it's over. (A moment's grace for what was already on its way.)
+      if phase == "idle", let since = owedSince, Date().timeIntervalSince(since) > 1.5 { owedSince = nil }
+      showVoice()
       if ["thinking", "acting", "speaking"].contains(phase) { turnHeard() }
     case .say(let text, _, let partial, let audio):
       reply = text
       waiting?.said(text, audio: audio, final: !partial)
+      if owedSince != nil {
+        if let audio { answerAudio = (audio, Date()) }
+        if !partial { owedSince = nil } // all its words are in: what's left is saying them
+      }
+      showVoice()
     case .audio(let id, let seq, let rate, let pcm, let last, _):
       voice.play(id: id, seq: seq, sampleRate: rate, pcm: pcm, last: last)
     case .card(let card):
@@ -610,9 +691,10 @@ final class Nova {
       }
     case .computer(let active, let caller, let app, let paused):
       computer = !active ? nil : paused ? "Waiting while you use the Mac" : "\(caller ?? name) is using the computer\(app.map { " · \($0)" } ?? "")"
-    case .phoneConfig(let hearing, let activities):
+    case .phoneConfig(let hearing, let activities, let voiceActivity):
       hearingMode = hearing
       Task { await LiveActivities.shared.setEnabled(activities) }
+      VoiceActivity.shared.setEnabled(voiceActivity)
     case .phoneNews(let items):
       Task {
         let shown = await Notifications.shared.news(items)
