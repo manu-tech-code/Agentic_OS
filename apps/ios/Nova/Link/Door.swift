@@ -69,8 +69,8 @@ final class Door {
   private var retry: DispatchWorkItem?
   private var backoff: TimeInterval = 1
   private var attempt = 0
-  /// Ways tried since the last pause: each is tried in turn at once, and only then does the phone wait.
-  private var triedInRound = 0
+  /// The ways tried since the last pause: each is tried once, straight away, before the phone waits.
+  private var tried: [NWEndpoint] = []
   /// Bumped for every new connection, so an old one's callbacks are ignored.
   private var generation = 0
   private var pinger: DispatchSourceTimer?
@@ -147,7 +147,7 @@ final class Door {
   private func start(_ target: Target) {
     stop()
     tryingSince = Date()
-    triedInRound = 0
+    tried = []
     self.target = target
     browse(for: target.mac)
     open()
@@ -176,7 +176,8 @@ final class Door {
     let ways = endpoints
     guard !ways.isEmpty else { return report(.failed("Looking for your Mac on this Wi-Fi…", unpaired: false)) }
     report(.connecting)
-    let endpoint = ways[attempt % ways.count]
+    let endpoint = ways.first { !tried.contains($0) } ?? ways[0]
+    tried.append(endpoint)
     log.info("door: trying \(String(describing: endpoint), privacy: .private) (attempt \(self.attempt))")
     let generation = self.generation
     let connection = NWConnection(to: endpoint, using: parameters(pin: target.pin))
@@ -239,11 +240,10 @@ final class Door {
     welcomed = false
     pinger?.cancel()
     attempt += 1
-    triedInRound += 1
-    let roundDone = triedInRound >= endpoints.count
+    let roundDone = endpoints.allSatisfy { tried.contains($0) }
     let wait = wasWelcomed ? 0.5 : roundDone ? backoff : 0.05
     if roundDone {
-      triedInRound = 0
+      tried = []
       backoff = min(backoff * 2, 15)
     }
     log.info("door: trying again in \(wait, format: .fixed(precision: 2)) s")
@@ -273,7 +273,6 @@ final class Door {
       if was == nil, self.found != nil, !self.welcomed, self.retry != nil {
         self.retry?.cancel()
         self.retry = nil
-        self.attempt = 0
         self.open()
       }
     }
@@ -324,7 +323,7 @@ final class Door {
       welcomed = true
       backoff = 1
       attempt = 0
-      triedInRound = 0
+      tried = []
       if case .pairing(let offer) = target {
         let paired = PairedMac(mac: offer.mac, name: name, hosts: offer.hosts, port: offer.port, pin: offer.pin, device: device)
         self.target = .paired(paired)

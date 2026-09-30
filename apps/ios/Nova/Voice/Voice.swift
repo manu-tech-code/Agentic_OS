@@ -47,6 +47,8 @@ final class Voice {
   private var nextPiece = 0
   private var lastPiece: Int?
   private var outstanding = 0
+  /// Handed to the player and not heard yet, by piece: moved to the speaker if Nova leaves the front mid-reply.
+  private var inFlight: [Int: AVAudioPCMBuffer] = [:]
   private var generation = 0
   private var cut: [String] = []
   private var resamplers: [Double: AVAudioConverter] = [:]
@@ -206,13 +208,13 @@ final class Voice {
   // MARK: Away from the front
 
   /// Nova left the front of the phone, or came back. Away, the microphone and the engine that runs it are let go -
-  /// a reply that's playing finishes first - and what Nova says next plays on the speaker; back, it's all as before.
+  /// a reply that's playing carries on from the speaker - and what Nova says next plays there too; back, it's all as before.
   func setAway(_ on: Bool) {
     guard on != away else { return }
     away = on
     if on {
       stopTalking()
-      if playing == nil { letGo() }
+      if playing == nil { letGo() } else if output === player { moveToSpeaker() }
     } else if playing == nil || output !== speakerPlayer {
       stopSpeaker() // a reply still being said away finishes there first
     }
@@ -229,6 +231,20 @@ final class Voice {
     }
     stopSpeaker()
     try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+  }
+
+  /// Nova left the front mid-reply: the rest of it goes to the speaker, so echo cancellation - and the microphone it
+  /// holds open - can stop. The sentence that was playing starts again there.
+  private func moveToSpeaker() {
+    let rest = inFlight.sorted { $0.key < $1.key }
+    generation += 1 // what the old player reports as it stops is ignored
+    player.stop()
+    outstanding = 0
+    inFlight.removeAll()
+    output = speakerPlayer
+    guard startSpeaker() else { return endPlayback(finished: true) }
+    for (seq, buffer) in rest { enqueue(buffer, seq: seq) }
+    checkFinished()
   }
 
   /// The speaker, running: Nova's voice away from the front.
@@ -291,21 +307,29 @@ final class Voice {
 
   private func schedule() {
     while let buffer = pieces.removeValue(forKey: nextPiece) {
+      let seq = nextPiece
       nextPiece += 1
       // A piece that can't be played is passed over: the reply still ends, and the Mac hears that it did.
       guard buffer.frameLength > 0, running() else { continue }
-      outstanding += 1
-      let generation = self.generation
-      output.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
-        DispatchQueue.main.async {
-          guard let self, generation == self.generation else { return }
-          self.outstanding -= 1
-          self.checkFinished()
-        }
-      }
-      if !output.isPlaying { output.play() }
+      enqueue(buffer, seq: seq)
     }
     checkFinished()
+  }
+
+  /// A piece onto the player the reply plays on; once it's been heard, the reply may be over.
+  private func enqueue(_ buffer: AVAudioPCMBuffer, seq: Int) {
+    outstanding += 1
+    inFlight[seq] = buffer
+    let generation = self.generation
+    output.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
+      DispatchQueue.main.async {
+        guard let self, generation == self.generation else { return }
+        self.inFlight[seq] = nil
+        self.outstanding -= 1
+        self.checkFinished()
+      }
+    }
+    if !output.isPlaying { output.play() }
   }
 
   /// The engine this reply plays on, running: the speaker away from the front, else the one that listens too.
@@ -324,6 +348,7 @@ final class Voice {
     let was = output
     playing = nil
     pieces.removeAll()
+    inFlight.removeAll()
     lastPiece = nil
     outstanding = 0
     output = player

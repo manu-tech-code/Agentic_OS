@@ -190,7 +190,8 @@ final class Nova {
     resting = Task { [weak self] in
       let time = BackgroundTime("Nova finishing up")
       defer { time.end() }
-      try? await Task.sleep(for: .milliseconds(800)) // what was just sent goes out first
+      // What was just sent goes out first - and an app Siri just started has time to ask its question.
+      try? await Task.sleep(for: .seconds(2))
       guard let self, !Task.isCancelled, !self.foreground, self.asking == 0, !self.voice.speaking, self.unsent.isEmpty else { return }
       self.door?.pause()
     }
@@ -379,6 +380,9 @@ final class Nova {
       return Answer(heard: question, text: unreachable, failed: true)
     }
     log.notice("ask: connected after \(Date().timeIntervalSince(asked), format: .fixed(precision: 2)) s")
+    // One question at a time: Nova's answers come back in order, with nothing to tell them apart.
+    let turn = Date().addingTimeInterval(Self.answerSeconds)
+    while self.waiting != nil, Date() < turn { try? await Task.sleep(for: .milliseconds(100)) }
     let waiting = Waiting()
     self.waiting = waiting
     defer { if self.waiting === waiting { self.waiting = nil } }

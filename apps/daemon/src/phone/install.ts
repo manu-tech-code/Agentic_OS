@@ -65,7 +65,12 @@ async function iPhone(): Promise<Device> {
 
 async function simulator() {
   console.log('Building Nova for the iOS Simulator…');
-  await run('xcodebuild', ['-project', join(IOS, 'Nova.xcodeproj'), '-scheme', 'Nova', '-configuration', 'Debug', '-destination', 'generic/platform=iOS Simulator', '-derivedDataPath', BUILD, 'CODE_SIGNING_ALLOWED=NO', 'build'], true);
+  // Signed ad hoc: an unsigned app has no Keychain in the Simulator, so its pairing wouldn't outlast a relaunch.
+  await run(
+    'xcodebuild',
+    ['-project', join(IOS, 'Nova.xcodeproj'), '-scheme', 'Nova', '-configuration', 'Debug', '-destination', 'generic/platform=iOS Simulator', '-derivedDataPath', BUILD, 'CODE_SIGN_IDENTITY=-', 'CODE_SIGN_STYLE=Manual', 'DEVELOPMENT_TEAM=', 'build'],
+    true,
+  );
   const app = join(BUILD, 'Build/Products/Debug-iphonesimulator/Nova.app');
   const booted = await run('xcrun', ['simctl', 'list', 'devices', 'booted'], true);
   if (!/\(Booted\)/.test(booted)) {
@@ -73,7 +78,8 @@ async function simulator() {
     console.log(`Starting the ${name} simulator…`);
     await run('xcrun', ['simctl', 'boot', name], true);
   }
-  await run('open', ['-a', 'Simulator'], true);
+  // Its window, where there's one to open: a Mac without the Simulator app still runs the phone, just unseen.
+  await run('open', ['-a', 'Simulator'], true).catch(() => console.log('(No Simulator app to show it in: it runs without a window.)'));
   await run('xcrun', ['simctl', 'install', 'booted', app], true);
   await run('xcrun', ['simctl', 'launch', 'booted', BUNDLE], true);
   console.log('Nova is open in the Simulator. To pair it, press Copy the link in Settings → iPhone, then:\n  xcrun simctl openurl booted "<the link>"');
