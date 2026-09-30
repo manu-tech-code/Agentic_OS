@@ -56,7 +56,19 @@ private struct CardRow: View {
             Text(String(format: "%d:%02d", left / 60, left % 60)).font(.title2.monospacedDigit().weight(.bold))
           }
         }
-        if card.kind == "confirm" {
+        if card.kind == "confirm", card.tap {
+          HStack(spacing: 10) {
+            Button("No") { Task { await nova.tapAnswer(card, yes: false) } }
+              .buttonStyle(.bordered)
+            Button {
+              Task { await nova.tapAnswer(card, yes: true) }
+            } label: {
+              Label("Allow with Face ID", systemImage: "faceid")
+            }
+            .buttonStyle(.borderedProminent)
+          }
+          .padding(.top, 4)
+        } else if card.kind == "confirm" {
           HStack(spacing: 10) {
             Button("No") { nova.answer(false) }
               .buttonStyle(.bordered)

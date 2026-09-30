@@ -79,6 +79,11 @@ export interface Card {
   icon?: string;
   /** The agent working on a task card. */
   agent?: string;
+  /**
+   * A question only a tap answers - Allow on the Mac's screen, or Face ID on a paired iPhone - never a spoken yes:
+   * what moves money, or can't be taken back and sweeps up a lot (cancelling every reminder).
+   */
+  tap?: boolean;
 }
 
 export interface ActivityItem {
@@ -289,6 +294,8 @@ export type ClientEvent =
   | { type: 'activity-search'; query: string; days?: number }
   /** Stop everything: agents, questions, speech, routines - and mute the microphone. */
   | { type: 'stop-all' }
+  /** A tap on a question's card: on the Mac's screen, or on a paired iPhone once Face ID says it's the owner. */
+  | { type: 'tap-answer'; id: string; yes: boolean }
   /** From an iPhone: Nova came to the front there, or left it - so news can go where the user is. */
   | { type: 'phone-state'; active: boolean }
   /** From Settings: show a pairing QR code for an iPhone (for a few minutes), or stop showing it. */

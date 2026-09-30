@@ -1,4 +1,5 @@
 import Foundation
+import LocalAuthentication
 import Observation
 
 /// Nova on this iPhone: the connection to the Mac, what Nova is doing and saying, and what the user does.
@@ -246,6 +247,22 @@ final class Nova {
   /// A yes or no to the question on a card - as the window's buttons send it.
   func answer(_ yes: Bool) {
     type(yes ? "yes" : "no")
+  }
+
+  /// A question only a tap answers: Allow needs Face ID first (the phone's owner, not whoever holds it - the passcode
+  /// if Face ID can't tell), then goes to the Mac as the tap. No needs nothing.
+  func tapAnswer(_ card: Card, yes: Bool) async {
+    if yes {
+      let owner = LAContext()
+      owner.localizedFallbackTitle = "Use Passcode"
+      do {
+        guard try await owner.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Allow: \(card.title)") else { return }
+      } catch {
+        notice = "Not allowed: Face ID didn't confirm it's you."
+        return
+      }
+    }
+    door?.send(.tapAnswer(id: card.id, yes: yes))
   }
 
   /// Stop everything: Nova stops speaking and thinking, agents' tasks stop, and its questions are withdrawn.
