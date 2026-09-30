@@ -220,7 +220,7 @@ const send = (ws: WebSocket, event: ServerEvent) => ws.readyState === ws.OPEN &&
 /** Paired iPhones (Settings → iPhone): set up once Nova is. */
 let phones: Phones | undefined;
 /** What a phone is sent: what it shows and plays - never Settings, the record, or the Mac app's business. */
-const PHONE_EVENTS: ReadonlySet<ServerEvent['type']> = new Set(['hello', 'hearing', 'transcript', 'barge-in', 'phase', 'say', 'audio', 'card', 'dismiss', 'tasks', 'computer', 'settings-result', 'phone-config', 'phone-reminders', 'error']);
+const PHONE_EVENTS: ReadonlySet<ServerEvent['type']> = new Set(['hello', 'hearing', 'transcript', 'barge-in', 'phase', 'say', 'audio', 'card', 'dismiss', 'tasks', 'computer', 'settings-result', 'phone-config', 'phone-reminders', 'phone-news', 'error']);
 const broadcast = (event: ServerEvent) => {
   for (const ws of clients) if (!phones?.isPhone(ws) || PHONE_EVENTS.has(event.type)) send(ws, event);
 };
@@ -803,7 +803,7 @@ wss.on('connection', (ws, req) => {
 });
 
 /** What a phone may do: talk and type to Nova, stop it, and deal with agents' tasks - not Settings, memories or the Mac app's part. */
-const PHONE_MAY: ReadonlySet<ClientEvent['type']> = new Set(['utterance', 'talk-start', 'talk-end', 'audio-stop', 'speech-finished', 'cancel', 'stop-all', 'task-cancel', 'task-retry', 'phone-state', 'notification-action', 'tap-answer']);
+const PHONE_MAY: ReadonlySet<ClientEvent['type']> = new Set(['utterance', 'talk-start', 'talk-end', 'audio-stop', 'speech-finished', 'cancel', 'stop-all', 'task-cancel', 'task-retry', 'phone-state', 'notification-action', 'tap-answer', 'phone-refresh', 'phone-news-shown']);
 
 /**
  * One of Nova's clients connected: a window, Nova.app (`native`: a program on this Mac, not a page) or a
@@ -959,6 +959,12 @@ function attach(ws: WebSocket, peer: { native: boolean; phone?: PairedDevice }) 
     } else if (event.type === 'phone-state') {
       phones!.setActive(ws, event.active);
       if (event.active) initiative!.onPhoneActive();
+    } else if (event.type === 'phone-refresh') {
+      // iOS woke Nova on the phone by itself: what's coming up went to it on connecting, as always; now what was held
+      // for the user while they were away, for its notifications.
+      if (phone) send(ws, { type: 'phone-news', items: initiative!.phoneNews() });
+    } else if (event.type === 'phone-news-shown') {
+      if (phone) initiative!.shownOnPhone((Array.isArray(event.ids) ? event.ids : []).filter((id): id is string => typeof id === 'string').slice(0, 100));
     } else if (event.type === 'phone-pair') {
       try {
         if (event.action === 'start') phones!.startPairing();

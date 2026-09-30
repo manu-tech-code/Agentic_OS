@@ -1,3 +1,4 @@
+import BackgroundTasks
 import Foundation
 import LocalAuthentication
 import Observation
@@ -81,6 +82,8 @@ final class Nova {
   private var listening: Task<Void, Never>?
   /// Letting the connection go, out of the front with nothing to do.
   private var resting: Task<Void, Never>?
+  /// A check-in waiting for what the Mac held for you.
+  private var checkingIn = false
   /// What the widgets show, as last written for them.
   private var widgetState = WidgetState.load() ?? WidgetState()
   private var widgetReload: Task<Void, Never>?
@@ -187,6 +190,7 @@ final class Nova {
     let wasTalking = talking
     voice.setAway(!on)
     if link == .connected { door?.send(.phoneState(active: on)) }
+    if !on { scheduleCheckIn() }
     if on {
       resting?.cancel()
     } else if wasTalking {
@@ -378,6 +382,43 @@ final class Nova {
     phoneHearingReady = await PhoneHearing.ready(language)
   }
 
+  // MARK: - Checking in by itself
+
+  /// What iOS runs when it lets Nova check in (Background App Refresh).
+  static let checkInTask = "dev.nova.phone.check-in"
+
+  /// Out of the front: ask iOS to wake Nova in a while to check in with the Mac. When is up to iOS - it goes by how
+  /// the phone is used, and may be hours - which is all a free Apple account, with no push, allows.
+  func scheduleCheckIn() {
+    let request = BGAppRefreshTaskRequest(identifier: Self.checkInTask)
+    request.earliestBeginDate = Date().addingTimeInterval(20 * 60)
+    do {
+      try BGTaskScheduler.shared.submit(request)
+    } catch {
+      log.notice("check-in: iOS wouldn't take it: \(error.localizedDescription, privacy: .public)")
+    }
+  }
+
+  /// iOS woke Nova in the background: catch up with the Mac - the reminders to ring for and the widgets (sent on
+  /// connecting, as always), and the news it held while you were away, shown as notifications - then rest again.
+  func checkIn() async {
+    scheduleCheckIn()
+    guard mac != nil, !foreground else { return }
+    asking += 1
+    let started = Date()
+    defer {
+      asking -= 1
+      restLater()
+    }
+    guard await reachMac(within: 10) else { return log.notice("check-in: the Mac couldn't be reached") }
+    checkingIn = true
+    door?.send(.phoneRefresh)
+    let until = Date().addingTimeInterval(8)
+    while checkingIn, link == .connected, Date() < until { try? await Task.sleep(for: .milliseconds(100)) }
+    try? await Task.sleep(for: .seconds(1)) // what's coming up, which the Mac sends on connecting, is in by now
+    log.notice("check-in: done in \(Date().timeIntervalSince(started), format: .fixed(precision: 2)) s")
+  }
+
   // MARK: - Siri, Shortcuts and the Action button
 
   /// A question from Siri, a shortcut or Spotlight, said to Nova as if into this phone: what Nova answers. Its voice
@@ -551,6 +592,13 @@ final class Nova {
       computer = !active ? nil : paused ? "Waiting while you use the Mac" : "\(caller ?? name) is using the computer\(app.map { " · \($0)" } ?? "")"
     case .phoneConfig(let hearing):
       hearingMode = hearing
+    case .phoneNews(let items):
+      Task {
+        let shown = await Notifications.shared.news(items)
+        if !shown.isEmpty { door?.send(.phoneNewsShown(shown)) }
+        log.notice("check-in: \(items.count) held, \(shown.count) shown")
+        checkingIn = false
+      }
     case .phoneReminders(let items):
       Task { await Notifications.shared.replace(items) }
       updateWidgets { $0.reminders = items.map { .init(what: $0.what, due: $0.due, timer: $0.timer) } }

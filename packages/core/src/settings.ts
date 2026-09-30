@@ -700,7 +700,7 @@ export const FIELDS: SettingField[] = [
     key: 'phone.news',
     section: 'phone',
     label: 'News on your iPhone',
-    help: "Reminders coming up, agents finishing, a question for you: while you're away from the Mac (it's locked, or untouched a while) and Nova is open on your iPhone, Nova says them there instead of holding them - and what it held comes up when you open Nova on the phone. Always: whenever Nova is open on the phone, even at the Mac. Never: only the Mac tells you, when you're back.",
+    help: "Reminders coming up, agents finishing, a question for you: while you're away from the Mac (it's locked, or untouched a while) and Nova is open on your iPhone, Nova says them there instead of holding them - and what it held comes up when you open Nova on the phone, or as notifications when the phone checks in by itself (iOS decides when: Background App Refresh). Always: whenever Nova is open on the phone, even at the Mac. Never: only the Mac tells you, when you're back.",
     type: 'select',
     default: 'away',
     options: [

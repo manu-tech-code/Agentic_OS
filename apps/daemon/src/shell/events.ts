@@ -76,6 +76,8 @@ const SHAPES: { [T in ClientEvent['type']]: Shape } = {
   'activity-search': { query: 'string', 'days?': 'number' },
   'stop-all': {},
   'phone-state': { active: 'boolean' },
+  'phone-refresh': {},
+  'phone-news-shown': { ids: 'any' },
   'tap-answer': { id: 'string', yes: 'boolean' },
   'phone-pair': { action: ['start', 'stop'] },
   'phone-forget': { id: 'string' },
