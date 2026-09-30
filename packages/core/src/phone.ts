@@ -91,6 +91,24 @@ export interface PhoneReminder {
   timer: boolean;
 }
 
+/**
+ * News Nova held for the user while they were away from the Mac - a reminder that came up, an agent finishing - for
+ * the iPhone to show as notifications when iOS lets it check in by itself (Background App Refresh: a free Apple
+ * account has no push). Each stays held at the Mac until the phone says it showed it.
+ */
+export interface PhoneNews {
+  id: string;
+  kind: 'timer' | 'reminder' | 'task' | 'briefing';
+  /** Short: the notification's title. */
+  title: string;
+  /** What Nova would have said. */
+  text: string;
+  /** When it came up (epoch ms). */
+  at: number;
+  /** The reminder or task it's about. */
+  ref?: string;
+}
+
 /** Nova on the iPhone, for Settings. */
 export interface PhoneStatus {
   /** The door is open for paired phones: its port, and the addresses a phone can reach it on. */

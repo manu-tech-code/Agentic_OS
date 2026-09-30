@@ -1,4 +1,4 @@
-import { onDay, type News, type NewsService } from '@nova/core';
+import { onDay, type News, type NewsService, type PhoneNews } from '@nova/core';
 
 /** Whether it's a good moment to speak up. */
 export interface Moment {
@@ -15,12 +15,16 @@ export interface Moment {
  * shows at once (the orb, a notification). By the user's choice it's also said: when they're free
  * (not on a call, not away - then it waits, and "while you were away…" tells them when they're
  * back), never, or always at once. Away from the Mac with Nova open on their iPhone, it's said there
- * (Settings → iPhone → News on your iPhone) - and what was held comes up there when they open it.
+ * (Settings → iPhone → News on your iPhone) - and what was held comes up there when they open it, or as
+ * notifications when the phone checks in by itself.
  */
 export class Deliverer implements NewsService {
-  private held: { at: number; news: News }[] = [];
+  /** Held back, and whether the user was away from the Mac then (only that goes to the phone). */
+  private held: { id: string; at: number; news: News; away: boolean }[] = [];
   private waiting: News[] = [];
   private readonly now: () => number;
+  /** Numbers held news, with the time, for ids a phone can key its notifications by. */
+  private serial = 0;
 
   constructor(
     private readonly opts: {
@@ -46,7 +50,7 @@ export class Deliverer implements NewsService {
       return this.opts.phone!.speak(news.text);
     }
     if (policy === 'always') return this.opts.speak(news.text);
-    if (policy === 'show' || moment.away || moment.call) return void this.held.push({ at: this.now(), news });
+    if (policy === 'show' || moment.away || moment.call) return this.hold(news, moment.away);
     if (moment.busy) return void this.waiting.push(news);
     this.opts.speak(news.text);
   }
@@ -64,7 +68,7 @@ export class Deliverer implements NewsService {
     const news = this.waiting.splice(0);
     if (this.onPhone(moment)) return this.opts.phone!.speak(news.map((n) => n.text).join(' '));
     if (moment.away || moment.call || this.opts.policy() === 'show') {
-      for (const n of news) this.held.push({ at: this.now(), news: n });
+      for (const n of news) this.hold(n, moment.away);
       return;
     }
     this.opts.speak(news.map((n) => n.text).join(' '));
@@ -84,6 +88,27 @@ export class Deliverer implements NewsService {
     const moment = this.opts.moment();
     if (moment.busy || !this.onPhone(moment)) return;
     this.opts.phone!.speak(this.whileAway(this.held.splice(0)));
+  }
+
+  private hold(news: News, away: boolean) {
+    // Unique across restarts too: the phone keys its notifications by it.
+    this.held.push({ id: `${this.now().toString(36)}-${++this.serial}`, at: this.now(), news, away });
+  }
+
+  /**
+   * A phone checking in by itself - iOS woke Nova there: what was held while the user was away from the Mac, for it
+   * to show as notifications. It stays held until the phone says it showed it (`shownOnPhone`).
+   */
+  forPhone(): PhoneNews[] {
+    return this.held
+      .filter((h) => h.away)
+      .map(({ id, at, news }) => ({ id, kind: news.kind, title: news.title, text: news.text, at, ...(news.ref ? { ref: news.ref } : {}) }));
+  }
+
+  /** The phone showed these as notifications: they're not said again when the user is back at the Mac. */
+  shownOnPhone(ids: readonly string[]) {
+    const shown = new Set(ids);
+    this.held = this.held.filter((h) => !shown.has(h.id));
   }
 
   private whileAway(items: { at: number; news: News }[]) {

@@ -20,6 +20,10 @@ struct NovaApp: App {
       if phase == .active { nova.resume() }
       nova.setForeground(phase != .background)
     }
+    // iOS lets Nova check in with the Mac now and then, with the app closed.
+    .backgroundTask(.appRefresh(Nova.checkInTask)) {
+      await Nova.shared.checkIn()
+    }
   }
 }
 

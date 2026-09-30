@@ -4,7 +4,7 @@
  */
 import type { HearingStatus, SettingsSnapshot, SettingValue, ShellContext, ShellStatus } from './settings.ts';
 import type { TaskRecord } from './skills/types.ts';
-import type { PhoneHearing, PhoneReminder } from './phone.ts';
+import type { PhoneHearing, PhoneNews, PhoneReminder } from './phone.ts';
 
 export type Phase = 'idle' | 'listening' | 'thinking' | 'acting' | 'speaking';
 
@@ -221,6 +221,8 @@ export type ServerEvent =
   | { type: 'phone-config'; hearing: PhoneHearing }
   /** To an iPhone: the reminders and timers coming up, for it to ring for itself (all of them, each time: it replaces what it had). */
   | { type: 'phone-reminders'; items: PhoneReminder[] }
+  /** To a phone checking in by itself: what was held for the user while they were away, to show as notifications. */
+  | { type: 'phone-news'; items: PhoneNews[] }
   | { type: 'error'; message: string };
 
 /**
@@ -298,6 +300,10 @@ export type ClientEvent =
   | { type: 'tap-answer'; id: string; yes: boolean }
   /** From an iPhone: Nova came to the front there, or left it - so news can go where the user is. */
   | { type: 'phone-state'; active: boolean }
+  /** A phone checking in by itself (iOS woke Nova there): what was held for the user, if anything. */
+  | { type: 'phone-refresh' }
+  /** The phone showed these as notifications: they're not said again at the Mac. */
+  | { type: 'phone-news-shown'; ids: string[] }
   /** From Settings: show a pairing QR code for an iPhone (for a few minutes), or stop showing it. */
   | { type: 'phone-pair'; action: 'start' | 'stop' }
   /** From Settings: this iPhone can no longer connect. */

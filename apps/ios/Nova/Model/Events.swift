@@ -20,6 +20,8 @@ enum Incoming {
   case computer(active: Bool, caller: String?, app: String?, paused: Bool)
   case phoneConfig(hearing: String)
   case phoneReminders([PhoneReminder])
+  /// What the Mac held for you while you were away, to show as notifications (the phone checked in by itself).
+  case phoneNews([PhoneNews])
   case result(ok: Bool, message: String)
   case error(String)
 
@@ -69,6 +71,8 @@ enum Incoming {
       return .phoneConfig(hearing: m["hearing"] as? String ?? "auto")
     case "phone-reminders":
       return .phoneReminders((m["items"] as? [[String: Any]] ?? []).compactMap(PhoneReminder.init))
+    case "phone-news":
+      return .phoneNews((m["items"] as? [[String: Any]] ?? []).compactMap(PhoneNews.init))
     case "settings-result":
       return .result(ok: m["ok"] as? Bool ?? false, message: m["message"] as? String ?? "")
     case "error":
@@ -170,6 +174,10 @@ enum Outgoing {
   case notificationAction(ref: String, action: String)
   /// Allow or No on a question only a tap answers - sent after Face ID says it's the phone's owner.
   case tapAnswer(id: String, yes: Bool)
+  /// iOS woke Nova in the background: anything the Mac held for you?
+  case phoneRefresh
+  /// These were shown as notifications: the Mac needn't say them again.
+  case phoneNewsShown([String])
   /// Said into the phone and recognized here (`phone`), or typed (`keyboard`).
   case utterance(String, source: String)
   case speechFinished
@@ -186,6 +194,8 @@ enum Outgoing {
     case .phoneState(let active): return ["type": "phone-state", "active": active]
     case .notificationAction(let ref, let action): return ["type": "notification-action", "ref": ref, "action": action]
     case .tapAnswer(let id, let yes): return ["type": "tap-answer", "id": id, "yes": yes]
+    case .phoneRefresh: return ["type": "phone-refresh"]
+    case .phoneNewsShown(let ids): return ["type": "phone-news-shown", "ids": ids]
     case .utterance(let text, let source): return ["type": "utterance", "text": text, "source": source]
     case .speechFinished: return ["type": "speech-finished"]
     case .cancel: return ["type": "cancel"]

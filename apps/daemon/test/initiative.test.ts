@@ -305,6 +305,34 @@ describe('speaking up', () => {
       expect(always.mac).toEqual([]);
     });
 
+    it('gives a phone checking in by itself what was held while the user was away - held at the Mac until it says it showed it', () => {
+      const { d, mac, set, use } = withPhone();
+      use(false); // Nova closed on the phone
+      set({ away: true });
+      d.deliver({ kind: 'task', title: 'Claude finished', text: 'Claude finished in Agentic_OS.', ref: 't1' });
+      d.deliver(news("It's time to call your mum."));
+      const items = d.forPhone();
+      expect(items.map((n) => [n.kind, n.title, n.text, n.ref])).toEqual([
+        ['task', 'Claude finished', 'Claude finished in Agentic_OS.', 't1'],
+        ['reminder', "It's time to call your mum.", "It's time to call your mum.", undefined],
+      ]);
+      expect(new Set(items.map((n) => n.id)).size).toBe(2);
+      d.shownOnPhone([items[0]!.id]); // the phone showed one; the other didn't get through
+      set({ away: false });
+      d.back();
+      expect(mac).toEqual(["While you were away - it's time to call your mum."]);
+      expect(d.forPhone()).toEqual([]);
+    });
+
+    it("doesn't give the phone what was held while the user was at the Mac", () => {
+      const shy = withPhone('away', 'show');
+      shy.d.deliver(news('A reminder about the dentist.')); // shown on the Mac's screen
+      shy.set({ call: true });
+      shy.d.deliver(news('Your timer is done.')); // at the Mac, on a call
+      expect(shy.d.forPhone()).toEqual([]);
+      expect(shy.d.missed()).toHaveLength(2);
+    });
+
     it('waits for Nova to finish, then says it on the phone', () => {
       const { d, phone, set } = withPhone();
       set({ away: true, busy: true });

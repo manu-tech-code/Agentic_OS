@@ -2,11 +2,17 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- What Xcode can't write from build settings (the rest is generated): Bonjour, nova:// pairing links, and
-	     finishing a reply out of the front - answering Siri, or after the phone was locked (never the microphone). -->
+	<!-- What Xcode can't write from build settings (the rest is generated): Bonjour, nova:// pairing links,
+	     finishing a reply out of the front - answering Siri, or after the phone was locked (never the microphone) -
+	     and checking in with the Mac when iOS lets it (Background App Refresh: a free Apple account has no push). -->
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
+		<string>fetch</string>
+	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>dev.nova.phone.check-in</string>
 	</array>
 	<key>NSBonjourServices</key>
 	<array>

@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { dueText, nextTime, onDay, type News, type Phase, type PhoneReminder, type Reminder, type Routine, type ServerEvent, type SettingsSnapshot, type ShellContext, type TaskRecord } from '@nova/core';
+import { dueText, nextTime, onDay, type News, type Phase, type PhoneNews, type PhoneReminder, type Reminder, type Routine, type ServerEvent, type SettingsSnapshot, type ShellContext, type TaskRecord } from '@nova/core';
 import type { Config } from '../config.ts';
 import type { Presence } from '../shell/presence.ts';
 import { ShellRpc } from '../shell/rpc.ts';
@@ -185,6 +185,16 @@ export class Initiative {
   /** Nova came to the front on the user's iPhone: what waited for them, said there if they're away from the Mac. */
   onPhoneActive() {
     this.deliverer.phoneBack();
+  }
+
+  /** The user's iPhone checked in by itself: what was held while they were away, for its notifications - unless Settings says never. */
+  phoneNews(): PhoneNews[] {
+    return this.opts.config().phone.news === 'never' ? [] : this.deliverer.forPhone();
+  }
+
+  /** The phone showed these: the Mac won't say them again. */
+  shownOnPhone(ids: readonly string[]) {
+    this.deliverer.shownOnPhone(ids);
   }
 
   onAppConnected() {
