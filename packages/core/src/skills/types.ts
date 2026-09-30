@@ -63,6 +63,8 @@ export interface SkillContext {
   prefs?: PrefsService;
   /** A tool call's own arguments (computer_click's element, x and y), for skills that take more than a request. */
   args?: Record<string, unknown>;
+  /** Who answers open questions, if anyone - a skill's handoff goes to it. */
+  brain?: { name: string; usesComputer: boolean };
   /** Who is calling it as a tool - a brain or agent by name ("Claude"); none when the user asked by voice. */
   caller?: string;
   /** What the skill's `prepare` settled when the request came in (the action "undo" means, the file "the invoice" is): the thing a confirmation named, kept while the user is asked. */

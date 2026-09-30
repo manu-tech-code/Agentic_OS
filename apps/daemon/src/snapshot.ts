@@ -6,6 +6,7 @@ import type { CustomAgentSpec } from './agents/presets.ts';
 import { DEFAULT_PROJECTS_FOLDER, ENV_FILE, settingsFile, settingsInEnv, type Config, type Env, type Settings } from './config.ts';
 import { modelResolver } from './models.ts';
 import type { ReflexRuntime } from './reflex/runtime.ts';
+import { appleBinary } from './apple/helper.ts';
 import { helperBinary } from './hearing/build.ts';
 import { eyesApp } from './screen/eyes.ts';
 import { APP } from './shell/install.ts';
@@ -74,6 +75,7 @@ async function signing(): Promise<SettingsSnapshot['signing']> {
     { name: 'Nova.app', path: APP },
     { name: 'Nova Eyes', path: eyesApp() },
     { name: 'the hearing helper', path: helperBinary },
+    { name: 'the Apple model helper', path: appleBinary },
   ]);
   signingCache = { at: Date.now(), value };
   return value;
@@ -85,8 +87,9 @@ export interface TrustSnapshotInput {
   appInstalled: boolean;
   /** Paired agents, default first. */
   paired: { name: string; label: string }[];
-  /** Who answers open questions now, if anyone. */
+  /** Who answers open questions now, if anyone - by name ("Claude"), and by what Settings calls it ("claude"). */
   brain: string | null;
+  brainId?: string | null;
   trust: SettingsSnapshot['trust'];
 }
 
@@ -108,6 +111,7 @@ export async function buildSnapshot(
   initiative: SettingsSnapshot['initiative'],
   trust: TrustSnapshotInput,
   phone: SettingsSnapshot['phone'],
+  apple: SettingsSnapshot['apple'],
   fileError?: string,
 ): Promise<SettingsSnapshot> {
   const [agents, projects, servers] = await Promise.all([
@@ -152,6 +156,7 @@ export async function buildSnapshot(
     // The paired ones first (the default first), then the rest installed here.
     agents: [...trust.paired.map((a) => ({ ...a, paired: true })), ...installed.filter((a) => !pairedNames.has(a.name)).map((a) => ({ name: a.name, label: a.label, paired: false }))],
     brain: Boolean(trust.brain),
+    brainId: trust.brainId,
     integrations,
     hearing: hearing.status,
     voiceInstalled: voice.installed,
@@ -184,6 +189,7 @@ export async function buildSnapshot(
     privacy,
     trust: trust.trust,
     agents,
+    apple: { ...apple, answering: trust.brainId === 'apple' },
     servers,
     projects: projectList,
     phone,

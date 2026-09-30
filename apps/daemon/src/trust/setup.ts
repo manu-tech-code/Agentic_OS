@@ -85,7 +85,7 @@ export function setupSteps(input: SetupInput): SetupStep[] {
     id: 'answers',
     label: 'Who answers open questions',
     done: Boolean(input.brain),
-    detail: input.brain ? `${input.brain}, with Nova's tools.` : config.brainModel === 'off' ? 'Open questions are off.' : 'No one yet: pair an agent, or choose a local model.',
+    detail: input.brain ? `${input.brain}, with Nova's tools.` : config.brainModel === 'off' ? 'Open questions are off.' : 'No one yet: pair an agent, or choose Apple Intelligence or a local model.',
     fix: { section: 'answers' },
   });
 

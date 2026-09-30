@@ -19,8 +19,8 @@ export { EvaluationDecisionEngine, createDecisionEngine, type EngineConfig, type
 export { JEV_DEFAULT_MODEL, JevError } from './decision/jev.ts';
 export { JEV_DOUBT_FLOOR, handDoubtToBrain, restatedYes } from './decision/handoff.ts';
 export { readReply, replySays, saysNo, settleReplies, type Reply } from './decision/replies.ts';
-export { isCompound, NovaBrain, type NovaOptions, type NovaSettings, type Speaker } from './brain/nova.ts';
-export { LlmReasoningBrain, voiceSystemPrompt, withTime, type ReasoningBrain, type Turn } from './brain/reasoning.ts';
+export { isCompound, NovaBrain, partsOf, type NovaOptions, type NovaSettings, type Speaker } from './brain/nova.ts';
+export { askingRule, LlmReasoningBrain, voiceSystemPrompt, withTime, type QuestionHints, type ReasoningBrain, type Turn } from './brain/reasoning.ts';
 export { outputText, skillTool, type IntegrationTool, type IntegrationTools, type ToolHost, type ToolOutput, type ToolSpec } from './skills/tools.ts';
 export { factFrom, memorySkills, toYou } from './skills/memory.ts';
 export { screenSkills } from './skills/screen.ts';

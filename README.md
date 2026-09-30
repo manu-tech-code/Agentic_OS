@@ -7,7 +7,7 @@ A voice-first, model-agnostic agentic OS layer. You talk; it acts.
 </p>
 
 - **System 1 - fast decisions.** Every utterance gets one typed decision call (intent, target app, "was that meant for me?") through a swappable `DecisionEngine`. Default: **Reflex**, Nova's own model, on your Mac in about a millisecond. Or **Jev**, TypeSafe's System One model, called directly with your own key. Also: a model on your own server, or an offline keyword matcher.
-- **System 2 - reasoning.** Open questions go to any model you plug in (Claude, GPT, Gemini, local).
+- **System 2 - reasoning.** Open questions go to any model you plug in (Claude, GPT, Gemini, Apple Intelligence on your Mac, local).
 - **Paired agents.** Claude Code, Codex, OpenCode, Gemini CLI or any agent CLI answer questions and do project
   tasks in the background - narrated live, with risky steps asked out loud.
 - **Glass UI.** macOS-inspired shell: the Orb, Live Pill, frosted cards, magnifying dock, Decision Inspector.
@@ -103,7 +103,7 @@ beside its name - point at it, or click it to keep it open:
 - **Voice** - Kokoro's voices (Nova's voice, inside Nova.app), wake words, conversation mode, how long it keeps listening after replies, listening on open and speaking rate.
 - **Hearing** - how Nova turns speech into text: Apple's on-device recognizer, Parakeet, or the browser's own; the language; how long it waits when you pause; Smart Turn; talking over Nova.
 - **Appearance** - the Orb: a sphere of thousands of moving dots drawn by the GPU (or the classic glass orb), its colours and how much it moves. It breathes when idle, ripples with your voice, swirls while thinking and moves with its voice as it speaks. Both orbs - the one in the window and the floating one - resize by hand: pinch one, hold ⌥ and scroll over it, or drag the handle that shows when you point at it (or its arrow keys, in the window); Settings → Appearance has a slider for each. The text - what you said and the replies, in the window and the floating orb - has its own size: the slider there, ⌘+ / ⌘− / ⌘0 in the window as in a browser, or by voice ("make the text bigger", "text size 150 percent", "back to normal" - and "undo" puts it back). A reply's cards close by themselves after a few seconds (8, or as set there - pointing at one holds it); questions, running timers and agents' tasks stay until they're done. At its largest, the window's Orb sits in the middle of the window.
-- **Decisions / Answers** - the decision engine, and who answers open questions: automatically your default paired agent, or any agent, local model or cloud model.
+- **Decisions / Answers** - the decision engine, and who answers open questions: automatically your default paired agent (Apple Intelligence when none is paired), or any agent, Apple Intelligence's model on this Mac, or a local model.
 - **Integrations** - services the brains can use through Nova (Notion, Linear, GitHub, ...): sign-in, and when Nova asks you first.
 - **Local models** - LM Studio, Ollama, oMLX, mlx_lm, llama.cpp and any server you add: whether it's running, which models it offers, keys.
 - **Agents** - which are paired, the default, and each one's model, extra arguments and CLI path, plus your own agent CLIs.
@@ -632,6 +632,34 @@ and can still use that skill - rather than Nova acting on a guess, as Reflex doe
 the time limit (1.5 s by default), Reflex decides on the Mac instead, and it keeps learning from what you confirm. Automatic never picks Jev: it only decides when you choose it. `REFLEX_JEV=1 npm run reflex:eval` measures Jev
 on the same phrasings as Reflex (a billed call per phrasing).
 
+## Using Apple Intelligence (on this Mac)
+
+Apple's own model comes with macOS 26 and later, on Macs with Apple silicon. Nova can answer open questions with it:
+nothing you ask leaves your Mac, there's no account or key, and it costs nothing.
+
+1. Turn on Apple Intelligence in System Settings → Apple Intelligence & Siri (macOS downloads its model the first time).
+2. Settings → Answers → **Answer with it**, or type `apple` in *Who answers open questions*. With no agent paired,
+   automatic picks it by itself.
+3. The menu bar shows `System 2: Apple Intelligence`.
+
+The first time, Nova builds a small helper for it on your Mac (`apps/daemon/native/apple-model`, on Apple's Foundation
+Models framework; `npm run apple:build` builds it by hand) and signs it like its other helpers. Answers stream as they're
+written, so Nova starts speaking in about a second.
+
+It's a small model with a small context (8K tokens on macOS 27), and Nova plays to that:
+- Each question takes only the few of Nova's tools it needs: the skills Reflex weighed for it (each part on its own when
+  you ask for several things), looking at the screen when you mean something on it, and the services you name. Its
+  instructions speak only of those tools.
+- Sums are worked out by Nova's calculator, in code, not in the model's head.
+- Asked to do something, it has to go through a tool before it answers (macOS 27), so it can't just say it's done.
+- It reads the screen when you ask about it, as text and as a picture.
+- It doesn't use the computer for you (seeing the screen and clicking a step at a time takes a bigger brain, like
+  Claude), and coding tasks still go to your agents.
+
+For coding, long documents and using the computer, an agent like Claude does more. For quick questions and everyday
+requests, Apple Intelligence answers on the Mac. Apple's bigger model on Private Cloud Compute needs an entitlement Apple
+grants to paid developer accounts, so Nova uses the on-device one.
+
 ## Using a local model (LM Studio, Ollama, oMLX, mlx_lm, llama.cpp)
 
 1. Load a model in your local server and start it (LM Studio: Developer tab or `lms server start`).
@@ -655,8 +683,8 @@ logins, and it strips API-key variables so they bill your plan. Then say:
   commands there"), the agent works in the background with a live card in the UI, and Nova announces the result.
   Claude's shell commands and web access are asked out loud: *"Claude wants to run npm test in Agentic_OS. Allow it?"*
   Codex works inside its workspace sandbox instead. "Stop the agent" cancels.
-- Open questions ("who are you?", "what should I cook tonight?") go to your default paired agent automatically, or whoever
-  you pick in Settings → Answers. Nova speaks the answer sentence by sentence as it's written. Claude stays running
+- Open questions ("who are you?", "what should I cook tonight?") go to your default paired agent automatically (with none
+  paired, Apple Intelligence, when your Mac has it), or whoever you pick in Settings → Answers. Nova speaks the answer sentence by sentence as it's written. Claude stays running
   between questions (no start-up wait, and it remembers the conversation); agents that can't still answer, just from scratch.
 - Whoever answers can **act through Nova's tools** - open and quit apps, set timers, tell the time, open settings, hand coding
   tasks to agents - over MCP, which Claude Code, Codex, OpenCode and your own agents (`"mcp": ["--mcp-config", "{mcpConfig}"]`)

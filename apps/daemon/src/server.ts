@@ -12,6 +12,7 @@ import {
   setPath,
   settingProblem,
   type ActivityItem,
+  type AppleModelStatus,
   type ClientEvent,
   type NovaSettings,
   type Phase,
@@ -24,6 +25,8 @@ import {
 } from '@nova/core';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { startBridge } from './agents/bridge.ts';
+import { APPLE_BRAIN, AppleBrain } from './apple/brain.ts';
+import { AppleModel } from './apple/helper.ts';
 import { createAgentHost, findProjects, type NovaAgentHost } from './agents/host.ts';
 import type { CustomAgentSpec } from './agents/presets.ts';
 import { loadConfig, loadDotEnv, migrateSettings, readSettings, settingsFile, settingsInEnv, watchSettings, writeSettings, type Config, type Settings } from './config.ts';
@@ -75,6 +78,9 @@ const tools: ToolHost = {
   call: (name, args, caller) => (toolHost ? toolHost.call(name, args, caller) : Promise.resolve('Nova is still starting.')),
 };
 const bridge = await startBridge(tools);
+/** Apple Intelligence's model on this Mac (Settings → Answers): the helper that runs it, and whether it can answer. */
+let appleChanged: (status: AppleModelStatus) => void = () => {}; // set once Nova is up
+const apple = new AppleModel({ changed: (status) => appleChanged(status) });
 
 async function readAgentsFile(file: string): Promise<Record<string, CustomAgentSpec>> {
   try {
@@ -91,6 +97,8 @@ interface Runtime {
   fileError?: string;
   config: Config;
   custom: Record<string, CustomAgentSpec>;
+  /** Who answers open questions: an agent's name, "apple", a model id - or '' for no one. */
+  brainId: string;
   reflex: ReflexRuntime;
   /** Whether Kokoro, Nova's voice, is here - and whether it came inside Nova.app. */
   voiceInstalled: boolean;
@@ -152,14 +160,18 @@ async function buildRuntime(previous?: Runtime): Promise<Runtime> {
 async function finishRuntime(settings: Settings, fileError: string | undefined, config: Config, custom: Record<string, CustomAgentSpec>, agents: NovaAgentHost | null, agentsKey: string): Promise<Runtime> {
   const models = modelResolver(config.localProviders);
 
-  // Who answers open questions: a paired agent (claude, codex, ...) or a model on one of the user's
-  // local servers (lmstudio/...). Automatic (empty) means the default paired agent. Every one of them
-  // gets Nova's tools.
-  const id = config.brainModel === 'off' ? '' : config.brainModel || agents?.agents[0]?.name || '';
+  // Who answers open questions: a paired agent (claude, codex, ...), Apple Intelligence's model on this Mac
+  // ("apple") or a model on one of the user's local servers (lmstudio/...). Automatic (empty) means the default
+  // paired agent - or, with none paired, Apple's model once this Mac says it has it. Every one of them gets Nova's tools.
+  const id = config.brainModel === 'off' ? '' : config.brainModel || agents?.agents[0]?.name || (apple.known.state === 'ready' ? APPLE_BRAIN : '');
   let reasoning: ReasoningBrain | null = null;
   if (id && agents?.agents.some((a) => a.name === id)) {
     const brain = agents.brain(id);
     brain.warm?.(); // start it now, so the first question doesn't wait for it
+    reasoning = brain;
+  } else if (id === APPLE_BRAIN) {
+    const brain = new AppleBrain(apple, { tools, assistant: config.name, permissions: config.permissions.mode });
+    brain.warm(); // the helper started and the model loaded now, so the first question waits for neither
     reasoning = brain;
   } else if (id) {
     const local = models.resolve(id);
@@ -188,6 +200,7 @@ async function finishRuntime(settings: Settings, fileError: string | undefined, 
     fileError,
     config,
     custom,
+    brainId: reasoning ? id : '',
     reflex,
     voiceInstalled,
     voiceBundled: voiceAt?.bundled ?? false,
@@ -570,8 +583,9 @@ const appInstalled = async () => {
   for (const dir of [join(homedir(), 'Applications'), '/Applications']) if (await stat(join(dir, 'Nova.app')).then(() => true, () => false)) return true;
   return false;
 };
-const snapshot = async () =>
-  buildSnapshot(
+const snapshot = async () => {
+  void apple.status(); // asked again once a minute has passed: Apple Intelligence may have been switched on or off since
+  return buildSnapshot(
     runtime.settings,
     runtime.config,
     runtime.custom,
@@ -591,11 +605,14 @@ const snapshot = async () =>
       appInstalled: await appInstalled(),
       paired: runtime.host?.agents ?? [],
       brain: runtime.options.reasoning?.name ?? null,
+      brainId: runtime.brainId || null,
       trust: trust.snapshot(),
     },
     phones?.status() ?? { door: null, devices: [], pairing: null },
+    apple.known,
     runtime.fileError,
   );
+};
 
 let snapshots = 0;
 function broadcastSnapshot() {
@@ -621,6 +638,20 @@ void phones.configure(runtime.config.phone.enabled, runtime.config.phone.anywher
 
 // Start Nova Eyes now (it's built the first time), so the first question already knows what's on screen.
 if (runtime.config.screen.context) eyes?.warm();
+
+// Apple Intelligence's model: Settings says whether this Mac has it - and with no agent paired, automatic means
+// it answers once the Mac says it can (and stops when it can't: switched off in System Settings, say).
+let appleSwitching = false;
+appleChanged = (status) => {
+  broadcastSnapshot();
+  const automatic = !runtime.config.brainModel && !runtime.host?.agents.length;
+  if (appleSwitching || !automatic || (status.state === 'ready') === (runtime.brainId === APPLE_BRAIN)) return;
+  appleSwitching = true;
+  void queue(async () => apply(await buildRuntime(runtime)))
+    .catch((e) => console.warn(`  [answers] ${why(e)}`))
+    .finally(() => (appleSwitching = false));
+};
+void apple.status().then(appleChanged); // what it said before now, too
 
 // A service connected or its tools changed: tell the Settings window, and let agents kept running see the new tools.
 let refreshTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1112,7 +1143,7 @@ let stopping = false;
 shutdown = (code) => {
   if (stopping) return;
   stopping = true;
-  for (const stop of [stopVoice, () => hearing?.close(), () => phones?.close(), () => integrations.close(), () => eyes?.close(), () => runtime.host?.close(), () => initiative?.close(), () => trust.close()]) {
+  for (const stop of [stopVoice, () => hearing?.close(), () => phones?.close(), () => integrations.close(), () => eyes?.close(), () => apple.close(), () => runtime.host?.close(), () => initiative?.close(), () => trust.close()]) {
     try {
       stop();
     } catch (e) {

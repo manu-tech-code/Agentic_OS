@@ -4,7 +4,7 @@ import type { ClientEvent } from '@nova/core/protocol';
 import { FIELDS, personalize, SECTIONS, type SettingField, type SettingsSection, type SettingsSnapshot, type SettingValue } from '@nova/core/settings';
 import { previewVoice } from '../voice/voice';
 import { Info, ListInput, NumberInput, Reset, SliderInput, Switch, TextInput, type Save } from './settings/Controls';
-import { AgentsPanel, HearingPanel, JevPanel, OrbPreview, ProjectsPanel, ReflexPanel, ServersPanel, SystemPanel, VoiceIdPanel, VoicePanel } from './settings/Panels';
+import { AgentsPanel, ApplePanel, HearingPanel, JevPanel, OrbPreview, ProjectsPanel, ReflexPanel, ServersPanel, SystemPanel, VoiceIdPanel, VoicePanel } from './settings/Panels';
 import { IntegrationsPanel } from './settings/Integrations';
 import { HandsPanel } from './settings/Hands';
 import { MemoryPanel, ScreenPanel } from './settings/Memory';
@@ -115,7 +115,7 @@ function Control({
         </select>
       );
     case 'model':
-      return <TextInput mono value={String(value)} placeholder={field.placeholder} list="nova-models" onSave={saveText} />;
+      return <TextInput mono value={String(value)} placeholder={field.placeholder} list={field.key === 'answers.model' ? 'nova-answerers' : 'nova-models'} onSave={saveText} />;
     case 'shortcut':
       return <ShortcutInput value={String(value)} onSave={saveText} />;
     case 'time':
@@ -178,6 +178,7 @@ function SectionBody({
       {section === 'phone' && <PhonePanel snapshot={snapshot} name={name} onAction={onAction} />}
       {section === 'initiative' && <InitiativePanel snapshot={snapshot} name={name} onSave={onSave} onAction={onAction} />}
       {section === 'appearance' && <OrbPreview snapshot={snapshot} />}
+      {section === 'answers' && <ApplePanel snapshot={snapshot} name={name} onSave={onSave} />}
       {section === 'decisions' && <ReflexPanel snapshot={snapshot} name={name} result={result} onAction={onAction} />}
       {section === 'decisions' && snapshot.values['decisions.engine'] === 'jev' && <JevPanel snapshot={snapshot} />}
       {section === 'integrations' && <IntegrationsPanel snapshot={snapshot} name={name} onSave={onSave} onAction={onAction} />}
@@ -199,19 +200,26 @@ function SectionBody({
   );
 }
 
-/** Model ids to suggest wherever a model is picked: paired agents and every model the local servers offer. */
+/** Model ids to suggest wherever a model is picked: paired agents and every model the local servers offer - and, for who answers, Apple's. */
 function ModelSuggestions({ snapshot }: { snapshot: SettingsSnapshot }) {
+  const agents = snapshot.agents
+    .filter((a) => a.path)
+    .map((a) => (
+      <option key={a.name} value={a.name}>{`${a.label} (agent)`}</option>
+    ));
+  const local = snapshot.servers.flatMap((s) => s.models.map((m) => <option key={`${s.name}/${m}`} value={`${s.name}/${m}`}>{`${s.name} (local)`}</option>));
   return (
-    <datalist id="nova-models">
-      {snapshot.agents
-        .filter((a) => a.path)
-        .map((a) => (
-          <option key={a.name} value={a.name}>{`${a.label} (agent)`}</option>
-        ))}
-      {snapshot.servers.flatMap((s) =>
-        s.models.map((m) => <option key={`${s.name}/${m}`} value={`${s.name}/${m}`}>{`${s.name} (local)`}</option>),
-      )}
-    </datalist>
+    <>
+      <datalist id="nova-models">
+        {agents}
+        {local}
+      </datalist>
+      <datalist id="nova-answerers">
+        {agents}
+        {snapshot.apple.state !== 'unavailable' && <option value="apple">Apple Intelligence (on this Mac)</option>}
+        {local}
+      </datalist>
+    </>
   );
 }
 
