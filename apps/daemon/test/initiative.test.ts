@@ -563,8 +563,8 @@ describe('reminders for the iPhone', () => {
       changed: () => {},
     }).load();
     expect(initiative.phoneReminders(NOW)).toEqual([
-      { id: 'tea', title: 'Timer · the tea', body: expect.stringMatching(/tea/i), due: NOW + 300_000, timer: true },
-      { id: 'mum', title: 'Reminder', body: "It's time to call mum.", due: NOW + 3_600_000, timer: false },
+      { id: 'tea', title: 'Timer · the tea', body: expect.stringMatching(/tea/i), what: 'the tea', due: NOW + 300_000, timer: true },
+      { id: 'mum', title: 'Reminder', body: "It's time to call mum.", what: 'call mum', due: NOW + 3_600_000, timer: false },
     ]);
     initiative.close();
   });

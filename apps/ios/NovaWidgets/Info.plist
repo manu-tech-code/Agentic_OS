@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Nova's widgets and control: a WidgetKit extension (the rest of its Info.plist is generated). -->
+	<key>NSExtension</key>
+	<dict>
+		<key>NSExtensionPointIdentifier</key>
+		<string>com.apple.widgetkit-extension</string>
+	</dict>
+	<!-- The Keychain group shared by the app and its widgets, with the team's prefix (Shared/WidgetState.swift). -->
+	<key>NovaSharedKeychain</key>
+	<string>$(AppIdentifierPrefix)dev.nova.phone.shared</string>
+</dict>
+</plist>

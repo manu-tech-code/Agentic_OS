@@ -178,7 +178,7 @@ export class Initiative {
       .slice(0, 50)
       .map((r) => {
         const timer = Boolean(r.countdown && !r.about);
-        return { id: r.id, title: timer ? (r.text ? `Timer · ${r.text}` : 'Timer') : 'Reminder', body: dueText(r), due: r.due!, timer };
+        return { id: r.id, title: timer ? (r.text ? `Timer · ${r.text}` : 'Timer') : 'Reminder', body: dueText(r), ...(r.text ? { what: r.text } : {}), due: r.due!, timer };
       });
   }
 

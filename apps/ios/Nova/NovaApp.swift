@@ -11,8 +11,9 @@ struct NovaApp: App {
       RootView()
         .environment(nova)
         .preferredColorScheme(.dark)
-        // A pairing link: from AirDrop, a message, or the Simulator (xcrun simctl openurl booted "nova://pair?…").
-        .onOpenURL { url in nova.pair(link: url.absoluteString) }
+        // A pairing link (from AirDrop, a message, or the Simulator: xcrun simctl openurl booted "nova://pair?…"),
+        // or a widget's or the control's: nova://talk, nova://tasks.
+        .onOpenURL { url in nova.open(url) }
     }
     // In front means not in the background: Siri or Control Center over Nova doesn't make it leave.
     .onChange(of: scenePhase, initial: true) { _, phase in

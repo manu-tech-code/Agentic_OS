@@ -61,6 +61,8 @@ struct PhoneReminder: Equatable {
   var id: String
   var title: String
   var body: String
+  /// What it's for, in the user's words ("call mum"): what the widgets show.
+  var what: String
   var due: Date
   var timer: Bool
 
@@ -69,6 +71,7 @@ struct PhoneReminder: Equatable {
     self.id = id
     title = m["title"] as? String ?? "Reminder"
     body = m["body"] as? String ?? ""
+    what = m["what"] as? String ?? ""
     self.due = Date(timeIntervalSince1970: due.doubleValue / 1000)
     timer = m["timer"] as? Bool ?? false
   }

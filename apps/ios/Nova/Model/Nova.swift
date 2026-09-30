@@ -3,6 +3,7 @@ import LocalAuthentication
 import Observation
 import os
 import UIKit
+import WidgetKit
 
 /// What Siri and Shortcuts asked, and how long each step took - never what was said (Console.app, `dev.nova.phone`).
 private let log = Logger(subsystem: "dev.nova.phone", category: "siri")
@@ -49,6 +50,8 @@ final class Nova {
   private(set) var hearingHere = false
   /// The button was tapped, not held: the turn ends when you pause, as the Mac's ⌥Space tapped.
   private(set) var tapped = false
+  /// The agents' task board is open (a widget's link can open it).
+  var showingTasks = false
   /// A short message to show: an error, or what happened.
   var notice: String?
 
@@ -78,6 +81,9 @@ final class Nova {
   private var listening: Task<Void, Never>?
   /// Letting the connection go, out of the front with nothing to do.
   private var resting: Task<Void, Never>?
+  /// What the widgets show, as last written for them.
+  private var widgetState = WidgetState.load() ?? WidgetState()
+  private var widgetReload: Task<Void, Never>?
 
   private init() {
     var problem: String?
@@ -95,6 +101,7 @@ final class Nova {
     notice = problem
     wire()
     if let saved { door?.connect(saved) }
+    updateWidgets { $0.mac = saved?.name }
     Task { await checkPhoneHearing() }
   }
 
@@ -104,6 +111,7 @@ final class Nova {
     door?.onPaired = { [weak self] paired in
       paired.save()
       self?.mac = paired
+      self?.updateWidgets { $0.mac = paired.name }
     }
     voice.onFrame = { [weak self] pcm in
       guard let self else { return }
@@ -120,6 +128,7 @@ final class Nova {
     }
     voice.onProblem = { [weak self] message in self?.notice = message }
     phoneHearing.onPartial = { [weak self] text in self?.heard = text }
+    TalkToNova.listen = { [weak self] in self?.listenSoon() }
     Notifications.shared.setUp()
     Notifications.shared.quiet = { [weak self] in self?.link == .connected && self?.foreground == true }
     Notifications.shared.onAction = { [weak self] ref, action in
@@ -152,6 +161,16 @@ final class Nova {
     tasks = []
     reply = ""
     heard = ""
+    updateWidgets { $0 = WidgetState(name: $0.name) }
+  }
+
+  /// A nova:// link: a pairing code - or, from a widget or the control, Nova listening, or the agents' task board.
+  func open(_ url: URL) {
+    switch url.host {
+    case NovaLink.talk.host: listenSoon()
+    case NovaLink.tasks.host: showingTasks = true
+    default: pair(link: url.absoluteString)
+    }
   }
 
   /// The app came back to the front: reconnect now if it needs to.
@@ -494,6 +513,7 @@ final class Nova {
     case .hello(let hello):
       name = hello.name
       UserDefaults.standard.set(hello.name, forKey: "assistantName")
+      updateWidgets { $0.name = hello.name }
       macHearing = hello.hearing
       if let lang = hello.language { language = lang }
       cardSeconds = hello.cardSeconds ?? 8
@@ -523,12 +543,17 @@ final class Nova {
       dismiss(id)
     case .tasks(let tasks):
       self.tasks = tasks
+      let work = tasks.prefix(12).map { WidgetState.Work(agent: $0.label, task: $0.task, status: $0.status, step: $0.step) }
+      updateWidgets { state in
+        if state.work != work { (state.work, state.at) = (work, Date()) }
+      }
     case .computer(let active, let caller, let app, let paused):
       computer = !active ? nil : paused ? "Waiting while you use the Mac" : "\(caller ?? name) is using the computer\(app.map { " · \($0)" } ?? "")"
     case .phoneConfig(let hearing):
       hearingMode = hearing
     case .phoneReminders(let items):
       Task { await Notifications.shared.replace(items) }
+      updateWidgets { $0.reminders = items.map { .init(what: $0.what, due: $0.due, timer: $0.timer) } }
     case .result(let ok, let message):
       if !ok {
         notice = message
@@ -539,6 +564,24 @@ final class Nova {
       waiting?.failed(message)
     case .challenge, .welcome:
       break
+    }
+  }
+
+  /// What the widgets show changed: it's kept for them, and they're drawn again a moment later (once for a burst).
+  private func updateWidgets(_ change: (inout WidgetState) -> Void) {
+    var next = widgetState
+    change(&next)
+    guard next != widgetState else { return }
+    widgetState = next
+    next.save()
+    guard widgetReload == nil else { return }
+    widgetReload = Task { [weak self] in
+      // Out of the front (answering Siri), iOS could put Nova to sleep first: a moment of its time for the widgets.
+      let time = BackgroundTime("Nova's widgets")
+      defer { time.end() }
+      try? await Task.sleep(for: .seconds(1))
+      WidgetCenter.shared.reloadAllTimelines()
+      self?.widgetReload = nil
     }
   }
 
