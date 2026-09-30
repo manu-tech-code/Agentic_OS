@@ -18,7 +18,7 @@ enum Incoming {
   case dismiss(String)
   case tasks([AgentTask])
   case computer(active: Bool, caller: String?, app: String?, paused: Bool)
-  case phoneConfig(hearing: String, activities: Bool)
+  case phoneConfig(hearing: String, activities: Bool, voiceActivity: Bool)
   case phoneReminders([PhoneReminder])
   /// What the Mac held for you while you were away, to show as notifications (the phone checked in by itself).
   case phoneNews([PhoneNews])
@@ -68,7 +68,7 @@ enum Incoming {
     case "computer":
       return .computer(active: m["active"] as? Bool ?? false, caller: m["caller"] as? String, app: m["app"] as? String, paused: m["paused"] as? Bool ?? false)
     case "phone-config":
-      return .phoneConfig(hearing: m["hearing"] as? String ?? "auto", activities: m["activities"] as? Bool ?? true)
+      return .phoneConfig(hearing: m["hearing"] as? String ?? "auto", activities: m["activities"] as? Bool ?? true, voiceActivity: m["voiceActivity"] as? Bool ?? true)
     case "phone-reminders":
       return .phoneReminders((m["items"] as? [[String: Any]] ?? []).compactMap(PhoneReminder.init))
     case "phone-news":

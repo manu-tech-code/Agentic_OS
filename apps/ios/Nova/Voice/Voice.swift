@@ -15,6 +15,10 @@ final class Voice {
   var onLevel: (Float) -> Void = { _ in }
   /// The last of a reply finished playing (not when it was cut off).
   var onFinished: () -> Void = {}
+  /// A reply started playing, or stopped - finished or cut off.
+  var onPlaying: (Bool) -> Void = { _ in }
+  /// How Nova's voice sounds as it plays away from the front, low to high pitch, 0-1 each: the Dynamic Island's bars.
+  var onBands: ([Float]) -> Void = { _ in }
   var onProblem: (String) -> Void = { _ in }
 
   static let frameBytes = 640 // 20 ms at 16 kHz, 16-bit
@@ -28,6 +32,7 @@ final class Voice {
   private let speaker = AVAudioEngine()
   private let speakerPlayer = AVAudioPlayerNode()
   private var speakerStarted = false
+  private let spectrum = Spectrum()
   /// Nova isn't in front on this phone (until it first comes there).
   private(set) var away = true
   /// Where the reply playing now plays.
@@ -60,6 +65,14 @@ final class Voice {
     engine.attach(player)
     speaker.attach(speakerPlayer)
     speaker.connect(speakerPlayer, to: speaker.mainMixerNode, format: playFormat)
+    // Nova's voice away from the front, as it plays: its spectrum moves the bars in the Dynamic Island.
+    speakerPlayer.installTap(onBus: 0, bufferSize: 2048, format: playFormat) { [weak self, spectrum] buffer, _ in
+      let bands = spectrum.levels(buffer)
+      DispatchQueue.main.async {
+        guard let self, self.playing != nil, self.output === self.speakerPlayer else { return }
+        self.onBands(bands)
+      }
+    }
     NotificationCenter.default.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
       // A call, Siri, another app's audio: what Nova was saying stops there; when it's over, pick up again.
       guard let self, let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt, let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
@@ -287,6 +300,7 @@ final class Voice {
       lastPlayed = id
       nextPiece = seq
       output = away ? speakerPlayer : player
+      onPlaying(true)
     }
     if last { lastPiece = seq }
     pieces[seq] = (pcm.isEmpty ? nil : floatBuffer(pcm, rate: sampleRate)) ?? silence()
@@ -355,6 +369,7 @@ final class Voice {
     onLevel(0)
     if away { letGo() } else if was === speakerPlayer { stopSpeaker() }
     if finished { onFinished() }
+    onPlaying(false)
   }
 
   // MARK: Audio arithmetic (as Nova.app's)

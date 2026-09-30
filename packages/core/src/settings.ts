@@ -705,6 +705,14 @@ export const FIELDS: SettingField[] = [
     default: true,
   },
   {
+    key: 'phone.voiceActivity',
+    section: 'phone',
+    label: 'Nova speaking, in the Dynamic Island',
+    help: "When you leave Nova on your iPhone - for the Home Screen or another app - while it's thinking about or saying its answer to you, the Dynamic Island (and the Lock Screen) shows it - bars that move with its voice, what it's saying, and Stop - until it's done. Nova keeps its line to the Mac open for the answer meanwhile, so you still hear it.",
+    type: 'toggle',
+    default: true,
+  },
+  {
     key: 'phone.news',
     section: 'phone',
     label: 'News on your iPhone',
