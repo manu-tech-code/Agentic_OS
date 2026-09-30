@@ -47,6 +47,7 @@ import { forgetLearned, loadReflex, reflexEmbedder, type ReflexRuntime } from '.
 import { buildSnapshot, validateChanges } from './snapshot.ts';
 import { Trust } from './trust/index.ts';
 import { Phones, type PairedDevice } from './phone/index.ts';
+import { VoicePlace, type VoiceStream } from './voice/place.ts';
 import { kokoro, sentences, stopVoice, synthesize } from './voice/tts.ts';
 
 // Something that failed where nothing waited for it is logged, and Nova carries on. An exception
@@ -236,18 +237,15 @@ const presence = new Presence<WebSocket>({
 });
 /** Reminders, the briefing, routines, agents reporting back - set up once Nova is. */
 let initiative: Initiative | undefined;
-/** The iPhone the user is talking to Nova on, and since when: the reply is spoken there. */
-let voiceTo: WebSocket | null = null;
-let voiceToAt = 0;
-/** How long after the last thing said into a phone Nova still speaks there - a reminder an hour later is said at the Mac. */
-const PHONE_VOICE_MS = 90_000;
-const talkingOn = (ws: WebSocket | null) => ((voiceTo = ws), (voiceToAt = Date.now()));
-/** Nova's voice goes to the phone the user is talking on - else to the Mac app while it's there, else to every window. */
-const toVoice = (event: ServerEvent) => {
-  const phone = voiceTo && clients.has(voiceTo) && Date.now() - voiceToAt < PHONE_VOICE_MS ? voiceTo : null;
-  if (phone) voiceToAt = Date.now(); // a long reply keeps going where it started
-  for (const ws of phone ? [phone] : presence.voice([...clients].filter((c) => !phones?.isPhone(c)))) send(ws, event);
-};
+/** Where Nova's voice is heard: on the iPhone the user is talking to Nova on, else at the Mac - one place at a time. */
+const voicePlace = new VoicePlace<WebSocket>({
+  peers: () => clients,
+  connected: (ws) => clients.has(ws),
+  isPhone: (ws) => Boolean(phones?.isPhone(ws)),
+  mac: () => presence.voice([...clients].filter((c) => !phones?.isPhone(c))),
+  send,
+});
+const talkingOn = (ws: WebSocket | null) => voicePlace.talkingOn(ws);
 
 // Replies are spoken in Kokoro's voice (it comes inside Nova.app): the daemon streams the audio
 // sentence by sentence and Nova.app, or each window, plays it. Without it replies are shown, not spoken. A reply
@@ -256,7 +254,8 @@ const toVoice = (event: ServerEvent) => {
 let speechCount = 0;
 let speaking: string | null = null;
 const speaksAloud = () => runtime.voiceInstalled;
-const replies = new Map<string, { audio: string; said: number; seq: number; chain: Promise<unknown> }>();
+/** Each reply being said: its audio stream, how far it's got, and where it's heard - decided as it starts, kept to the end. */
+const replies = new Map<string, { audio: string; said: number; seq: number; chain: Promise<unknown>; voice: VoiceStream<WebSocket> }>();
 
 function speakAloud(id: string, text: string, voice: string, deliver: (e: ServerEvent) => void, more: { first?: number; final?: boolean; stillWanted?: () => boolean } = {}) {
   return synthesize(text, { voice, speed: runtime.config.ui.rate, ...more, onChunk: (chunk) => deliver({ type: 'audio', id, ...chunk }) }).catch((e) =>
@@ -271,6 +270,7 @@ let phase: Phase = 'idle';
 function trackSpeech(event: ServerEvent) {
   if (event.type === 'phase') {
     phase = event.phase;
+    if (phase === 'idle' || phase === 'listening') voicePlace.rested();
     initiative?.onPhase(event.phase); // news that waited for Nova to finish goes out now
   }
   if (event.type === 'say') {
@@ -290,7 +290,8 @@ function emit(event: ServerEvent) {
   const key = event.id ?? `whole-${speechCount + 1}`;
   let reply = replies.get(key);
   if (!reply) {
-    reply = { audio: `say-${++speechCount}`, said: 0, seq: 0, chain: Promise.resolve() };
+    // One reply, one voice: it's all said where it starts, and nothing is said anywhere else meanwhile.
+    reply = { audio: `say-${++speechCount}`, said: 0, seq: 0, chain: Promise.resolve(), voice: voicePlace.start() };
     replies.set(key, reply);
     speaking = reply.audio;
   }
@@ -301,8 +302,10 @@ function emit(event: ServerEvent) {
   if (final) replies.delete(key);
   const first = reply.seq;
   reply.seq += Math.max(1, sentences(fresh).length);
-  const audio = reply.audio;
-  reply.chain = reply.chain.then(() => speakAloud(audio, fresh, runtime.config.voice.kokoroVoice, toVoice, { first, final, stillWanted: () => speaking === audio }));
+  const { audio, voice } = reply;
+  // What a phone that has gone won't hear isn't made.
+  const stillWanted = () => speaking === audio && voice.heard();
+  reply.chain = reply.chain.then(() => speakAloud(audio, fresh, runtime.config.voice.kokoroVoice, voice.say, { first, final, stillWanted }));
 }
 
 /** Something done from a window (not through Nova's words), for the record and the timeline. */
@@ -832,7 +835,7 @@ function attach(ws: WebSocket, peer: { native: boolean; phone?: PairedDevice }) 
       if (phone) hearing!.drop();
       else hearing!.pause();
     }
-    if (voiceTo === ws) voiceTo = null;
+    voicePlace.gone(ws);
     if (phoneTurn === ws) phoneTurn = null;
     presence.detach(ws);
   });
@@ -949,7 +952,7 @@ function attach(ws: WebSocket, peer: { native: boolean; phone?: PairedDevice }) 
       // Played where Nova's voice plays (Nova.app's echo canceller knows it), and heard as Nova speaking - never as a request.
       const text = `Hi, I'm ${runtime.config.name}. This is how I sound.`;
       hearing?.setSpoken(text);
-      void speakAloud(event.id, text, event.voice, presence.connected ? toVoice : (e) => send(ws, e)).finally(() => hearing?.setSpoken(replyText || null));
+      void speakAloud(event.id, text, event.voice, presence.connected ? (e) => voicePlace.toMac(e) : (e) => send(ws, e)).finally(() => hearing?.setSpoken(replyText || null));
     }
     else if (event.type === 'tap-answer') {
       // A tap on a question's card: in Nova's own window on this Mac, or on a paired iPhone once Face ID said it's the
