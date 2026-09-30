@@ -576,7 +576,10 @@ final class Nova {
     next.save()
     guard widgetReload == nil else { return }
     widgetReload = Task { [weak self] in
-      try? await Task.sleep(for: .seconds(3))
+      // Out of the front (answering Siri), iOS could put Nova to sleep first: a moment of its time for the widgets.
+      let time = BackgroundTime("Nova's widgets")
+      defer { time.end() }
+      try? await Task.sleep(for: .seconds(1))
       WidgetCenter.shared.reloadAllTimelines()
       self?.widgetReload = nil
     }

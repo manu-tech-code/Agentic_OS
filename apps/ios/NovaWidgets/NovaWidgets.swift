@@ -3,7 +3,7 @@ import SwiftUI
 import WidgetKit
 
 // Nova on the Home Screen, the Lock Screen, StandBy and in Control Center. The widgets show what the app last heard
-// from the Mac (`WidgetState`, in the app group they share): what's coming up and what the agents are doing. A tap
+// from the Mac (`WidgetState`, in the Keychain group they share): what's coming up and what the agents are doing. A tap
 // talks to Nova (nova://talk). The control runs Talk to Nova (Shared/TalkToNova.swift), which iOS opens the app to
 // do - for Control Center, the Lock Screen and the Action button. None of it reaches the Mac itself: that's the app's job.
 
@@ -31,14 +31,16 @@ struct NovaTimeline: TimelineProvider {
     completion(NovaEntry(date: .now, state: context.isPreview ? .preview : WidgetState.load() ?? WidgetState()))
   }
 
-  /// Now, and again as each reminder comes due - so "next" moves on by itself, with the app closed.
+  /// Now, and again as each reminder comes due - so "next" moves on by itself, with the app closed - and when agents
+  /// last seen at work stop counting. The app has it drawn afresh whenever it hears something new.
   func getTimeline(in context: Context, completion: @escaping (Timeline<NovaEntry>) -> Void) {
     let state = WidgetState.load() ?? WidgetState()
     let now = Date()
-    let dues = state.upcoming(after: now).prefix(24).map { $0.due.addingTimeInterval(1) }
-    let entries = [NovaEntry(date: now, state: state)] + dues.map { NovaEntry(date: $0, state: state) }
-    // After the last reminder - or in an hour, when agents last seen at work no longer count - it's drawn afresh.
-    completion(Timeline(entries: entries, policy: .after(dues.last ?? now.addingTimeInterval(3600))))
+    var times = state.upcoming(after: now).prefix(24).map { $0.due.addingTimeInterval(1) }
+    if !state.atWork(at: now).isEmpty { times.append(state.at.addingTimeInterval(3601)) }
+    times.sort()
+    let entries = [NovaEntry(date: now, state: state)] + times.map { NovaEntry(date: $0, state: state) }
+    completion(Timeline(entries: entries, policy: .after(times.last ?? now.addingTimeInterval(6 * 3600))))
   }
 }
 
