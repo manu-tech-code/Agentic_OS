@@ -23,5 +23,8 @@
 			</array>
 		</dict>
 	</array>
+	<!-- The Keychain group shared by the app and its widgets, with the team's prefix (Shared/WidgetState.swift). -->
+	<key>NovaSharedKeychain</key>
+	<string>$(AppIdentifierPrefix)dev.nova.phone.shared</string>
 </dict>
 </plist>

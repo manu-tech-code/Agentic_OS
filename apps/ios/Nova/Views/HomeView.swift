@@ -3,7 +3,6 @@ import SwiftUI
 /// Nova, connected: the Orb, what it heard and said, its cards, and the talk button.
 struct HomeView: View {
   @Environment(Nova.self) private var nova
-  @State private var showTasks = false
   @State private var showMac = false
   @State private var typing = false
   @State private var draft = ""
@@ -35,7 +34,7 @@ struct HomeView: View {
     .padding(.horizontal, 18)
     .padding(.bottom, 10)
     .background { Backdrop() }
-    .sheet(isPresented: $showTasks) { TasksView().presentationDetents([.medium, .large]) }
+    .sheet(isPresented: Bindable(nova).showingTasks) { TasksView().presentationDetents([.medium, .large]) }
     .sheet(isPresented: $showMac) { MacView().presentationDetents([.medium, .large]) }
     .overlay(alignment: .top) { NoticeView() }
   }
@@ -48,7 +47,7 @@ struct HomeView: View {
         Text(linkText).font(.caption).foregroundStyle(Style.dim).lineLimit(1)
       }
       Spacer()
-      Button { showTasks = true } label: {
+      Button { nova.showingTasks = true } label: {
         Image(systemName: "asterisk")
           .font(.headline)
           .frame(width: 40, height: 40)

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- The app's own Keychain group first (its key and pairing stay there), then one it shares with its widgets:
+	     what they show. Keychain groups need nothing registered, so a free Apple account allows them. -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)dev.nova.phone</string>
+		<string>$(AppIdentifierPrefix)dev.nova.phone.shared</string>
+	</array>
+</dict>
+</plist>

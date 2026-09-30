@@ -35,20 +35,6 @@ struct AskNova: AppIntent {
   }
 }
 
-/// Nova opens and listens - as if its talk button were tapped, so it hears the end when you pause. For the Action button.
-struct TalkToNova: AppIntent {
-  static let title: LocalizedStringResource = "Talk to Nova"
-  static let description = IntentDescription("Opens Nova, listening: say what you want, and it hears the end when you pause. Put it on the Action button to talk to Nova with one press.")
-  static let supportedModes: IntentModes = .foreground(.immediate)
-  static let authenticationPolicy: IntentAuthenticationPolicy = .requiresAuthentication
-
-  @MainActor
-  func perform() async throws -> some IntentResult {
-    Nova.shared.listenSoon()
-    return .result()
-  }
-}
-
 /// The morning briefing, whenever: what's on today, the weather, reminders, and what agents did.
 struct NovaBriefing: AppIntent {
   static let title: LocalizedStringResource = "Nova's Briefing"

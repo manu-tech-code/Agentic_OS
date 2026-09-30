@@ -312,11 +312,15 @@ npm run phone -- --simulator  # or in the iOS Simulator
   app's Mac page).
 - **Siri, Shortcuts and the Action button.** "Hey Siri, ask Nova" - then say what you want - reaches Nova on your Mac
   without opening the app: the answer shows on screen and is said in Nova's own voice on the phone, never Siri's.
-  "Hey Siri, talk to Nova" opens Nova listening, and so can the Action button (Settings → Action Button → Shortcut →
-  Nova → **Talk**). **Nova's Briefing**, **What Nova's Agents Are Doing**, **Nova's Reminders** and **Stop Nova** are
+  "Hey Siri, talk to Nova" opens Nova listening, and so can the Action button (Settings → Action Button → Controls →
+  **Talk to Nova**). **Nova's Briefing**, **What Nova's Agents Are Doing**, **Nova's Reminders** and **Stop Nova** are
   there too - by voice, in Spotlight and in the Shortcuts app, where **Ask Nova** hands its answer to the next step.
   When Nova asks something back it opens and listens for your answer, and for what only a tap allows it shows **Allow
   with Face ID**. A locked phone asks for Face ID first: no one talks to your Mac through your phone but you.
+- **Widgets and Control Center.** Nova's widget - on the Home Screen, the Lock Screen and in StandBy - shows the
+  reminders coming up (a timer counts down) and what your agents are doing, and a tap talks to Nova (on the big one,
+  the rest opens the agents' task board). **Talk to Nova** is a control too, for Control Center, the Lock Screen and
+  the Action button. The widget shows what Nova on the phone last heard from the Mac: it can't reach the Mac itself.
 - **News where you are.** While you're away from the Mac (it's locked, or untouched a while) and Nova is open on the
   phone, reminders coming up and agents finishing are said there - and what Nova held comes up when you open it
   (Settings → iPhone → *News on your iPhone*).

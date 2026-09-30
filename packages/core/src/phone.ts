@@ -84,6 +84,8 @@ export interface PhoneReminder {
   title: string;
   /** What Nova says when it's due. */
   body: string;
+  /** What it's for, in the user's words ("call mum", "the tea"): what the phone's widgets show. */
+  what?: string;
   /** Epoch ms. */
   due: number;
   timer: boolean;
