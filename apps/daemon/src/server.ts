@@ -803,7 +803,7 @@ wss.on('connection', (ws, req) => {
 });
 
 /** What a phone may do: talk and type to Nova, stop it, and deal with agents' tasks - not Settings, memories or the Mac app's part. */
-const PHONE_MAY: ReadonlySet<ClientEvent['type']> = new Set(['utterance', 'talk-start', 'talk-end', 'audio-stop', 'speech-finished', 'cancel', 'stop-all', 'task-cancel', 'task-retry', 'phone-state', 'notification-action']);
+const PHONE_MAY: ReadonlySet<ClientEvent['type']> = new Set(['utterance', 'talk-start', 'talk-end', 'audio-stop', 'speech-finished', 'cancel', 'stop-all', 'task-cancel', 'task-retry', 'phone-state', 'notification-action', 'tap-answer']);
 
 /**
  * One of Nova's clients connected: a window, Nova.app (`native`: a program on this Mac, not a page) or a
@@ -951,7 +951,12 @@ function attach(ws: WebSocket, peer: { native: boolean; phone?: PairedDevice }) 
       hearing?.setSpoken(text);
       void speakAloud(event.id, text, event.voice, presence.connected ? toVoice : (e) => send(ws, e)).finally(() => hearing?.setSpoken(replyText || null));
     }
-    else if (event.type === 'phone-state') {
+    else if (event.type === 'tap-answer') {
+      // A tap on a question's card: in Nova's own window on this Mac, or on a paired iPhone once Face ID said it's the
+      // owner. It's the only yes a question that needs a tap takes. What follows is said where the tap was.
+      if (phone) talkingOn(ws);
+      if (!nova.tapAnswer(event.id, event.yes)) send(ws, { type: 'settings-result', ok: false, message: 'That question has gone - it was answered, or ran out.' });
+    } else if (event.type === 'phone-state') {
       phones!.setActive(ws, event.active);
       if (event.active) initiative!.onPhoneActive();
     } else if (event.type === 'phone-pair') {

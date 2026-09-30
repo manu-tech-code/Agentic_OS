@@ -114,6 +114,8 @@ struct Card: Identifiable, Equatable {
   var body: String?
   var endsAt: Date?
   var agent: String?
+  /// Only a tap answers it (money, or what can't be taken back): here, Face ID first.
+  var tap: Bool
 
   init?(_ m: [String: Any]) {
     guard let id = m["id"] as? String, let kind = m["kind"] as? String else { return nil }
@@ -123,6 +125,7 @@ struct Card: Identifiable, Equatable {
     body = m["body"] as? String
     endsAt = (m["endsAt"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue / 1000) }
     agent = m["agent"] as? String
+    tap = m["tap"] as? Bool ?? false
   }
 
   /// Cards that stay until they're done; the rest close by themselves after a few seconds.
@@ -165,6 +168,8 @@ enum Outgoing {
   case phoneState(active: Bool)
   /// Snooze or Done on one of the phone's own reminder notifications.
   case notificationAction(ref: String, action: String)
+  /// Allow or No on a question only a tap answers - sent after Face ID says it's the phone's owner.
+  case tapAnswer(id: String, yes: Bool)
   /// Said into the phone and recognized here (`phone`), or typed (`keyboard`).
   case utterance(String, source: String)
   case speechFinished
@@ -180,6 +185,7 @@ enum Outgoing {
     case .audioStop: return ["type": "audio-stop"]
     case .phoneState(let active): return ["type": "phone-state", "active": active]
     case .notificationAction(let ref, let action): return ["type": "notification-action", "ref": ref, "action": action]
+    case .tapAnswer(let id, let yes): return ["type": "tap-answer", "id": id, "yes": yes]
     case .utterance(let text, let source): return ["type": "utterance", "text": text, "source": source]
     case .speechFinished: return ["type": "speech-finished"]
     case .cancel: return ["type": "cancel"]

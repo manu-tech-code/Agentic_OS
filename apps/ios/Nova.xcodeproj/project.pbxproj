@@ -189,6 +189,7 @@
 				INFOPLIST_FILE = Nova/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Nova;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Nova scans the pairing code on your Mac's screen.";
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "Nova asks for Face ID before it does what moves money or can't be taken back.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Nova finds Nova on your Mac, on your Wi-Fi, and talks to it there.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Nova hears you while you hold the talk button.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "When the connection is weak, Nova turns what you say into text on this iPhone.";
@@ -220,6 +221,7 @@
 				INFOPLIST_FILE = Nova/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Nova;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Nova scans the pairing code on your Mac's screen.";
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "Nova asks for Face ID before it does what moves money or can't be taken back.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Nova finds Nova on your Mac, on your Wi-Fi, and talks to it there.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Nova hears you while you hold the talk button.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "When the connection is weak, Nova turns what you say into text on this iPhone.";

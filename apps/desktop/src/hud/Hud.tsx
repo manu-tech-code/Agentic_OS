@@ -157,7 +157,7 @@ export default function Hud() {
           {shownReply && <p className="hud__reply">{shownReply}</p>}
           {confirm && (
             <p className="hud__ask">
-              {confirm.title} <span>Say yes or no</span>
+              {confirm.title} <span>{confirm.tap ? "Tap Allow in Nova's window, or use Face ID on your iPhone" : 'Say yes or no'}</span>
             </p>
           )}
         </div>

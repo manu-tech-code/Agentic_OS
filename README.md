@@ -310,6 +310,9 @@ npm run phone -- --simulator  # or in the iOS Simulator
   Nova hears it as it hears you at the Mac. On a weak connection - or when Settings → iPhone says so - Apple's
   recognizer on the iPhone does it, and only the text goes to the Mac (its speech model downloads once, from the
   app's Mac page).
+- **Face ID for what can't be taken back.** What only a tap allows - paying through a service, cancelling every
+  reminder at once - shows **Allow with Face ID** on the phone, and nothing happens until Face ID (or the passcode) says
+  it's you. A spoken "yes" never does it, and "no" still refuses.
 - **What a phone may do.** Talk and type to Nova, answer its questions, stop it, and stop or rerun agents' tasks -
   with the same rules and permissions as at the Mac. It can't change Settings, and it never sees your memories or the
   record of actions. Replies to what you said on the phone are spoken there; Nova's news (a reminder, an agent
@@ -359,9 +362,10 @@ did:
   log water shortcut", "move the invoice to documents" - it does it, once it's sure what you said (a command it may
   have misheard is asked again, never acted on). It still asks before what you didn't ask for (a brain's own idea,
   an agent's commands), before a click that spends or moves money or can't be taken back ("Place order", "Pay",
-  "Delete account") - text on a page can only ever add such a question - and paying through a service always needs a
-  tap. To have Nova ask before every change instead: Settings → Privacy & trust → *Ask before doing what you asked
-  for*.
+  "Delete account") - text on a page can only ever add such a question. Paying through a service, and cancelling every
+  reminder at once, need a tap, never a spoken yes: **Allow** on the question's card in Nova's window, or **Allow with
+  Face ID** on your paired iPhone (its passcode if Face ID can't tell). To have Nova ask before every change instead:
+  Settings → Privacy & trust → *Ask before doing what you asked for*.
 - **Undo**: "undo that" (or the Undo in the Activity panel, ⌘J) takes back the last thing Nova did: a reminder or
   timer, something it remembered or forgot, a routine, an app it opened (it quits again) or quit (it opens again), the
   project you were on. "Undo what Claude did" takes back that agent's last action. Something from more than an hour
@@ -584,5 +588,5 @@ npm run typecheck
 ## Adding a skill
 
 Add an entry to `packages/core/src/skills/builtin.ts`: an `id`, example phrasings (they become Jev's
-choice criteria), a risk `tier` (0 just do it · 1 announce · 2 spoken confirm · 3 on-screen tap only),
+choice criteria), a risk `tier` (0 just do it · 1 announce · 2 spoken confirm · 3 a tap only: Allow in the window, or Face ID on a paired iPhone),
 and `run()`. Keep arithmetic, dates and parsing in code - the decision model only makes judgments.

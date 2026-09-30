@@ -41,11 +41,14 @@ export function Cards({
   closeAfter,
   onDismiss,
   onAnswer,
+  onTap,
 }: {
   cards: Card[];
   closeAfter: number;
   onDismiss: (id: string) => void;
   onAnswer: (text: 'yes' | 'no') => void;
+  /** A question only a tap answers (money, what can't be undone): Allow or No, sent as a tap on this Mac's screen. */
+  onTap: (id: string, yes: boolean) => void;
 }) {
   return (
     <div className="cards">
@@ -70,11 +73,11 @@ export function Cards({
               {card.endsAt && <Countdown endsAt={card.endsAt} />}
               {card.kind === 'confirm' && (
                 <div className="card__actions">
-                  <button className="btn btn--ghost" onClick={() => onAnswer('no')}>
+                  <button className="btn btn--ghost" onClick={() => (card.tap ? onTap(card.id, false) : onAnswer('no'))}>
                     No
                   </button>
-                  <button className="btn btn--primary" onClick={() => onAnswer('yes')}>
-                    Yes
+                  <button className="btn btn--primary" onClick={() => (card.tap ? onTap(card.id, true) : onAnswer('yes'))}>
+                    {card.tap ? 'Allow' : 'Yes'}
                   </button>
                 </div>
               )}

@@ -174,6 +174,8 @@ interface Approval {
   remember?: Remember;
   /** What "go ahead with all of it" covers for the rest of this task. */
   session?: { key: string; label: string };
+  /** Only a tap answers it (money, or what can't be taken back): never a spoken yes. */
+  tap?: boolean;
   resolve: (ok: boolean) => void;
   /** Refused when it runs out - counted from when it was asked, even while it waits behind another question. */
   deadline: number;
@@ -182,10 +184,14 @@ interface Approval {
 
 /** A question of Nova's own: it runs out, like an agent's. */
 type Question =
-  | { kind: 'confirm'; id: string; prompt: string; skill: Skill; resolved: Resolved; utterance: string; by: string; timer?: ReturnType<typeof setTimeout> }
+  | { kind: 'confirm'; id: string; prompt: string; skill: Skill; resolved: Resolved; utterance: string; by: string; tap?: boolean; timer?: ReturnType<typeof setTimeout> }
   | { kind: 'slot'; id: string; prompt: string; slot: 'app' | 'project' | 'when'; skill: Skill; resolved: Resolved; utterance: string; by: string; timer?: ReturnType<typeof setTimeout> };
 
 type Pending = Question | { kind: 'approval'; id: string; approval: Approval };
+
+/** How a question that only a tap answers says so: on its card, and out loud. */
+const TAP_BODY = "Tap Allow on the Mac's screen, or confirm with Face ID on your iPhone";
+const TAP_SAY = "That needs a tap: Allow on the Mac's screen, or Face ID on your iPhone.";
 
 /** Where a tool call comes from: an agent's task, or the answer being written when it was made. */
 interface ToolFrom {
@@ -383,6 +389,30 @@ export class NovaBrain implements ToolHost {
     this.announce(text);
   }
 
+  /**
+   * A tap on a question's card: Allow (or No) on the Mac's screen, or on a paired iPhone once Face ID has said it's
+   * the owner. It answers the question on that card - an agent's step, a brain's, or the user's own - and is the only
+   * yes a question that needs a tap takes. False when that question has gone (answered, withdrawn, run out).
+   */
+  tapAnswer(id: string, yes: boolean): boolean {
+    const pending = this.pending;
+    if (!pending || pending.id !== id) return false;
+    if (pending.kind === 'approval') {
+      this.settleApproval(yes, `${yes ? 'Allowed with a tap' : 'Refused'}: ${pending.approval.summary}`);
+      this.nextApproval();
+      return true;
+    }
+    if (pending.kind !== 'confirm') return false;
+    this.settleQuestion(pending);
+    if (!yes) {
+      this.activity(`Cancelled ${pending.skill.id.replace(/_/g, ' ')}`, 'cancelled', pending.skill, { by: pending.by });
+      this.say(pending.utterance, 'Okay, I left it.');
+      return true;
+    }
+    void this.execute(pending.skill, pending.utterance, pending.resolved, pending.utterance, pending.by);
+    return true;
+  }
+
   /** Run a routine's steps in order, each as if the user had said it. A step that asks something waits for the answer. */
   async runRoutine(routine: Routine) {
     this.activity(`Routine: ${routine.name}`, 'done', undefined, { by: 'you' });
@@ -504,8 +534,13 @@ export class NovaBrain implements ToolHost {
     // Answering a voice that got in with the master keyword: none of its steps delete, spend or can't be taken back.
     if (this.answeringByAnyone && !from.task && this.heldBack(skill, context)) return `${OVERRIDDEN} It was not done.`;
     const gate = gateFor(skill.tierFor?.(context) ?? skill.tier);
-    if (gate === 'tap' && !this.unasked) return `${skill.tapPrompt?.(context) ?? 'That needs a confirmation on screen.'} It was not done.`;
-    if (gate === 'confirm' && this.freeFor(skill, context)) {
+    if (gate === 'tap' && !this.unasked) {
+      // Only a tap - on the Mac's screen, or Face ID on the user's iPhone - lets it happen; a spoken yes never does.
+      if (this.over(from)) return 'That answer is over, so it was not done.';
+      const prompt = skill.confirmPrompt?.(context) ?? `${caller} wants to ${name.replace(/_/g, ' ')}. Allow it?`;
+      const tapped = await this.approve(prompt, `${caller}: ${name.replace(/_/g, ' ')}`, { taskId: from.task, thinking: from.thinking, tap: true });
+      if (!tapped) return "It needs a tap - on the Mac's screen, or Face ID on the user's iPhone - and none came, so it was not done.";
+    } else if (gate === 'confirm' && this.freeFor(skill, context)) {
       // Don't ask: a brain's own steps, and an agent's, need no yes either.
     } else if (gate === 'confirm') {
       const remember = this.ruleFor(skill, context);
@@ -554,7 +589,12 @@ export class NovaBrain implements ToolHost {
     if (!from.task) this.lesson?.calls.push(call);
     // The user's choice sets the tier; a tool they didn't allow that moves money needs a tap on screen, whatever the hub said.
     const gate = gateFor(tool.tier >= 2 && toolRisk(name) === 'money' ? 3 : tool.tier);
-    if (gate === 'tap' && !this.unasked) return `Moving money through ${tool.label} needs a tap on screen, never a spoken yes - so it was not done.`;
+    if (gate === 'tap' && !this.unasked) {
+      // Moving money: a tap on the Mac's screen, or Face ID on the user's iPhone - never a spoken yes.
+      if (this.over(from)) return 'That answer is over, so it was not done.';
+      const tapped = await this.approve(`${caller} wants to use ${tool.summary(args)}. Allow it?`, `${caller}: ${tool.label}`, { taskId: from.task, thinking: from.thinking, tap: true });
+      if (!tapped) return `Moving money through ${tool.label} needs a tap on the Mac's screen or Face ID on the user's iPhone, never a spoken yes - and none came, so it was not done.`;
+    }
     // "Yes, always" is remembered only for a tool that just reads; the user allows any other in Settings → Integrations.
     const action = name.slice(name.indexOf('__') + 2).replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ').toLowerCase();
     // A tool that changes things is kept for good only with Remember "yes, always" for good on.
@@ -674,6 +714,8 @@ export class NovaBrain implements ToolHost {
     if (pending?.kind === 'approval') {
       // An agent is waiting on a yes or no. Anything else is handled normally while it keeps waiting.
       if (answer) {
+        // Only a tap answers this one: a spoken yes leaves it waiting (a no still refuses it).
+        if (pending.approval.tap && intent === 'confirm_yes') return this.say(utterance, TAP_SAY);
         // Nothing an agent asks leaves on the word of a voice that got in with the master keyword.
         if (this.byAnyone && intent === 'confirm_yes') {
           this.settleApproval(false, `Refused while Voice ID is off: ${pending.approval.summary}`);
@@ -685,6 +727,9 @@ export class NovaBrain implements ToolHost {
         this.settleApproval(ok);
         return this.say(utterance, ok ? `Okay, go ahead.${remembered}` : 'Okay, I told it no.');
       }
+    } else if (pending?.kind === 'confirm' && pending.tap && intent === 'confirm_yes') {
+      // Only a tap answers this one: it stays asked, card and all.
+      return this.say(utterance, TAP_SAY);
     } else if (pending) {
       // Resolve what Nova asked about last turn.
       this.settleQuestion(pending);
@@ -768,12 +813,17 @@ export class NovaBrain implements ToolHost {
       this.activity(`Refused while Voice ID is off: ${skill.id.replace(/_/g, ' ')}`, 'cancelled', skill, { by });
       return this.say(utterance, OVERRIDDEN);
     }
-    // A tap on screen, never a spoken yes (cancelling all the reminders): nothing is done, so saying where to do it
-    // needs only a fair idea of what was meant. With Don't ask and nothing kept back, the user's word does it - once
-    // Nova is as sure of it as of any change.
+    // A tap, never a spoken yes (cancelling all the reminders): Allow on the Mac's screen, or Face ID on the user's
+    // iPhone. Asking for it needs a fair idea of what was meant; with Don't ask and nothing kept back, the user's word
+    // does it - once Nova is as sure of it as of any change.
     const unasked = this.unasked;
     if (gateFor(tier) === 'tap' && !unasked && p >= MIN_CONFIDENCE[1]) {
-      return this.say(utterance, skill.tapPrompt?.(ctx) ?? 'That needs a confirmation on screen.');
+      const prompt = skill.confirmPrompt?.(ctx) ?? 'Are you sure?';
+      const id = uid();
+      this.ask({ kind: 'confirm', id, prompt, skill, resolved, utterance, by, tap: true });
+      this.card({ id, kind: 'confirm', title: prompt, body: TAP_BODY, tap: true });
+      this.activity(`${prompt} (waiting for a tap)`, 'pending', skill, { by });
+      return this.say(utterance, `${prompt} ${TAP_SAY}`);
     }
     if (p < MIN_CONFIDENCE[unasked && tier === 3 ? 2 : tier]) {
       return this.say(utterance, "Sorry, I'm not sure what you meant. Could you say that again?");
@@ -1315,7 +1365,7 @@ export class NovaBrain implements ToolHost {
    * Ask the user a yes-or-no question out loud, queued behind any other. Its time runs from now, so it's
    * refused if nobody answers - even while another question holds it up.
    */
-  private approve(prompt: string, summary: string, extra: Pick<Approval, 'taskId' | 'remember' | 'session' | 'thinking'> = {}): Promise<boolean> {
+  private approve(prompt: string, summary: string, extra: Pick<Approval, 'taskId' | 'remember' | 'session' | 'thinking' | 'tap'> = {}): Promise<boolean> {
     return new Promise((resolve) => {
       this.flushReply?.(); // finish the sentence being spoken first
       const approval: Approval = { ...extra, prompt, summary, resolve, deadline: this.now() + APPROVAL_TIMEOUT_MS };
@@ -1350,6 +1400,11 @@ export class NovaBrain implements ToolHost {
     }
     const id = uid();
     this.pending = { kind: 'approval', id, approval };
+    if (approval.tap) {
+      this.card({ id, kind: 'confirm', title: approval.prompt, body: TAP_BODY, tap: true });
+      this.announce(`${approval.prompt} ${TAP_SAY}`);
+      return;
+    }
     const body =
       approval.session && this.alwaysForGood
         ? 'Say "yes", "yes, always", "go ahead with all of it" or "no"'

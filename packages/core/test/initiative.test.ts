@@ -189,13 +189,34 @@ describe('reminders', () => {
     expect(reminders.items.map((r) => r.id)).toEqual(['apple-1']);
   });
 
-  it('through NovaBrain, says where to cancel them all instead of asking for a yes', async () => {
-    const { nova, reminders, says } = await setup();
+  it('through NovaBrain, asks for a tap to cancel them all - a spoken yes never does it', async () => {
+    const { nova, reminders, says, events } = await setup();
     await reminders.add({ text: 'call my mum', about: 'to', due: new Date(2026, 8, 27, 17, 0).getTime() });
     await reminders.add({ text: 'pay the rent', about: 'to', due: new Date(2026, 8, 28, 9, 0).getTime() });
     await nova.handle('nova cancel all my reminders');
-    expect(says().at(-1)).toMatch(/needs a tap on screen/);
+    expect(says().at(-1)).toMatch(/needs a tap: Allow on the Mac's screen, or Face ID on your iPhone/);
+    const card = events.filter((e): e is Extract<ServerEvent, { type: 'card' }> => e.type === 'card').at(-1)!.card;
+    expect(card).toMatchObject({ kind: 'confirm', tap: true });
     await nova.handle('yes');
+    expect(says().at(-1)).toMatch(/needs a tap/);
+    expect(reminders.items).toHaveLength(2);
+    expect(nova.tapAnswer('some other card', true)).toBe(false);
+    expect(nova.tapAnswer(card.id, true)).toBe(true);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(reminders.items).toHaveLength(0);
+    expect(nova.tapAnswer(card.id, true)).toBe(false); // answered: it's gone
+  });
+
+  it('through NovaBrain, a tap can say no too, and so can a voice', async () => {
+    const { nova, reminders, events } = await setup();
+    await reminders.add({ text: 'call my mum', about: 'to', due: new Date(2026, 8, 27, 17, 0).getTime() });
+    await reminders.add({ text: 'pay the rent', about: 'to', due: new Date(2026, 8, 28, 9, 0).getTime() });
+    await nova.handle('nova cancel all my reminders');
+    const card = events.filter((e): e is Extract<ServerEvent, { type: 'card' }> => e.type === 'card').at(-1)!.card;
+    expect(nova.tapAnswer(card.id, false)).toBe(true);
+    expect(reminders.items).toHaveLength(2);
+    await nova.handle('nova cancel all my reminders');
+    await nova.handle('no');
     expect(reminders.items).toHaveLength(2);
   });
 

@@ -170,9 +170,18 @@ describe('integration tools in the brain', () => {
     const said = () => events.filter((e): e is Extract<ServerEvent, { type: 'say' }> => e.type === 'say').at(-1)?.text;
     const tick = () => new Promise((r) => setTimeout(r, 0));
 
-    // Moving money needs a tap on screen, however the tool was set up; nothing is asked out loud.
-    expect(await nova.call('stripe__create_refund', { amount: 250000 }, 'Claude')).toMatch(/tap on screen.*not done/);
-    expect(said()).toBeUndefined();
+    // Moving money needs a tap - on the Mac's screen, or Face ID on the iPhone - however the tool was set up; a spoken
+    // yes never does it.
+    const paying = nova.call('stripe__create_refund', { amount: 250000 }, 'Claude');
+    await tick();
+    const tap = events.filter((e): e is Extract<ServerEvent, { type: 'card' }> => e.type === 'card').at(-1)!.card;
+    expect(tap).toMatchObject({ kind: 'confirm', tap: true });
+    expect(said()).toMatch(/Stripe.*needs a tap/);
+    await nova.handle('yes');
+    expect(said()).toMatch(/needs a tap/);
+    expect(calls).toEqual([]);
+    expect(nova.tapAnswer(tap.id, true)).toBe(true);
+    expect(await paying).toBe('Done.');
 
     // A tool that only reads: "yes, always" sticks.
     let asking = nova.call('linear__find_issues', { query: 'login' }, 'Claude');
@@ -190,6 +199,6 @@ describe('integration tools in the brain', () => {
     expect(await asking).toBe('Done.');
     expect(said()).toMatch(/still ask/);
     expect([...rules.keys()]).toEqual(['tool:linear__find_issues']);
-    expect(calls).toEqual(['linear__find_issues', 'linear__find_issues', 'linear__create_issue']);
+    expect(calls).toEqual(['stripe__create_refund', 'linear__find_issues', 'linear__find_issues', 'linear__create_issue']);
   });
 });
