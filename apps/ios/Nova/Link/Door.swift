@@ -7,9 +7,9 @@ import os
 private let log = Logger(subsystem: "dev.nova.phone", category: "door")
 
 /// The phone's side of Nova's door. It finds the Mac - by Bonjour on the Wi-Fi, or at the addresses it last
-/// had - connects over TLS accepting only the certificate the pairing QR code named, and proves who the
-/// phone is by signing the Mac's challenge with its key. Then it carries Nova's events both ways, and comes
-/// back by itself when the connection drops.
+/// had, its tailnet's among them (Tailscale, from anywhere) - trying every way at once, connects over TLS accepting
+/// only the certificate the pairing QR code named, and proves who the phone is by signing the Mac's challenge with
+/// its key. Then it carries Nova's events both ways, and comes back by itself when the connection drops.
 final class Door {
   enum State: Equatable {
     case idle
@@ -62,6 +62,8 @@ final class Door {
   private let key: DeviceKey
   private var target: Target?
   private var connection: NWConnection?
+  /// A round's ways, all tried at once: the first in is the connection, the rest are let go.
+  private var racing: [NWConnection] = []
   private var browser: NWBrowser?
   /// Where Bonjour last saw this phone's Mac.
   private var found: NWEndpoint?
@@ -148,6 +150,7 @@ final class Door {
     stop()
     tryingSince = Date()
     tried = []
+    attempt = 0
     self.target = target
     browse(for: target.mac)
     open()
@@ -161,6 +164,8 @@ final class Door {
     generation += 1
     connection?.cancel()
     connection = nil
+    for other in racing { other.cancel() }
+    racing = []
     welcomed = false
   }
 
@@ -175,32 +180,44 @@ final class Door {
     guard let target else { return }
     let ways = endpoints
     guard !ways.isEmpty else { return report(.failed("Looking for your Mac on this Wi-Fi…", unpaired: false)) }
-    report(.connecting)
-    let endpoint = ways.first { !tried.contains($0) } ?? ways[0]
-    tried.append(endpoint)
-    log.info("door: trying \(String(describing: endpoint), privacy: .private) (attempt \(self.attempt))")
+    if attempt == 0 { report(.connecting) } // after that, why it couldn't stays up while it tries again
+    // Every way at once - where Bonjour saw it, the Wi-Fi's addresses, the tailnet's: away from home, the ones that
+    // can't answer don't hold up the one that can.
+    tried = ways
+    log.info("door: trying every way at once: \(ways.count) (attempt \(self.attempt))")
     let generation = self.generation
-    let connection = NWConnection(to: endpoint, using: parameters(pin: target.pin))
-    self.connection = connection
-    connection.stateUpdateHandler = { [weak self] state in
-      guard let self, generation == self.generation else { return }
-      switch state {
-      case .ready:
-        self.receive(connection, generation: generation)
-      case .waiting(let error), .failed(let error):
-        log.notice("door: couldn't connect: \(error.localizedDescription, privacy: .public)")
-        self.again()
-      case .cancelled, .setup, .preparing:
-        break
-      @unknown default:
-        break
+    var left = ways.count
+    racing = ways.map { endpoint in
+      let connection = NWConnection(to: endpoint, using: parameters(pin: target.pin))
+      connection.stateUpdateHandler = { [weak self] state in
+        guard let self, generation == self.generation else { return connection.cancel() }
+        switch state {
+        case .ready:
+          guard self.connection == nil else { return connection.cancel() } // another way was in first
+          log.info("door: in by \(String(describing: endpoint), privacy: .private)")
+          self.connection = connection
+          for other in self.racing where other !== connection { other.cancel() }
+          self.racing = []
+          self.receive(connection, generation: generation)
+        case .waiting(let error), .failed(let error):
+          guard self.connection !== connection else { return self.again() }
+          connection.cancel()
+          left -= 1
+          log.notice("door: couldn't connect that way: \(error.localizedDescription, privacy: .public)")
+          if left == 0, self.connection == nil { self.again() }
+        case .cancelled, .setup, .preparing:
+          break
+        @unknown default:
+          break
+        }
       }
+      connection.start(queue: queue)
+      return connection
     }
-    connection.start(queue: queue)
-    // A connection that never gets anywhere (an address from another network) gives way to the next.
+    // Ways that never get anywhere (an address from another network) give up together.
     queue.asyncAfter(deadline: .now() + 6) { [weak self] in
       guard let self, generation == self.generation, !self.welcomed else { return }
-      log.notice("door: no answer that way in 6 s")
+      log.notice("door: no answer in 6 s")
       self.again()
     }
   }
@@ -247,7 +264,13 @@ final class Door {
       backoff = min(backoff * 2, 15)
     }
     log.info("door: trying again in \(wait, format: .fixed(precision: 2)) s")
-    if !wasWelcomed { report(.connecting) }
+    if wasWelcomed {
+      attempt = 0
+    } else if roundDone, let target {
+      // No way got in: say why it may be, and keep trying.
+      let tailnet = target.hosts.contains(where: PhoneProtocol.isTailnet)
+      report(.failed(tailnet ? "Can't reach your Mac - is Tailscale on?" : "Can't reach your Mac from here", unpaired: false))
+    }
     let item = DispatchWorkItem { [weak self] in
       self?.retry = nil
       self?.open()
@@ -318,16 +341,24 @@ final class Door {
       } catch {
         fail("This iPhone couldn't sign in to the Mac: \(error.localizedDescription)", unpaired: false)
       }
-    case .welcome(let device, let name):
+    case .welcome(let device, let name, let hosts):
       log.notice("door: in after \(Date().timeIntervalSince(self.tryingSince), format: .fixed(precision: 2)) s")
       welcomed = true
       backoff = 1
       attempt = 0
       tried = []
-      if case .pairing(let offer) = target {
-        let paired = PairedMac(mac: offer.mac, name: name, hosts: offer.hosts, port: offer.port, pin: offer.pin, device: device)
+      switch target {
+      case .pairing(let offer):
+        let paired = PairedMac(mac: offer.mac, name: name, hosts: hosts.isEmpty ? offer.hosts : hosts, port: offer.port, pin: offer.pin, device: device)
         self.target = .paired(paired)
         DispatchQueue.main.async { self.onPaired(paired) }
+      case .paired(var paired) where !hosts.isEmpty && hosts != paired.hosts:
+        // Where the Mac is now - a Tailscale address set up since pairing, a new one on the Wi-Fi - kept for next time.
+        paired.hosts = hosts
+        self.target = .paired(paired)
+        DispatchQueue.main.async { self.onPaired(paired) }
+      case .paired:
+        break
       }
       startPinging()
       report(.connected(name: name))
@@ -346,6 +377,14 @@ final class Door {
     case .refused: fail("That pairing code was wrong, used or ran out. Show a new one in Nova's Settings → iPhone.", unpaired: false)
     case .busy: fail("Too many wrong codes. Show a new one in Nova's Settings → iPhone.", unpaired: false)
     case .version: fail("Nova on the Mac and on this iPhone are different versions - update the one that's older.", unpaired: false)
+    case .away:
+      // Kept to the Wi-Fi now: the Mac's Tailscale address is let go, and the phone connects at home.
+      if case .paired(var paired) = target {
+        paired.hosts.removeAll(where: PhoneProtocol.isTailnet)
+        target = .paired(paired)
+        DispatchQueue.main.async { self.onPaired(paired) }
+      }
+      fail("Your Mac keeps Nova to your Wi-Fi - Settings → iPhone on the Mac.", unpaired: false)
     case nil: again()
     }
   }

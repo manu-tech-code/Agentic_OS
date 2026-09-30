@@ -35,7 +35,6 @@ struct HomeView: View {
     .padding(.bottom, 10)
     .background { Backdrop() }
     .sheet(isPresented: Bindable(nova).showingTasks) { TasksView().presentationDetents([.medium, .large]) }
-    .sheet(isPresented: $showMac) { MacView().presentationDetents([.medium, .large]) }
     .overlay(alignment: .top) { NoticeView() }
   }
 
@@ -61,6 +60,8 @@ struct HomeView: View {
         Image(systemName: "laptopcomputer").font(.headline).frame(width: 40, height: 40).glass(radius: 14)
       }
       .accessibilityLabel("This iPhone and your Mac")
+      // Its own sheet, here: two on one view, and SwiftUI shows only one of them.
+      .sheet(isPresented: $showMac) { MacView().presentationDetents([.medium, .large]) }
     }
     .foregroundStyle(.white)
     .padding(.top, 6)

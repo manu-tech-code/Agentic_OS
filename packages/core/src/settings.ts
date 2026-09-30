@@ -676,6 +676,14 @@ export const FIELDS: SettingField[] = [
     default: false,
   },
   {
+    key: 'phone.anywhere',
+    section: 'phone',
+    label: 'Reach Nova away from home',
+    help: "Through Tailscale: with it on this Mac and your iPhone, signed in to the same account, Nova on the phone reaches this Mac from anywhere - not only on your Wi-Fi. The phone still checks this Mac's certificate and signs in with its own key, so no one else on your tailnet gets in. Off, the phone isn't given this Mac's Tailscale address, and connections that come in over Tailscale are refused.",
+    type: 'toggle',
+    default: true,
+  },
+  {
     key: 'phone.hearing',
     section: 'phone',
     label: "Where your iPhone's speech is heard",

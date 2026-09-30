@@ -4,7 +4,7 @@ import { mkdtemp, readFile, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { TLSSocket } from 'node:tls';
-import { challengeText, DOOR_CLOSE, type DoorMessage } from '@nova/core';
+import { challengeText, DOOR_CLOSE, isTailnet, type DoorMessage } from '@nova/core';
 import { describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 import { DeviceStore, type PairedDevice } from '../src/phone/devices.ts';
@@ -45,10 +45,17 @@ function knock(port: number, pin: string, reply: (challenge: Extract<DoorMessage
   });
 }
 
-async function door(identity: DoorIdentity) {
+async function door(identity: DoorIdentity, allows: (local: string) => boolean = () => true) {
   const devices = await new DeviceStore(join(await temp(), 'devices.json')).load();
   const welcomed: PairedDevice[] = [];
-  const d = new PhoneDoor({ devices, name: () => 'Nova on the test Mac', welcome: (_, device) => welcomed.push(device), changed: () => {} });
+  const d = new PhoneDoor({
+    devices,
+    name: () => 'Nova on the test Mac',
+    hosts: () => ['192.168.1.23', '100.101.102.103'],
+    allows,
+    welcome: (_, device) => welcomed.push(device),
+    changed: () => {},
+  });
   const port = await d.open(0, identity);
   return { d, port, devices, welcomed };
 }
@@ -82,6 +89,13 @@ describe('the paired iPhones', () => {
       bridge0: [iface('10.0.0.2')],
     });
     expect(found).toEqual(['192.168.1.23', '10.0.0.2', '100.101.102.103']);
+    // Kept to the Wi-Fi (Settings → iPhone → Reach Nova away from home off): no tailnet address.
+    expect(reachableAddresses({ utun4: [iface('100.101.102.103')], en0: [iface('192.168.1.23')] }, false)).toEqual(['192.168.1.23']);
+  });
+
+  it('know a Tailscale address when they see one', () => {
+    for (const a of ['100.64.0.1', '100.101.102.103', '100.127.255.254', '::ffff:100.101.102.103', 'fd7a:115c:a1e0::1']) expect(isTailnet(a), a).toBe(true);
+    for (const a of ['100.63.255.255', '100.128.0.1', '192.168.1.23', '10.0.0.2', '127.0.0.1', '::1', 'fe80::1']) expect(isTailnet(a), a).toBe(false);
   });
 
   it('change what a window may say: pairing, forgetting, and what was said into a phone', () => {
@@ -123,7 +137,8 @@ describe.skipIf(!openssl)("the door for iPhones", () => {
       expect((await knock(port, identity.pin, pair(code, phoneKey().privateKey))).closed).toBe(DOOR_CLOSE.refused);
 
       const paired = await knock(port, identity.pin, pair(code));
-      expect(paired.welcome).toMatchObject({ type: 'phone-welcome', name: 'Nova on the test Mac' });
+      // Let in - and told where the Mac is now, for next time.
+      expect(paired.welcome).toMatchObject({ type: 'phone-welcome', name: 'Nova on the test Mac', hosts: ['192.168.1.23', '100.101.102.103'] });
       paired.ws.close();
       expect(welcomed).toHaveLength(1);
       expect(devices.list()).toEqual([expect.objectContaining({ id: paired.welcome!.device, name: 'Ama’s iPhone', key: phone.key })]);
@@ -145,6 +160,19 @@ describe.skipIf(!openssl)("the door for iPhones", () => {
       // Forgotten on the Mac: not let in again.
       await devices.forget(id);
       expect((await knock(port, identity.pin, auth(phone.privateKey))).closed).toBe(DOOR_CLOSE.unknown);
+    } finally {
+      d.close();
+    }
+  });
+
+  it("doesn't let a phone in on an address Settings keeps it from (Tailscale, kept to the Wi-Fi)", async () => {
+    const identity = await doorIdentity(join(await temp(), 'phone'));
+    const seen: string[] = [];
+    const { d, port } = await door(identity, (local) => (seen.push(local), false));
+    try {
+      const knocked = await knock(port, identity.pin, () => ({ type: 'phone-auth', device: 'x', signature: 'x' }));
+      expect(knocked.closed).toBe(DOOR_CLOSE.away);
+      expect(seen[0]).toMatch(/127\.0\.0\.1$/); // the Mac's own address the phone came in on
     } finally {
       d.close();
     }

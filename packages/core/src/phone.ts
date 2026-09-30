@@ -60,8 +60,12 @@ export type DoorMessage =
   | { type: 'phone-pair'; code: string; device: { name: string; model?: string }; key: string; signature: string }
   /** Phone → door: a paired phone, back again - its id, and its signature of the challenge. */
   | { type: 'phone-auth'; device: string; signature: string }
-  /** Door → phone: it's in. What follows is Nova's own protocol. */
-  | { type: 'phone-welcome'; device: string; name: string };
+  /**
+   * Door → phone: it's in. What follows is Nova's own protocol. `hosts`: where to reach this Mac now - its Wi-Fi's
+   * addresses, then its tailnet's while Settings lets phones in that way - for the phone to keep, so an address that
+   * came after pairing (Tailscale set up since) is known the next time it's away from home.
+   */
+  | { type: 'phone-welcome'; device: string; name: string; hosts?: string[] };
 
 /** What a phone signs to show it holds its key: this challenge, from this Mac, for this purpose. */
 export const challengeText = (purpose: 'pair' | 'auth', mac: string, nonce: string) => `nova-phone:${purpose}:${PHONE_PROTOCOL}:${mac}:${nonce}`;
@@ -76,7 +80,17 @@ export const DOOR_CLOSE = {
   version: 4426,
   /** Too many tries: wait, and scan a new code. */
   busy: 4429,
+  /** Over Tailscale, while Settings → iPhone keeps Nova to the Wi-Fi: it's reached at home. */
+  away: 4404,
 } as const;
+
+/** A Tailscale address - 100.64.0.0/10, or fd7a:115c:a1e0::/48 - the way to the Mac from anywhere. */
+export function isTailnet(address: string): boolean {
+  const a = address.toLowerCase().replace(/^::ffff:/, '');
+  if (!a.includes('.')) return a.startsWith('fd7a:115c:a1e0:');
+  const [x, y] = a.split('.').map(Number);
+  return x === 100 && y! >= 64 && y! < 128;
+}
 
 /** A reminder or timer coming up, for the iPhone to ring for itself - even with Nova closed there. */
 export interface PhoneReminder {
@@ -111,8 +125,11 @@ export interface PhoneNews {
 
 /** Nova on the iPhone, for Settings. */
 export interface PhoneStatus {
-  /** The door is open for paired phones: its port, and the addresses a phone can reach it on. */
-  door: { port: number; addresses: string[] } | null;
+  /**
+   * The door is open for paired phones: its port, the addresses a phone is given (the Wi-Fi's, and the tailnet's while
+   * Settings lets phones in that way), and this Mac's Tailscale addresses - none without Tailscale.
+   */
+  door: { port: number; addresses: string[]; tailnet: string[] } | null;
   /** Why it isn't open when it should be, or what's wrong. */
   message?: string;
   /** Paired phones, the newest first. */

@@ -265,6 +265,7 @@ export function loadConfig(settings: Settings, env: Env) {
     /** Nova on the iPhone (Settings → iPhone): whether paired phones may connect, and where their speech is heard. */
     phone: {
       enabled: values['phone.enabled'] as boolean,
+      anywhere: values['phone.anywhere'] as boolean,
       hearing: text('phone.hearing') as PhoneHearing,
       news: text('phone.news') as 'away' | 'always' | 'never',
       reminders: values['phone.reminders'] as boolean,

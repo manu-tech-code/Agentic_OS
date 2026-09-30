@@ -285,7 +285,7 @@ function demoSettings(): SettingsSnapshot {
       { name: 'Agentic_OS', path: '~/dev/Agentic_OS' },
     ],
     phone: {
-      door: { port: 7879, addresses: ['192.168.1.23'] },
+      door: { port: 7879, addresses: ['192.168.1.23', '100.101.102.103'], tailnet: ['100.101.102.103'] },
       devices: [{ id: 'p1', name: 'iPhone', model: 'iPhone 17', pairedAt: now - 2 * 86_400_000, lastSeen: now - 5 * MINUTE, connected: false }],
       pairing: {
         link: pairingLink({ mac: 'q8vhQPDU2vGUQjL_rojjFw', name: 'Nova on the MacBook Pro', hosts: ['192.168.1.23'], port: 7879, pin: 'n4bQgYhMLqWVNdzUbPrXxJ2mPZcDs6GwZ4IxVv0kC1c', code: 'm2ZrV0bq6FQ3n1pX8yT4dw' }),

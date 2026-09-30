@@ -1,7 +1,7 @@
 import { createPublicKey, randomBytes, timingSafeEqual, verify, createHash } from 'node:crypto';
 import { createServer, type Server } from 'node:https';
 import type { AddressInfo } from 'node:net';
-import { challengeText, DOOR_CLOSE, PHONE_PROTOCOL, type DoorMessage } from '@nova/core';
+import { challengeText, DOOR_CLOSE, isTailnet, PHONE_PROTOCOL, type DoorMessage } from '@nova/core';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { DeviceStore, PairedDevice } from './devices.ts';
 import type { DoorIdentity } from './tls.ts';
@@ -64,12 +64,18 @@ export class PhoneDoor {
   private wss: WebSocketServer | null = null;
   private offer: { code: string; expires: number; tries: number } | null = null;
   private opened: DoorIdentity | null = null;
+  /** The Mac's address each phone came in on. */
+  private readonly through = new WeakMap<WebSocket, string>();
 
   constructor(
     private readonly opts: {
       devices: DeviceStore;
       /** What the phone calls this Mac: "Nova on Ama's MacBook Pro". */
       name: () => string;
+      /** Where a phone reaches this Mac now, for it to keep. */
+      hosts: () => string[];
+      /** Whether a phone may come in on this address of the Mac's (not over Tailscale, when Settings says so). */
+      allows: (local: string) => boolean;
       /** A phone is in: from here on it's one of Nova's clients. */
       welcome(ws: WebSocket, device: PairedDevice): void;
       /** A phone paired, or the pairing code stopped working: Settings shows the change. */
@@ -89,7 +95,12 @@ export class PhoneDoor {
     const server = createServer({ key: identity.key, cert: identity.cert, minVersion: 'TLSv1.2' }, (_, res) => res.writeHead(404).end());
     // Any path: a phone that found the Mac by Bonjour asks for the service, not an address.
     const wss = new WebSocketServer({ server, maxPayload: 1 << 20 });
-    wss.on('connection', (ws) => this.handshake(ws));
+    wss.on('connection', (ws, req) => {
+      const local = req.socket.localAddress ?? '';
+      if (!this.opts.allows(local)) return ws.close(DOOR_CLOSE.away, "Nova is kept to your Wi-Fi - turn on Reach Nova away from home in the Mac's Settings → iPhone");
+      this.through.set(ws, local);
+      this.handshake(ws);
+    });
     wss.on('error', () => {}); // the server's own errors come just below
     await new Promise<void>((ok, fail) => {
       server.once('error', fail);
@@ -109,6 +120,11 @@ export class PhoneDoor {
     this.server?.close();
     this.server = this.wss = this.opened = null;
     this.offer = null;
+  }
+
+  /** Phones in over Tailscale are let go: Settings → iPhone keeps Nova to the Wi-Fi now. */
+  closeTailnet() {
+    for (const ws of this.wss?.clients ?? []) if (isTailnet(this.through.get(ws) ?? '')) ws.close(DOOR_CLOSE.away, 'Nova is kept to your Wi-Fi now');
   }
 
   /** One phone may pair in the next ten minutes, with this code (the QR code carries it). A new one replaces the last. */
@@ -172,7 +188,7 @@ export class PhoneDoor {
 
   private welcome(ws: WebSocket, device: PairedDevice) {
     if (ws.readyState !== ws.OPEN) return;
-    const welcome: DoorMessage = { type: 'phone-welcome', device: device.id, name: this.opts.name() };
+    const welcome: DoorMessage = { type: 'phone-welcome', device: device.id, name: this.opts.name(), hosts: this.opts.hosts() };
     ws.send(JSON.stringify(welcome));
     this.opts.welcome(ws, device);
   }

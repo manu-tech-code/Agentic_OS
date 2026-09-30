@@ -7,15 +7,25 @@ struct MacView: View {
   @State private var installing = false
   @State private var confirming = false
 
+  /// The Mac gave this phone its Tailscale address: it's reached from anywhere.
+  private var anywhere: Bool { nova.mac?.hosts.contains(where: PhoneProtocol.isTailnet) ?? false }
+
   var body: some View {
     NavigationStack {
       List {
-        Section("Your Mac") {
+        Section {
           LabeledContent("Paired with", value: nova.mac?.name ?? "-")
           LabeledContent("Connection", value: connection)
           if let hosts = nova.mac?.hosts, !hosts.isEmpty {
             LabeledContent("Addresses", value: hosts.joined(separator: ", "))
           }
+          LabeledContent("Away from home", value: anywhere ? "through Tailscale" : "not yet")
+        } header: {
+          Text("Your Mac")
+        } footer: {
+          Text(anywhere
+            ? "At home Nova reaches your Mac on the Wi-Fi; anywhere else, through Tailscale - keep it on, on this iPhone and the Mac, signed in to the same account."
+            : "Nova reaches your Mac on your Wi-Fi. To reach it from anywhere, install Tailscale on this iPhone and the Mac, signed in to the same account - Nova finds it by itself the next time it's home.")
         }
         Section {
           LabeledContent("Heard", value: heardWhere)

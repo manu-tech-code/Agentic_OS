@@ -5,7 +5,8 @@ import Foundation
 enum Incoming {
   // The door's handshake.
   case challenge(nonce: String, mac: String, name: String, version: Int)
-  case welcome(device: String, name: String)
+  /// In - and where the Mac is now (its Wi-Fi's addresses, and its tailnet's), for the phone to keep.
+  case welcome(device: String, name: String, hosts: [String])
   // Nova's own events.
   case hello(Hello)
   case hearing(HearingStatus)
@@ -33,7 +34,7 @@ enum Incoming {
       return .challenge(nonce: nonce, mac: mac, name: m["name"] as? String ?? "Nova", version: m["v"] as? Int ?? 0)
     case "phone-welcome":
       guard let device = m["device"] as? String else { return nil }
-      return .welcome(device: device, name: m["name"] as? String ?? "Nova")
+      return .welcome(device: device, name: m["name"] as? String ?? "Nova", hosts: (m["hosts"] as? [String] ?? []).filter { !$0.isEmpty && $0.count <= 64 })
     case "hello":
       let ui = m["ui"] as? [String: Any] ?? [:]
       return .hello(Hello(
