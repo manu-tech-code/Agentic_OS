@@ -16,6 +16,8 @@ export interface PrivacyInput {
   agents: { name: string; label: string; paired: boolean }[];
   /** Whether open questions have someone to answer them now. */
   brain: boolean;
+  /** Who answers them: an agent's name, "apple" or a model id - worked out from the settings when not given. */
+  brainId?: string | null;
   integrations: IntegrationStatus[];
   hearing: HearingStatus;
   voiceInstalled: boolean;
@@ -39,6 +41,7 @@ function destination(id: string, input: PrivacyInput): { where: string; leaves: 
     const vendor = VENDORS[agent.name];
     return vendor ? { where: `${vendor}, through ${agent.label} - on your own plan`, leaves: true } : { where: `wherever ${agent.label} sends it`, leaves: true };
   }
+  if (id === 'apple') return { where: `${THIS_MAC} (Apple Intelligence's on-device model)`, leaves: false };
   if (input.isLocal(id)) return { where: `${THIS_MAC} (${id})`, leaves: false };
   // Not one of the user's servers: Nova has no way to reach it, so nothing is sent anywhere.
   return { where: `nowhere - ${id} isn't a model on one of your servers`, leaves: false };
@@ -146,7 +149,7 @@ export function privacyFlows(input: PrivacyInput): PrivacyFlow[] {
 
   // System 2: open questions, and what goes with them.
   const paired = input.agents.filter((a) => a.paired).map((a) => a.name);
-  const brainId = config.brainModel === 'off' ? '' : config.brainModel || paired[0] || '';
+  const brainId = input.brainId ?? (config.brainModel === 'off' ? '' : config.brainModel || paired[0] || '');
   const brain = input.brain && brainId ? destination(brainId, input) : null;
   const toBrain = brain ?? { where: 'no one - open questions are off', leaves: false };
   flows.push({

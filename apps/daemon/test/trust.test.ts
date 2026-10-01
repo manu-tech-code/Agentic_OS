@@ -509,6 +509,16 @@ describe('the privacy page', () => {
     expect(flows.find((f) => f.id === 'answers')).toMatchObject({ leaves: false, where: 'this Mac (lmstudio/qwen3)' });
     expect(flows.find((f) => f.id === 'memories')).toMatchObject({ leaves: false });
   });
+
+  it("keeps it on this Mac with Apple Intelligence - chosen, or automatic with no agent paired", () => {
+    const where = { leaves: false, where: "this Mac (Apple Intelligence's on-device model)" };
+    const chosen = privacyFlows({ ...base, config: loadConfig({ answers: { model: 'apple' } }, {}), agents: [{ name: 'claude', label: 'Claude', paired: true }] });
+    expect(chosen.find((f) => f.id === 'answers')).toMatchObject(where);
+    expect(chosen.find((f) => f.id === 'screen-images')).toMatchObject({ leaves: false });
+    // Automatic: who answers is what the daemon made of it, not worked out again here.
+    const automatic = privacyFlows({ ...base, brainId: 'apple', config: loadConfig({}, {}), agents: [] });
+    expect(automatic.find((f) => f.id === 'answers')).toMatchObject(where);
+  });
 });
 
 describe('the setup checklist', () => {

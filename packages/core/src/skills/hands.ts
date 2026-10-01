@@ -519,12 +519,18 @@ const computerTaskSkill: Skill = {
   id: 'computer_task',
   summary: 'Do a whole task on the computer for the user - a brain looks at the screen and clicks and types, one step at a time.',
   tier: 2,
+  // Nothing to ask about when no brain here can do it: the answer is that it can't.
+  tierFor: (ctx) => (ctx.brain?.usesComputer ? 2 : 0),
   session: () => ({ key: 'computer', label: 'Use the computer for this task' }),
   confirmPrompt: (ctx) => `Use the computer to ${computerTask(ctx.utterance) || 'do that'}? I'll ask before each click and anything I type - or say "go ahead with all of it".`,
   examples: ['use the computer to book a table', 'take over and fill in this form', 'use my mac to order more coffee pods', 'do it for me on the screen'],
   async run(ctx) {
     if (!ctx.hands) return noHands('the screen');
     const task = computerTask(ctx.utterance) || ctx.utterance;
+    // Seeing the screen and acting on it a step at a time takes more than a small model can hold.
+    if (ctx.brain && !ctx.brain.usesComputer) {
+      return { say: `${ctx.brain.name} can't use the computer - that takes a brain that sees the screen a step at a time, like Claude. Choose one in Settings → Answers.`, activity: `Computer task: ${task} (${ctx.brain.name} can't)` };
+    }
     return { say: `I can't use the computer without a brain - pair Claude, or choose one in Settings → Answers.`, handoff: computerBrief(task, ctx.heard ?? ctx.utterance), activity: `Computer task: ${task}` };
   },
 };

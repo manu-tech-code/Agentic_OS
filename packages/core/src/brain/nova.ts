@@ -39,8 +39,8 @@ import type {
   TimerService,
   TrustService,
 } from '../skills/types.ts';
-import { buildQuestions } from './questions.ts';
-import type { ReasoningBrain, Turn } from './reasoning.ts';
+import { buildQuestions, META_INTENTS } from './questions.ts';
+import type { QuestionHints, ReasoningBrain, Turn } from './reasoning.ts';
 
 /**
  * Whose voice a turn was, with Voice ID on: the user's, someone else's, one it couldn't place, or one it couldn't
@@ -237,6 +237,21 @@ export function isCompound(utterance: string) {
   return parts.length > 1 && COMMAND.test(parts[0]!) && parts.slice(1).some((p) => COMMAND.test(p));
 }
 
+/** The parts of a request for several things ("turn on dark mode and then open Notes"), to weigh each on its own. */
+export function partsOf(utterance: string): string[] {
+  return utterance
+    .split(/\b(?:and then|and also|after that|then|and|also)\b|[,;]/i)
+    .map((part) => part.trim())
+    .filter((part) => part.split(/\s+/).length >= 2)
+    .slice(0, 4);
+}
+
+/** System 1's pick for what was said, and each skill's chance, likeliest first. */
+function weighing(intent: { choice?: string; probabilities?: Record<string, number> } | undefined): { intent: string; skills: { id: string; p: number }[] } {
+  const weights = Object.entries(intent?.probabilities ?? {}).filter(([id]) => !Object.hasOwn(META_INTENTS, id));
+  return { intent: intent?.choice ?? 'other', skills: weights.sort((a, b) => b[1] - a[1]).map(([id, p]) => ({ id, p })) };
+}
+
 /** The skills a brain called while answering one utterance, and whether each worked. */
 interface Lesson {
   calls: { name: string; ok: boolean }[];
@@ -278,6 +293,8 @@ export class NovaBrain implements ToolHost {
   private lesson: Lesson | null = null;
   /** What the user said that the brain is answering now, for tools that depend on it. */
   private answering: string | null = null;
+  /** What System 1 made of the last thing said, for a brain that takes only the tools a question needs. */
+  private weighed: { utterance: string; intent: string; skills: { id: string; p: number }[] } | null = null;
   /** This turn came in with the master keyword (Voice ID off): what it may do is held back. */
   private byAnyone = false;
   /** The brain is answering such a turn: its steps are held back the same way. */
@@ -682,6 +699,7 @@ export class NovaBrain implements ToolHost {
     const answers = decision.answers as Record<string, any>;
     const intent: string = answers.intent.choice;
     const intentP = topProbability(answers.intent);
+    this.weighed = { utterance, ...weighing(answers.intent) };
     const addressedP = answers.addressed.probability as number;
     const app = picked(answers.app);
     const project = picked(answers.project);
@@ -780,6 +798,7 @@ export class NovaBrain implements ToolHost {
       const resolved: Resolved = { app, project: project ?? current, agent: named ?? (skill.needsAgents ? this.opts.agents?.agents[0] : undefined) };
       if (skill.declines?.(this.context(utterance, resolved))) {
         trace(`not ${skill.id} → ${named?.label ?? this.opts.reasoning?.name ?? 'no brain'}`);
+        this.setAside(skill.id, utterance);
         return this.think(utterance, named);
       }
       trace(`${skill.id}${describe(skill, resolved)} (p=${intentP.toFixed(2)})`);
@@ -869,7 +888,10 @@ export class NovaBrain implements ToolHost {
       // It needs a time: the next thing said can be one ("When should I remind you?" - "at 5").
       if (result.needs === 'when') this.ask({ kind: 'slot', id: uid(), prompt: result.say, slot: 'when', skill, resolved, utterance, by });
       // A brain gives the answer, with the user's services at hand (the briefing); without one, the plain one does.
-      if (result.handoff && this.opts.reasoning) return this.think(said, undefined, { question: result.handoff });
+      if (result.handoff && this.opts.reasoning) {
+        this.setAside(skill.id, said);
+        return this.think(said, undefined, { question: result.handoff });
+      }
       this.say(said, `${result.say}${also}`);
     } catch (error) {
       this.activity(`${skill.id} failed`, 'failed', skill, { by });
@@ -914,16 +936,18 @@ export class NovaBrain implements ToolHost {
     arm();
     const signal = AbortSignal.any([thinking.signal, quiet.signal, AbortSignal.timeout(ANSWER_MS)]);
     const history = this.history.slice(-6);
-    const lesson: Lesson | null = opts.teach ? (this.lesson = { calls: [] }) : null;
+    // A brain that chose from System 1's own shortlist can't teach it: it would only learn its own guesses back.
+    const lesson: Lesson | null = opts.teach && !brain.fewTools ? (this.lesson = { calls: [] }) : null;
     this.answering = utterance;
     this.answeringByAnyone = this.byAnyone;
     try {
       // Notes go with the question (what the user is in, related memories); the history keeps their own words.
-      const notes = await this.notesFor(utterance);
+      // What System 1 made of these words goes too, for a brain that offers only the tools a question needs.
+      const [notes, hints] = await Promise.all([this.notesFor(utterance), this.hintsFor(utterance, brain)]);
       const asked = opts.question ?? utterance;
       const question = notes ? `${notes}\n\n${asked}` : asked;
       // A brain that streams is spoken sentence by sentence while it's still writing.
-      const reply = brain.stream ? await this.speakAsWritten(brain.stream(question, history, signal)) : await brain.reply(question, history, signal);
+      const reply = brain.stream ? await this.speakAsWritten(brain.stream(question, history, signal, hints)) : await brain.reply(question, history, signal);
       if (thinking.signal.aborted) return;
       // The brain did it with exactly one skill, and it worked: next time System 1 can do it straight away.
       const only = lesson?.calls.length === 1 ? lesson.calls[0]! : null;
@@ -958,6 +982,36 @@ export class NovaBrain implements ToolHost {
       this.withdraw((a) => a.thinking === thinking);
       this.nextApproval();
     }
+  }
+
+  /**
+   * What System 1 made of a question, for a brain that takes only the tools a question needs - and, when several
+   * things are asked, what it makes of each on its own, their picks first: weighed whole, the first drowns out the rest.
+   */
+  private async hintsFor(utterance: string, brain: ReasoningBrain): Promise<QuestionHints> {
+    const weighed = this.weighed?.utterance === utterance ? this.weighed : null;
+    const hints: QuestionHints = { heard: utterance, intent: weighed?.intent, skills: weighed?.skills ?? [] };
+    const parts = brain.fewTools ? partsOf(utterance) : [];
+    if (parts.length < 2) return hints;
+    const each = await Promise.all(parts.map((part) => this.weigh(part).catch(() => null)));
+    const picks = each.flatMap((w) => (w && !Object.hasOwn(META_INTENTS, w.intent) ? [{ id: w.intent, p: w.skills.find((s) => s.id === w.intent)?.p ?? 1 }] : []));
+    const picked = new Set(picks.map((s) => s.id));
+    return { ...hints, skills: [...picks.filter((s, i) => picks.findIndex((o) => o.id === s.id) === i), ...hints.skills.filter((s) => !picked.has(s.id))] };
+  }
+
+  /** A skill that said the words weren't for it, or did its part already (a handoff): the brain isn't handed it as System 1's pick. */
+  private setAside(id: string, utterance: string) {
+    if (this.weighed?.utterance !== utterance) return;
+    this.weighed = { ...this.weighed, intent: 'other', skills: this.weighed.skills.filter((s) => s.id !== id) };
+  }
+
+  /** What System 1 makes of some words on their own. */
+  private async weigh(text: string) {
+    const decision = await this.opts.engine.decide(
+      { utterance: text, wakeWordUsed: true, awaitingConfirmationFor: null, awaitingAppFor: null, awaitingProjectFor: null, activeTasks: this.tasks.size, activeTimers: this.activeTimers(), canThink: true, recentTurns: [] },
+      buildQuestions(this.skills, this.apps, text, this.opts.agents, this.name),
+    );
+    return weighing((decision.answers as Record<string, any>).intent);
   }
 
   /** Stop the answer being written - and withdraw what it was waiting to be allowed. */
@@ -1111,6 +1165,7 @@ export class NovaBrain implements ToolHost {
       trust: this.opts.trust ?? undefined,
       halt: () => this.stopEverything(),
       agents: this.opts.agents?.agents,
+      brain: this.opts.reasoning ? { name: this.opts.reasoning.name, usesComputer: this.opts.reasoning.usesComputer !== false } : undefined,
       ...resolved,
       platform: this.opts.platform,
       timers: this.timerService,

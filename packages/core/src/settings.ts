@@ -116,6 +116,27 @@ export interface HearingStatus {
   message?: string;
 }
 
+/** Apple Intelligence's on-device model on this Mac, which can answer open questions ("apple" in Settings → Answers). */
+export interface AppleModelStatus {
+  /** 'checking' until the Mac has said. */
+  state: 'checking' | 'ready' | 'unavailable';
+  /**
+   * Why it can't answer: Apple Intelligence is off, its model is still downloading, this Mac can't run it (device),
+   * macOS is older than 26 (system), or Nova's helper for it didn't build or run.
+   */
+  reason?: 'off' | 'downloading' | 'device' | 'system' | 'build' | 'failed';
+  /** The model, as Apple names it ("AFM 3 Core Advanced"). */
+  model?: string;
+  /** How much it takes in at once - instructions, conversation, tools and answer - in tokens. */
+  contextSize?: number;
+  /** It can see pictures: the screen, when it looks. */
+  vision?: boolean;
+  /** What went wrong, for build and failed. */
+  message?: string;
+  /** Nova answers open questions with it now. */
+  answering?: boolean;
+}
+
 export type SettingsSection =
   | 'setup'
   | 'general'
@@ -888,7 +909,7 @@ export const FIELDS: SettingField[] = [
     key: 'answers.model',
     section: 'answers',
     label: 'Who answers open questions',
-    help: 'Leave empty for automatic: your default paired agent answers. Or name an agent (claude, codex, ...), a local model (lmstudio/...) or a cloud model id. Whoever answers can use Nova\'s tools. Type "off" to turn open questions off.',
+    help: 'Leave empty for automatic: your default paired agent answers, or Apple Intelligence when no agent is paired. Or name an agent (claude, codex, ...), "apple" for Apple Intelligence\'s model on this Mac, or a local model (lmstudio/...). Whoever answers can use Nova\'s tools. Type "off" to turn open questions off.',
     type: 'model',
     default: '',
     placeholder: 'automatic',
@@ -1299,6 +1320,8 @@ export interface SettingsSnapshot {
     speech: { model: string; label: string; installed: boolean };
   };
   agents: { name: string; label: string; bin: string; path: string | null; custom: boolean }[];
+  /** Apple Intelligence's on-device model, which can answer open questions. */
+  apple: AppleModelStatus;
   servers: { name: string; url: string; builtIn: boolean; defaultUrl?: string; keyVar: string; online: boolean; models: string[] }[];
   projects: { name: string; path: string }[];
   /** Nova on the iPhone: the door for paired phones, the phones, and a pairing under way. */

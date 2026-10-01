@@ -502,6 +502,48 @@ export function ReflexPanel({ snapshot, name, result, onAction }: ActionProps) {
   );
 }
 
+/** Why Apple's model can't answer, in Settings' words. */
+const APPLE_WHY: Record<string, string> = {
+  off: 'Apple Intelligence is off: turn it on in System Settings → Apple Intelligence & Siri, and it can answer here.',
+  downloading: 'macOS is still downloading its model.',
+  device: "This Mac can't run Apple Intelligence.",
+  system: 'Apple Intelligence needs a Mac with Apple silicon and macOS 26 or later.',
+};
+
+/** Settings → Answers: Apple Intelligence's model on this Mac - whether it can answer, and choosing it. */
+export function ApplePanel({ snapshot, name, onSave }: { snapshot: SettingsSnapshot; name: string; onSave: Save }) {
+  const { apple } = snapshot;
+  const ready = apple.state === 'ready';
+  const tokens = apple.contextSize ? `${Math.round(apple.contextSize / 1024)}K tokens at a time` : null;
+  return (
+    <div className="tile">
+      <div className="tile__head">
+        <span className={`dot ${ready ? 'dot--on' : ''}`} />
+        <strong>Apple Intelligence</strong>
+        <Info
+          label="Apple Intelligence"
+          text={personalize(
+            "Apple's own model, built into macOS. It runs on this Mac, so nothing you ask it leaves it, and it costs nothing. It's small: quick with questions and everyday requests, using a few of Nova's tools at a time (the ones System 1 thinks a question needs), and it works out sums with Nova's calculator. For coding, long documents or using the computer, an agent like Claude does more.",
+            name,
+          )}
+        />
+        <span className="muted">
+          {apple.state === 'checking'
+            ? 'Checking this Mac…'
+            : ready
+              ? [apple.model ?? "Apple's on-device model", 'on this Mac', tokens, apple.answering ? 'answering open questions' : null].filter(Boolean).join(' · ')
+              : (APPLE_WHY[apple.reason ?? ''] ?? apple.message ?? "It can't answer on this Mac right now.")}
+        </span>
+        {ready && !apple.answering && (
+          <button type="button" className="btn btn--ghost tile__action" onClick={() => onSave({ 'answers.model': 'apple' })}>
+            Answer with it
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /** Local model servers: address, key, JSON replies, and what's running right now. */
 export function ServersPanel({ snapshot, onSave }: { snapshot: SettingsSnapshot; onSave: Save }) {
   const entries = snapshot.values['models.servers'] as Record<string, ServerEntry>;

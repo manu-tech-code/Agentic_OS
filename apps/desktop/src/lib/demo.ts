@@ -275,6 +275,7 @@ function demoSettings(): SettingsSnapshot {
       { name: 'opencode', label: 'OpenCode', bin: 'opencode', path: '/opt/homebrew/bin/opencode', custom: false },
       { name: 'gemini', label: 'Gemini CLI', bin: 'gemini', path: null, custom: false },
     ],
+    apple: { state: 'ready', model: 'AFM 3 Core Advanced', contextSize: 8192, vision: true, answering: false },
     servers: [
       { name: 'lmstudio', url: 'http://localhost:1234/v1', builtIn: true, defaultUrl: 'http://localhost:1234/v1', keyVar: 'NOVA_LMSTUDIO_API_KEY', online: true, models: ['google/gemma-4-e4b', 'qwen/qwen3-8b'] },
       { name: 'ollama', url: 'http://localhost:11434/v1', builtIn: true, defaultUrl: 'http://localhost:11434/v1', keyVar: 'NOVA_OLLAMA_API_KEY', online: false, models: [] },

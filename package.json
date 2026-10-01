@@ -18,6 +18,7 @@
     "voice:download": "npm run voice:download -w @nova/daemon",
     "hearing:download": "npm run hearing:download -w @nova/daemon",
     "hearing:build": "npm run hearing:build -w @nova/daemon",
+    "apple:build": "npm run apple:build -w @nova/daemon",
     "app": "npm run app -w @nova/daemon --",
     "phone": "npm run phone -w @nova/daemon --",
     "test": "npm run test --workspaces --if-present",

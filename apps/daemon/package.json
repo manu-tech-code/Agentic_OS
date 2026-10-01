@@ -14,6 +14,7 @@
     "voice:download": "tsx src/models/download.ts kokoro-82M",
     "hearing:download": "tsx src/models/download.ts parakeet-tdt-0.6b-v2 smart-turn-v3.2 silero-vad-v6.2",
     "hearing:build": "tsx src/hearing/build.ts",
+    "apple:build": "tsx src/apple/helper.ts",
     "app": "tsx src/shell/install.ts",
     "phone": "tsx src/phone/install.ts",
     "readme:phone": "tsx src/phone/readme-media.ts"

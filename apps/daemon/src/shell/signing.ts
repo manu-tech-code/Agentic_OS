@@ -33,6 +33,7 @@ export const APPS = {
   app: { identifier: 'dev.nova.app', entitlements: fileURLToPath(new URL('../../../desktop/macos/Nova.entitlements', import.meta.url)) },
   eyes: { identifier: 'dev.nova.eyes', entitlements: fileURLToPath(new URL('../../native/eyes/Eyes.entitlements', import.meta.url)) },
   hearing: { identifier: 'dev.nova.hearing', entitlements: null },
+  apple: { identifier: 'dev.nova.apple-model', entitlements: null },
 } as const;
 export type NovaApp = keyof typeof APPS;
 
