@@ -188,4 +188,18 @@ describe('the brain teaching System 1', () => {
     expect(t.quit).toEqual([]);
     expect(t.learned).toHaveLength(1);
   });
+
+  it("doesn't learn from a brain that chose from System 1's own shortlist", async () => {
+    let nova!: NovaBrain;
+    const brain: ReasoningBrain = {
+      name: 'Small',
+      fewTools: true,
+      reply: async () => (await nova.call('open_app', { app: 'Spotify' }, 'Small'), 'Done.'),
+    };
+    const t = await setup(brain);
+    nova = t.nova;
+    await nova.handle('nova i fancy some tunes');
+    expect(t.opened).toEqual(['Spotify']);
+    expect(t.learned).toEqual([]);
+  });
 });

@@ -84,6 +84,25 @@ describe('hints for the brain', () => {
   });
 });
 
+describe("a skill's part done", () => {
+  it("isn't handed to the brain as System 1's pick again - one that hands its request on, or says the words aren't for it", async () => {
+    const { brain, heard } = listening({ fewTools: true });
+    const briefing = { id: 'brief', examples: ['brief me'], tier: 0, run: async () => ({ say: 'Here is your day.', handoff: 'Put this into a briefing: sunny, two meetings.' }) };
+    const shy = { id: 'shy', examples: ['shy'], tier: 0, declines: () => true, run: async () => ({ say: 'Never.' }) };
+    const events: ServerEvent[] = [];
+    const { decisions } = engine({ 'brief me': ['brief', { brief: 0.97, shy: 0.02 }], 'be shy': ['shy', { shy: 0.95, brief: 0.03 }] });
+    const platform = { listApps: async () => [], openApp: async () => {}, quitApp: async () => {}, now: () => new Date('2026-09-30T08:00:00') };
+    const nova = new NovaBrain({ engine: decisions, platform, emit: (e) => events.push(e), reasoning: brain, requireWakeWord: false, skills: [briefing as never, shy as never] });
+    await nova.init();
+    await nova.handle('Brief me', 'keyboard');
+    await nova.handle('Be shy', 'keyboard');
+    expect(heard).toEqual([
+      { heard: 'Brief me', intent: 'other', skills: [{ id: 'shy', p: 0.02 }] },
+      { heard: 'Be shy', intent: 'other', skills: [{ id: 'brief', p: 0.03 }] },
+    ]);
+  });
+});
+
 describe('a task on the computer', () => {
   const hands = new Proxy({}, { get: () => new Proxy(() => undefined, { get: (target, key) => (key === 'then' ? undefined : target) }) }) as unknown as HandsService;
   const table: Record<string, [string, Record<string, number>]> = { 'use the computer to book a table at luigi\'s': ['computer_task', { computer_task: 0.97, chat: 0.03 }] };

@@ -177,7 +177,9 @@ export class AppleModel {
         });
         return this.settle(statusFrom(status));
       } catch (e) {
-        return this.settle({ state: 'unavailable', reason: this.started ? 'failed' : 'build', message: (e as Error).message });
+        const status: AppleModelStatus = { state: 'unavailable', reason: this.started ? 'failed' : 'build', message: (e as Error).message };
+        if (this.known.message !== status.message) console.warn(`  [apple] ${status.message}`); // once, not every minute it's asked
+        return this.settle(status);
       }
     })().finally(() => (this.checking = null));
     return this.checking;

@@ -798,6 +798,7 @@ export class NovaBrain implements ToolHost {
       const resolved: Resolved = { app, project: project ?? current, agent: named ?? (skill.needsAgents ? this.opts.agents?.agents[0] : undefined) };
       if (skill.declines?.(this.context(utterance, resolved))) {
         trace(`not ${skill.id} → ${named?.label ?? this.opts.reasoning?.name ?? 'no brain'}`);
+        this.setAside(skill.id, utterance);
         return this.think(utterance, named);
       }
       trace(`${skill.id}${describe(skill, resolved)} (p=${intentP.toFixed(2)})`);
@@ -887,7 +888,10 @@ export class NovaBrain implements ToolHost {
       // It needs a time: the next thing said can be one ("When should I remind you?" - "at 5").
       if (result.needs === 'when') this.ask({ kind: 'slot', id: uid(), prompt: result.say, slot: 'when', skill, resolved, utterance, by });
       // A brain gives the answer, with the user's services at hand (the briefing); without one, the plain one does.
-      if (result.handoff && this.opts.reasoning) return this.think(said, undefined, { question: result.handoff });
+      if (result.handoff && this.opts.reasoning) {
+        this.setAside(skill.id, said);
+        return this.think(said, undefined, { question: result.handoff });
+      }
       this.say(said, `${result.say}${also}`);
     } catch (error) {
       this.activity(`${skill.id} failed`, 'failed', skill, { by });
@@ -932,7 +936,8 @@ export class NovaBrain implements ToolHost {
     arm();
     const signal = AbortSignal.any([thinking.signal, quiet.signal, AbortSignal.timeout(ANSWER_MS)]);
     const history = this.history.slice(-6);
-    const lesson: Lesson | null = opts.teach ? (this.lesson = { calls: [] }) : null;
+    // A brain that chose from System 1's own shortlist can't teach it: it would only learn its own guesses back.
+    const lesson: Lesson | null = opts.teach && !brain.fewTools ? (this.lesson = { calls: [] }) : null;
     this.answering = utterance;
     this.answeringByAnyone = this.byAnyone;
     try {
@@ -992,6 +997,12 @@ export class NovaBrain implements ToolHost {
     const picks = each.flatMap((w) => (w && !Object.hasOwn(META_INTENTS, w.intent) ? [{ id: w.intent, p: w.skills.find((s) => s.id === w.intent)?.p ?? 1 }] : []));
     const picked = new Set(picks.map((s) => s.id));
     return { ...hints, skills: [...picks.filter((s, i) => picks.findIndex((o) => o.id === s.id) === i), ...hints.skills.filter((s) => !picked.has(s.id))] };
+  }
+
+  /** A skill that said the words weren't for it, or did its part already (a handoff): the brain isn't handed it as System 1's pick. */
+  private setAside(id: string, utterance: string) {
+    if (this.weighed?.utterance !== utterance) return;
+    this.weighed = { ...this.weighed, intent: 'other', skills: this.weighed.skills.filter((s) => s.id !== id) };
   }
 
   /** What System 1 makes of some words on their own. */
